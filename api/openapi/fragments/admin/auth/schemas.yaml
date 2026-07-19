@@ -1,0 +1,36 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/auth/schemas.yaml
+$defs:
+  LocalLoginRequest:
+    type: object
+    additionalProperties: false
+    required: [username, password]
+    properties:
+      username:
+        type: string
+        minLength: 1
+        maxLength: 128
+      password:
+        type: string
+        minLength: 1
+        maxLength: 1024
+        writeOnly: true
+  SessionResponse:
+    type: object
+    additionalProperties: false
+    required: [principal, csrf_token, idle_expires_at, expires_at]
+    properties:
+      principal:
+        $ref: ../identity/schemas.yaml#/$defs/Principal
+      csrf_token:
+        type: string
+        minLength: 32
+        description: 当前会话写请求使用的 X-CSRF-Token；调用方不得持久化。
+      idle_expires_at:
+        type: string
+        format: date-time
+        description: 当前空闲过期时间，成功访问已认证 API 后可刷新，但不晚于 expires_at。
+      expires_at:
+        type: string
+        format: date-time
+        description: 会话创建后 12 小时的绝对过期时间，不可延长。

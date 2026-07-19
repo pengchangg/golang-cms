@@ -1,0 +1,198 @@
+/models/{model_id}/entries:
+  parameters: &modelId
+    - name: model_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    operationId: listAdminContentEntries
+    summary: 列出模型的草稿内容条目
+    parameters:
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+      - name: status
+        in: query
+        schema:
+          $ref: ./schemas.yaml#/$defs/EntryStatus
+        description: 缺省为 draft。
+      - &limit
+        name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - &cursor
+        name: cursor
+        in: query
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 按 updated_at DESC、id DESC 返回条目。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentEntryListResponse
+      "400": &badRequest
+        description: 查询参数、游标或动态内容校验失败。
+        content:
+          application/json:
+            schema:
+              anyOf:
+                - $ref: ../identity/schemas.yaml#/$defs/ValidationErrorResponse
+                - $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "401": &unauthenticated
+        description: 管理会话无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": &forbidden
+        description: 缺少目标模型权限。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "404": &notFound
+        description: 模型或内容资源不存在。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  post:
+    operationId: createAdminContentEntry
+    summary: 创建草稿条目和第一个不可变 Revision
+    parameters: &writeHeaders
+      - *sessionCookie
+      - name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateContentEntryRequest
+    responses:
+      "201":
+        description: 条目、首个 Revision 和当前草稿指针已原子创建。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentEntry
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": &conflict
+        description: 资源状态或唯一约束冲突。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/models/{model_id}/entries/{entry_id}:
+  parameters: &entryId
+    - name: model_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    - name: entry_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    operationId: getAdminContentEntry
+    summary: 获取条目及当前草稿 Revision
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 条目详情。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentEntry
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+  patch:
+    operationId: updateAdminContentEntry
+    summary: 保存完整草稿并创建不可变 Revision
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateContentEntryRequest
+    responses:
+      "200":
+        description: Revision 已创建且当前草稿指针已原子切换。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentEntry
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+  delete:
+    operationId: archiveAdminContentEntry
+    summary: 归档草稿条目
+    parameters: *writeHeaders
+    responses:
+      "204": { description: 条目已归档，Revision 保留。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+/models/{model_id}/entries/{entry_id}/revisions:
+  parameters: *entryId
+  get:
+    operationId: listAdminContentEntryRevisions
+    summary: 只读列出条目的不可变 Revision
+    parameters: [*sessionCookie, *limit, *cursor]
+    responses:
+      "200":
+        description: 按 number DESC 返回 Revision。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentRevisionListResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+/models/{model_id}/entries/{entry_id}/revisions/{revision_id}:
+  parameters:
+    - name: model_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    - name: entry_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    - name: revision_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    operationId: getAdminContentEntryRevision
+    summary: 只读获取一个不可变 Revision
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: Revision 详情。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentRevision
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound

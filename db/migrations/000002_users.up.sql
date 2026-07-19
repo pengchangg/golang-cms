@@ -1,0 +1,9 @@
+CREATE TABLE users (
+    id VARCHAR(64) NOT NULL,
+    display_name VARCHAR(120) NOT NULL,
+    email VARCHAR(320) NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;

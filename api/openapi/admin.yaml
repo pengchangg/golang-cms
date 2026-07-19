@@ -1,0 +1,66 @@
+openapi: 3.1.0
+info:
+  title: Internal CMS Admin API
+  version: 0.0.0
+  description: 管理 API 契约根文档。业务 API 将在对应阶段实现并冻结后通过分片聚合。
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: /api/admin/v1
+security:
+  - AdminSession: []
+paths:
+  /auth/oidc/start:
+    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1oidc~1start
+  /auth/oidc/callback:
+    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1oidc~1callback
+  /auth/local/login:
+    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1local~1login
+  /auth/session:
+    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1session
+  /auth/logout:
+    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1logout
+  /models:
+    $ref: ./fragments/admin/models/paths.yaml#/~1models
+  /models/{model_id}:
+    $ref: ./fragments/admin/models/paths.yaml#/~1models~1{model_id}
+  /models/{model_id}/fields:
+    $ref: ./fragments/admin/models/paths.yaml#/~1models~1{model_id}~1fields
+  /models/{model_id}/fields/{field_id}:
+    $ref: ./fragments/admin/models/paths.yaml#/~1models~1{model_id}~1fields~1{field_id}
+  /users:
+    $ref: ./fragments/admin/identity/paths.yaml#/~1users
+  /users/{user_id}:
+    $ref: ./fragments/admin/identity/paths.yaml#/~1users~1{user_id}
+  /users/{user_id}/roles:
+    $ref: ./fragments/admin/roles/paths.yaml#/~1users~1{user_id}~1roles
+  /roles:
+    $ref: ./fragments/admin/roles/paths.yaml#/~1roles
+  /roles/{role_id}:
+    $ref: ./fragments/admin/roles/paths.yaml#/~1roles~1{role_id}
+  /roles/{role_id}/system-permissions:
+    $ref: ./fragments/admin/roles/paths.yaml#/~1roles~1{role_id}~1system-permissions
+  /roles/{role_id}/model-permissions:
+    $ref: ./fragments/admin/roles/paths.yaml#/~1roles~1{role_id}~1model-permissions
+  /audit/events:
+    $ref: ./fragments/admin/audit/paths.yaml#/~1audit~1events
+  /audit/events/{event_id}:
+    $ref: ./fragments/admin/audit/paths.yaml#/~1audit~1events~1{event_id}
+  /models/{model_id}/entries:
+    $ref: ./fragments/admin/content/paths.yaml#/~1models~1{model_id}~1entries
+  /models/{model_id}/entries/{entry_id}:
+    $ref: ./fragments/admin/content/paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}
+  /models/{model_id}/entries/{entry_id}/revisions:
+    $ref: ./fragments/admin/content/paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1revisions
+  /models/{model_id}/entries/{entry_id}/revisions/{revision_id}:
+    $ref: ./fragments/admin/content/paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1revisions~1{revision_id}
+components:
+  securitySchemes:
+    AdminSession:
+      type: apiKey
+      in: cookie
+      name: cms_session
+  schemas:
+    ErrorResponse:
+      $ref: ./fragments/shared/error.yaml#/$defs/ErrorResponse

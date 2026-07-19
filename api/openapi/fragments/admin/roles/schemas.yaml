@@ -1,0 +1,80 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/roles/schemas.yaml
+$defs:
+  RoleKey:
+    type: string
+    pattern: "^[a-z][a-z0-9_]{0,63}$"
+  Role:
+    type: object
+    additionalProperties: false
+    required: [id, key, display_name, description, system_permissions, model_permissions, created_at, updated_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      key:
+        $ref: "#/$defs/RoleKey"
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+      system_permissions:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: ../identity/schemas.yaml#/$defs/SystemPermissionCode
+      model_permissions:
+        type: array
+        items:
+          $ref: ../identity/schemas.yaml#/$defs/ModelPermissionGrant
+      created_at: { type: string, format: date-time }
+      updated_at: { type: string, format: date-time }
+  CreateRoleRequest:
+    type: object
+    additionalProperties: false
+    required: [key, display_name]
+    properties:
+      key:
+        $ref: "#/$defs/RoleKey"
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000, default: "" }
+  UpdateRoleRequest:
+    type: object
+    additionalProperties: false
+    minProperties: 1
+    properties:
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+  ReplaceUserRolesRequest:
+    type: object
+    additionalProperties: false
+    required: [role_ids]
+    properties:
+      role_ids:
+        type: array
+        uniqueItems: true
+        items: { type: string, minLength: 1 }
+  ReplaceSystemPermissionsRequest:
+    type: object
+    additionalProperties: false
+    required: [permissions]
+    properties:
+      permissions:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: ../identity/schemas.yaml#/$defs/SystemPermissionCode
+  ReplaceModelPermissionsRequest:
+    type: object
+    additionalProperties: false
+    required: [grants]
+    properties:
+      grants:
+        type: array
+        items:
+          $ref: ../identity/schemas.yaml#/$defs/ModelPermissionGrant
+  RoleListResponse:
+    type: object
+    additionalProperties: false
+    required: [items]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/Role"

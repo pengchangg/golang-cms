@@ -1,0 +1,31 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/audit/schemas.yaml
+$defs:
+  AuditEvent:
+    type: object
+    additionalProperties: false
+    required: [id, occurred_at, request_id, actor_type, actor_id, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code]
+    properties:
+      id: { type: string, minLength: 1 }
+      occurred_at: { type: string, format: date-time }
+      request_id: { type: string, minLength: 1 }
+      actor_type: { type: string, enum: [user, system] }
+      actor_id: { type: [string, "null"] }
+      action: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
+      resource_type: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
+      resource_id: { type: [string, "null"] }
+      result: { type: string, enum: [success, failure] }
+      ip: { type: string, minLength: 1 }
+      user_agent: { type: string }
+      changes: { type: object }
+      failure_code: { type: [string, "null"], pattern: "^[a-z][a-z0-9_]*$" }
+  AuditEventListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/AuditEvent"
+      next_cursor: { type: [string, "null"], minLength: 1 }

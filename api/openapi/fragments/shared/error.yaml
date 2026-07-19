@@ -1,0 +1,43 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/error.yaml
+$defs:
+  ErrorResponse:
+    type: object
+    additionalProperties: false
+    required:
+      - error
+    properties:
+      error:
+        $ref: '#/$defs/Error'
+  Error:
+    type: object
+    additionalProperties: false
+    required:
+      - code
+      - message
+      - request_id
+      - details
+    properties:
+      code:
+        type: string
+        minLength: 1
+        description: 稳定、可供调用方判断的 snake_case 错误码。
+        examples:
+          - validation_failed
+      message:
+        type: string
+        minLength: 1
+        description: 面向使用者的错误说明，不作为程序判断依据。
+        examples:
+          - 请求数据校验失败
+      request_id:
+        type: string
+        minLength: 1
+        description: 与响应头 X-Request-ID 相同的请求标识。
+        examples:
+          - req_xxx
+      details:
+        type: array
+        description: 错误详情；元素结构由后续阶段的具体错误契约定义。
+        items:
+          type: object

@@ -1,0 +1,190 @@
+/roles:
+  get:
+    operationId: listAdminRoles
+    summary: 列出角色和授权
+    parameters:
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 全部角色和授权。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/RoleListResponse
+      "401": &unauthenticated
+        description: 管理会话无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": &forbidden
+        description: 权限不足。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  post:
+    operationId: createAdminRole
+    summary: 创建无授权角色
+    parameters: &writeHeaders
+      - *sessionCookie
+      - name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateRoleRequest
+    responses:
+      "201":
+        description: 角色已创建，授权集合为空。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/Role
+      "400": &validationFailed
+        description: 请求校验失败。
+        content:
+          application/json:
+            schema:
+              $ref: ../identity/schemas.yaml#/$defs/ValidationErrorResponse
+      "401": *unauthenticated
+      "403": *forbidden
+      "409": &conflict
+        description: 角色 key 或资源状态冲突。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/roles/{role_id}:
+  parameters: &roleId
+    - name: role_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    operationId: getAdminRole
+    summary: 获取角色和授权
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 角色详情。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/Role
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": &notFound
+        description: 角色不存在。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  patch:
+    operationId: updateAdminRole
+    summary: 修改角色显示信息
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateRoleRequest
+    responses:
+      "200":
+        description: 角色已更新。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/Role
+      "400": *validationFailed
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+  delete:
+    operationId: deleteAdminRole
+    summary: 删除角色及其绑定和授权
+    parameters: *writeHeaders
+    responses:
+      "204": { description: 角色已删除。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+/users/{user_id}/roles:
+  parameters:
+    - name: user_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  put:
+    operationId: replaceAdminUserRoles
+    summary: 原子替换用户的完整角色集合
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/ReplaceUserRolesRequest
+    responses:
+      "200":
+        description: 角色绑定已替换，返回用户详情。
+        content:
+          application/json:
+            schema:
+              $ref: ../identity/schemas.yaml#/$defs/User
+      "400": *validationFailed
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+/roles/{role_id}/system-permissions:
+  parameters: *roleId
+  put:
+    operationId: replaceAdminRoleSystemPermissions
+    summary: 原子替换角色的系统权限
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/ReplaceSystemPermissionsRequest
+    responses: &replaceGrantResponses
+      "200":
+        description: 授权已替换。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/Role
+      "400": *validationFailed
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+/roles/{role_id}/model-permissions:
+  parameters: *roleId
+  put:
+    operationId: replaceAdminRoleModelPermissions
+    summary: 原子替换角色的全部模型权限
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/ReplaceModelPermissionsRequest
+    responses: *replaceGrantResponses

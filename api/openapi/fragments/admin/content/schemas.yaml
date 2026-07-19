@@ -1,0 +1,200 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/content/schemas.yaml
+$defs:
+  EntryStatus:
+    type: string
+    enum: [draft, archived]
+  DynamicContent:
+    type: object
+    description: 以模型根字段 key 为属性名；具体类型和约束由服务端按当前模型校验。
+  RichTextMark:
+    type: object
+    additionalProperties: false
+    required: [type]
+    properties:
+      type:
+        type: string
+        enum: [bold, italic, underline, strike, code]
+  RichTextTextNode:
+    type: object
+    additionalProperties: false
+    required: [type, text]
+    properties:
+      type: { const: text }
+      text: { type: string }
+      marks:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/RichTextMark"
+  RichTextHardBreakNode:
+    type: object
+    additionalProperties: false
+    required: [type]
+    properties:
+      type: { const: hard_break }
+  RichTextInlineNode:
+    oneOf:
+      - $ref: "#/$defs/RichTextTextNode"
+      - $ref: "#/$defs/RichTextHardBreakNode"
+  RichTextParagraphNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: paragraph }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextInlineNode"
+  RichTextHeadingNode:
+    type: object
+    additionalProperties: false
+    required: [type, attrs, content]
+    properties:
+      type: { const: heading }
+      attrs:
+        type: object
+        additionalProperties: false
+        required: [level]
+        properties:
+          level: { type: integer, minimum: 1, maximum: 6 }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextInlineNode"
+  RichTextCodeBlockNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: code_block }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextTextNode"
+  RichTextListNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type:
+        type: string
+        enum: [bullet_list, ordered_list]
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextListItemNode"
+  RichTextListItemNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: list_item }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextBlockNode"
+  RichTextBlockquoteNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: blockquote }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextBlockNode"
+  RichTextBlockNode:
+    oneOf:
+      - $ref: "#/$defs/RichTextParagraphNode"
+      - $ref: "#/$defs/RichTextHeadingNode"
+      - $ref: "#/$defs/RichTextCodeBlockNode"
+      - $ref: "#/$defs/RichTextListNode"
+      - $ref: "#/$defs/RichTextBlockquoteNode"
+  RichTextDocument:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: doc }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextBlockNode"
+  ContentRevision:
+    type: object
+    additionalProperties: false
+    required: [id, entry_id, model_id, number, content, created_by, created_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      entry_id: { type: string, minLength: 1 }
+      model_id: { type: string, minLength: 1 }
+      number: { type: integer, minimum: 1 }
+      content:
+        $ref: "#/$defs/DynamicContent"
+      created_by: { type: string, minLength: 1 }
+      created_at: { type: string, format: date-time }
+  ContentEntrySummary:
+    type: object
+    additionalProperties: false
+    required: [id, model_id, status, current_draft_revision_id, created_by, created_at, updated_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      model_id: { type: string, minLength: 1 }
+      status:
+        $ref: "#/$defs/EntryStatus"
+      current_draft_revision_id: { type: string, minLength: 1 }
+      created_by: { type: string, minLength: 1 }
+      created_at: { type: string, format: date-time }
+      updated_at: { type: string, format: date-time }
+  ContentEntry:
+    type: object
+    additionalProperties: false
+    required: [id, model_id, status, current_draft_revision_id, current_draft_revision, created_by, created_at, updated_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      model_id: { type: string, minLength: 1 }
+      status:
+        $ref: "#/$defs/EntryStatus"
+      current_draft_revision_id: { type: string, minLength: 1 }
+      current_draft_revision:
+        $ref: "#/$defs/ContentRevision"
+      created_by: { type: string, minLength: 1 }
+      created_at: { type: string, format: date-time }
+      updated_at: { type: string, format: date-time }
+  CreateContentEntryRequest:
+    type: object
+    additionalProperties: false
+    required: [content]
+    properties:
+      content:
+        $ref: "#/$defs/DynamicContent"
+  UpdateContentEntryRequest:
+    type: object
+    additionalProperties: false
+    required: [base_revision_id, content]
+    properties:
+      base_revision_id: { type: string, minLength: 1 }
+      content:
+        $ref: "#/$defs/DynamicContent"
+  ContentEntryListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/ContentEntrySummary"
+      next_cursor: { type: [string, "null"], minLength: 1 }
+  ContentRevisionListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/ContentRevision"
+      next_cursor: { type: [string, "null"], minLength: 1 }

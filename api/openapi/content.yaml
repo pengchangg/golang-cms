@@ -1,0 +1,15 @@
+openapi: 3.1.0
+info:
+  title: Internal CMS Content API
+  version: 0.0.0
+  description: 内容 API 契约根文档。业务 API 将在对应阶段实现并冻结后通过分片聚合。
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: /api/content/v1
+paths: {}
+components:
+  schemas:
+    ErrorResponse:
+      $ref: ./fragments/shared/error.yaml#/$defs/ErrorResponse

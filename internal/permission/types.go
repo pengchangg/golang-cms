@@ -1,0 +1,38 @@
+package permission
+
+import (
+	"time"
+
+	"cms/internal/identity"
+)
+
+type Role struct {
+	ID                string                      `json:"id"`
+	Key               string                      `json:"key"`
+	DisplayName       string                      `json:"display_name"`
+	Description       string                      `json:"description"`
+	SystemPermissions []string                    `json:"system_permissions"`
+	ModelPermissions  []identity.ModelPermissions `json:"model_permissions"`
+	CreatedAt         time.Time                   `json:"created_at"`
+	UpdatedAt         time.Time                   `json:"updated_at"`
+}
+
+type CreateRoleRequest struct {
+	Key         string `json:"key"`
+	DisplayName string `json:"display_name"`
+	Description string `json:"description"`
+}
+type UpdateRoleRequest struct {
+	DisplayName *string `json:"display_name"`
+	Description *string `json:"description"`
+}
+type ReplaceUserRolesRequest struct {
+	RoleIDs []string `json:"role_ids"`
+}
+type ReplaceSystemPermissionsRequest struct {
+	Permissions []string `json:"permissions"`
+}
+type ReplaceModelPermissionsRequest struct {
+	Grants []identity.ModelPermissions `json:"grants"`
+}
+type RequestMeta struct{ RequestID, IP, UserAgent string }

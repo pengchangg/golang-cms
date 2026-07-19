@@ -1,0 +1,120 @@
+export const systemPermissionCodes = [
+  'users.view',
+  'users.manage',
+  'roles.view',
+  'roles.manage',
+  'models.view',
+  'models.create',
+  'models.update',
+  'models.archive',
+  'assets.view',
+  'assets.upload',
+  'assets.update',
+  'assets.archive',
+  'api_keys.view',
+  'api_keys.create',
+  'api_keys.revoke',
+  'audit.view',
+  'transfers.execute',
+  'transfers.download',
+] as const
+
+export type SystemPermission = (typeof systemPermissionCodes)[number]
+
+export const modelPermissionCodes = [
+  'content.view', 'content.create', 'content.update', 'content.archive',
+  'content.submit', 'content.review', 'content.publish', 'content.unpublish',
+] as const
+
+export type ModelPermission = (typeof modelPermissionCodes)[number]
+
+export interface Principal {
+  user_id: string
+  display_name: string
+  email: string | null
+  auth_method: 'oidc' | 'local'
+  system_permissions: SystemPermission[]
+  model_permissions: Array<{
+    model_id: string
+    permissions: ModelPermission[]
+  }>
+}
+
+export interface SessionResponse {
+  principal: Principal
+  csrf_token: string
+  idle_expires_at: string
+  expires_at: string
+}
+
+export interface ValidationDetail {
+  path: string
+  code: string
+  message: string
+}
+
+export interface ErrorResponse {
+  error: {
+    code: string
+    message: string
+    request_id: string
+    details: ValidationDetail[]
+  }
+}
+
+export type ResourceStatus = 'active' | 'archived'
+export type UserStatus = 'enabled' | 'disabled'
+export type AuthMethod = 'oidc' | 'local'
+export type EntryStatus = 'draft' | 'archived'
+export type FieldType =
+  | 'single_line_text' | 'multi_line_text' | 'rich_text' | 'integer' | 'decimal'
+  | 'boolean' | 'date' | 'datetime' | 'single_select' | 'multi_select' | 'json'
+  | 'single_media' | 'multi_media' | 'single_relation' | 'multi_relation'
+  | 'object' | 'repeatable_group'
+
+export interface CursorResponse<T> { items: T[]; next_cursor: string | null }
+export interface UserSummary {
+  id: string; display_name: string; email: string | null; auth_methods: AuthMethod[]
+  is_emergency_admin: boolean; status: UserStatus; created_at: string; updated_at: string
+}
+export interface User extends UserSummary { role_ids: string[] }
+export interface Role {
+  id: string; key: string; display_name: string; description: string
+  system_permissions: SystemPermission[]
+  model_permissions: Array<{ model_id: string; permissions: ModelPermission[] }>
+  created_at: string; updated_at: string
+}
+export interface FieldConstraints {
+  min_length?: number; max_length?: number; minimum?: string; maximum?: string
+  enum_options?: Array<{ value: string; label: string }>; target_model_id?: string
+  unique?: boolean; filterable?: boolean; sortable?: boolean
+}
+export interface ContentFieldInput {
+  key: string; display_name: string; description?: string; type: FieldType; required?: boolean
+  default_value?: unknown; constraints?: FieldConstraints; children?: ContentFieldInput[]
+}
+export interface ContentField extends Omit<ContentFieldInput, 'description' | 'required' | 'constraints' | 'children'> {
+  id: string; description: string; required: boolean; default_value: unknown
+  constraints: FieldConstraints; children: ContentField[]; status: ResourceStatus
+  created_at: string; updated_at: string
+}
+export interface ContentModelSummary {
+  id: string; key: string; display_name: string; description: string; status: ResourceStatus
+  created_at: string; updated_at: string
+}
+export interface ContentModel extends ContentModelSummary { fields: ContentField[] }
+export interface ContentRevision {
+  id: string; entry_id: string; model_id: string; number: number
+  content: Record<string, unknown>; created_by: string; created_at: string
+}
+export interface ContentEntrySummary {
+  id: string; model_id: string; status: EntryStatus; current_draft_revision_id: string
+  created_by: string; created_at: string; updated_at: string
+}
+export interface ContentEntry extends ContentEntrySummary { current_draft_revision: ContentRevision }
+export interface AuditEvent {
+  id: string; occurred_at: string; request_id: string; actor_type: 'user' | 'system'
+  actor_id: string | null; action: string; resource_type: string; resource_id: string | null
+  result: 'success' | 'failure'; ip: string; user_agent: string
+  changes: Record<string, unknown>; failure_code: string | null
+}

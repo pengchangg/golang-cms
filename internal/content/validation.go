@@ -1,0 +1,396 @@
+package content
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"cms/internal/schema"
+)
+
+var (
+	integerPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+	decimalPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
+)
+
+func validateContent(raw json.RawMessage, fields []schema.ContentField) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		var failures validationErrors
+		failures.add("/content", "required", "content 为必填项")
+		return nil, failures.err()
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		var failures validationErrors
+		failures.add("/content", "invalid_json", "content 不是合法 JSON")
+		return nil, failures.err()
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		var failures validationErrors
+		failures.add("/content", "invalid_type", "content 必须是 object")
+		return nil, failures.err()
+	}
+	var failures validationErrors
+	normalized := validateObject(object, fields, "/content", &failures)
+	if err := failures.err(); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, fmt.Errorf("编码动态内容: %w", err)
+	}
+	return encoded, nil
+}
+
+func uniqueValues(content json.RawMessage, fields []schema.ContentField) ([]UniqueValue, error) {
+	var object map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil {
+		return nil, fmt.Errorf("读取唯一字段值: %w", err)
+	}
+	values := make([]UniqueValue, 0)
+	for _, field := range fields {
+		value, exists := object[field.Key]
+		if !exists || value == nil || field.Status == schema.StatusArchived || !field.Constraints.Unique {
+			continue
+		}
+		canonical, err := canonicalUniqueValue(field.Type, value)
+		if err != nil {
+			return nil, fmt.Errorf("生成字段 %s 的唯一值: %w", field.Key, err)
+		}
+		values = append(values, UniqueValue{FieldID: field.ID, CanonicalValue: canonical})
+	}
+	return values, nil
+}
+
+func canonicalUniqueValue(fieldType schema.FieldType, value any) ([]byte, error) {
+	var canonical string
+	switch fieldType {
+	case schema.FieldTypeSingleLineText, schema.FieldTypeMultiLineText:
+		canonical = value.(string)
+	case schema.FieldTypeInteger:
+		integer, ok := new(big.Int).SetString(value.(json.Number).String(), 10)
+		if !ok {
+			return nil, fmt.Errorf("无效 integer")
+		}
+		canonical = integer.String()
+	case schema.FieldTypeDecimal:
+		number, ok := new(big.Rat).SetString(value.(string))
+		if !ok {
+			return nil, fmt.Errorf("无效 decimal")
+		}
+		canonical = number.RatString()
+	case schema.FieldTypeBoolean:
+		canonical = fmt.Sprintf("%t", value.(bool))
+	case schema.FieldTypeDate, schema.FieldTypeDatetime, schema.FieldTypeSingleSelect:
+		canonical = value.(string)
+	default:
+		return nil, fmt.Errorf("非根级标量类型 %s", fieldType)
+	}
+	digest := sha256.Sum256(append([]byte(string(fieldType)+"\x00"), canonical...))
+	return digest[:], nil
+}
+
+func validateObject(value map[string]any, fields []schema.ContentField, path string, failures *validationErrors) map[string]any {
+	byKey := make(map[string]schema.ContentField, len(fields))
+	for _, field := range fields {
+		byKey[field.Key] = field
+	}
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make(map[string]any, len(value))
+	for _, key := range keys {
+		field, ok := byKey[key]
+		fieldPath := path + "/" + escapePointer(key)
+		if !ok {
+			failures.add(fieldPath, "unknown_property", "包含未知字段")
+			continue
+		}
+		if field.Status == schema.StatusArchived {
+			failures.add(fieldPath, "archived_field", "归档字段不可写入")
+			continue
+		}
+		result[key] = validateValue(value[key], field, fieldPath, failures)
+	}
+	for _, field := range fields {
+		if field.Status == schema.StatusArchived {
+			continue
+		}
+		value, exists := value[field.Key]
+		if !exists && !isNullJSON(field.DefaultValue) {
+			var defaultValue any
+			decoder := json.NewDecoder(bytes.NewReader(field.DefaultValue))
+			decoder.UseNumber()
+			if decoder.Decode(&defaultValue) == nil {
+				result[field.Key] = validateValue(defaultValue, field, path+"/"+escapePointer(field.Key), failures)
+				exists, value = true, defaultValue
+			}
+		}
+		if field.Required && (!exists || value == nil) {
+			failures.add(path+"/"+escapePointer(field.Key), "required", "缺少必填字段")
+		}
+	}
+	return result
+}
+
+func validateValue(value any, field schema.ContentField, path string, failures *validationErrors) any {
+	if value == nil {
+		return nil
+	}
+	switch field.Type {
+	case schema.FieldTypeSingleMedia, schema.FieldTypeMultiMedia, schema.FieldTypeSingleRelation, schema.FieldTypeMultiRelation:
+		failures.add(path, "unsupported_non_null_value", "当前版本不支持该字段的非空值")
+	case schema.FieldTypeSingleLineText, schema.FieldTypeMultiLineText:
+		text, ok := value.(string)
+		if !ok {
+			failures.add(path, "invalid_type", "字段值必须是字符串")
+			return value
+		}
+		if field.Constraints.MinLength != nil && utf8.RuneCountInString(text) < *field.Constraints.MinLength || field.Constraints.MaxLength != nil && utf8.RuneCountInString(text) > *field.Constraints.MaxLength {
+			failures.add(path, "out_of_range", "字段值不满足长度约束")
+		}
+	case schema.FieldTypeRichText:
+		document, ok := value.(map[string]any)
+		if !ok {
+			failures.add(path, "invalid_type", "富文本字段值必须是结构化 object")
+		} else {
+			validateRichTextNode(document, path, "root", failures)
+		}
+	case schema.FieldTypeInteger:
+		number, ok := value.(json.Number)
+		if !ok || !integerPattern.MatchString(number.String()) {
+			failures.add(path, "invalid_type", "字段值必须是 JSON integer")
+			return value
+		}
+		validateNumber(number.String(), field, path, failures)
+	case schema.FieldTypeDecimal:
+		text, ok := value.(string)
+		if !ok || !decimalPattern.MatchString(text) {
+			failures.add(path, "invalid_format", "字段值必须是无指数规范十进制字符串")
+			return value
+		}
+		validateNumber(text, field, path, failures)
+		if number, _ := new(big.Rat).SetString(text); number.Sign() == 0 {
+			return "0"
+		}
+	case schema.FieldTypeBoolean:
+		if _, ok := value.(bool); !ok {
+			failures.add(path, "invalid_type", "字段值必须是 boolean")
+		}
+	case schema.FieldTypeDate:
+		text, ok := value.(string)
+		parsed, err := time.Parse("2006-01-02", text)
+		if !ok || err != nil || parsed.Format("2006-01-02") != text {
+			failures.add(path, "invalid_format", "字段值必须是 YYYY-MM-DD")
+		}
+	case schema.FieldTypeDatetime:
+		text, ok := value.(string)
+		parsed, err := time.Parse(time.RFC3339Nano, text)
+		if !ok || err != nil {
+			failures.add(path, "invalid_format", "字段值必须是 RFC 3339 字符串")
+		} else {
+			return parsed.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
+		}
+	case schema.FieldTypeSingleSelect:
+		text, ok := value.(string)
+		if !ok || !hasOption(field, text) {
+			failures.add(path, "invalid_value", "字段值必须是已有枚举 value")
+		}
+	case schema.FieldTypeMultiSelect:
+		items, ok := value.([]any)
+		if !ok {
+			failures.add(path, "invalid_type", "字段值必须是枚举 value 数组")
+			return value
+		}
+		seen := map[string]bool{}
+		for i, item := range items {
+			text, ok := item.(string)
+			itemPath := fmt.Sprintf("%s/%d", path, i)
+			if !ok || !hasOption(field, text) {
+				failures.add(itemPath, "invalid_value", "数组包含未知枚举 value")
+			} else if seen[text] {
+				failures.add(itemPath, "duplicate", "枚举 value 不可重复")
+			}
+			seen[text] = true
+		}
+	case schema.FieldTypeJSON:
+		return value
+	case schema.FieldTypeObject:
+		object, ok := value.(map[string]any)
+		if !ok {
+			failures.add(path, "invalid_type", "对象字段值必须是 object")
+			return value
+		}
+		return validateObject(object, field.Children, path, failures)
+	case schema.FieldTypeRepeatableGroup:
+		items, ok := value.([]any)
+		if !ok {
+			failures.add(path, "invalid_type", "重复组字段值必须是 object array")
+			return value
+		}
+		result := make([]any, len(items))
+		for i, item := range items {
+			object, ok := item.(map[string]any)
+			itemPath := fmt.Sprintf("%s/%d", path, i)
+			if !ok {
+				failures.add(itemPath, "invalid_type", "重复组元素必须是 object")
+				result[i] = item
+				continue
+			}
+			result[i] = validateObject(object, field.Children, itemPath, failures)
+		}
+		return result
+	}
+	return value
+}
+
+func validateRichTextNode(node map[string]any, path, parent string, failures *validationErrors) {
+	typeName, ok := node["type"].(string)
+	if !ok {
+		failures.add(path+"/type", "invalid_type", "富文本节点 type 必须是字符串")
+		return
+	}
+	allowedChildren := map[string]map[string]bool{
+		"doc":          {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true},
+		"bullet_list":  {"list_item": true},
+		"ordered_list": {"list_item": true},
+		"list_item":    {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true},
+		"blockquote":   {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true},
+		"paragraph":    {"text": true, "hard_break": true},
+		"heading":      {"text": true, "hard_break": true},
+		"code_block":   {"text": true},
+	}
+	if parent == "root" && typeName != "doc" || parent != "root" && !allowedChildren[parent][typeName] {
+		failures.add(path+"/type", "invalid_value", "富文本节点类型不允许出现在当前位置")
+	}
+	allowedProperties := map[string]bool{"type": true}
+	switch typeName {
+	case "doc", "paragraph", "bullet_list", "ordered_list", "list_item", "blockquote", "code_block":
+		allowedProperties["content"] = true
+	case "heading":
+		allowedProperties["content"], allowedProperties["attrs"] = true, true
+	case "text":
+		allowedProperties["text"], allowedProperties["marks"] = true, true
+	case "hard_break":
+	default:
+		failures.add(path+"/type", "invalid_value", "未知富文本节点类型")
+	}
+	for key := range node {
+		if !allowedProperties[key] {
+			failures.add(path+"/"+escapePointer(key), "unknown_property", "富文本节点包含未允许属性")
+		}
+	}
+	if typeName == "heading" {
+		attrs, ok := node["attrs"].(map[string]any)
+		if !ok || len(attrs) != 1 {
+			failures.add(path+"/attrs", "invalid_type", "heading attrs 只能包含 level")
+		} else if level, ok := attrs["level"].(json.Number); !ok || !map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true, "6": true}[level.String()] {
+			failures.add(path+"/attrs/level", "invalid_value", "heading level 必须是 1 至 6 的整数")
+		}
+	}
+	if typeName == "text" {
+		if _, ok := node["text"].(string); !ok {
+			failures.add(path+"/text", "invalid_type", "text 节点必须包含字符串 text")
+		}
+		validateRichTextMarks(node["marks"], path+"/marks", failures)
+		return
+	}
+	if typeName == "hard_break" {
+		return
+	}
+	children, ok := node["content"].([]any)
+	if !ok {
+		failures.add(path+"/content", "invalid_type", "富文本容器节点必须包含 content 数组")
+		return
+	}
+	for i, child := range children {
+		childPath := fmt.Sprintf("%s/content/%d", path, i)
+		object, ok := child.(map[string]any)
+		if !ok {
+			failures.add(childPath, "invalid_type", "富文本子节点必须是 object")
+			continue
+		}
+		validateRichTextNode(object, childPath, typeName, failures)
+	}
+}
+
+func validateRichTextMarks(value any, path string, failures *validationErrors) {
+	if value == nil {
+		return
+	}
+	marks, ok := value.([]any)
+	if !ok {
+		failures.add(path, "invalid_type", "marks 必须是数组")
+		return
+	}
+	allowed := map[string]bool{"bold": true, "italic": true, "underline": true, "strike": true, "code": true}
+	seen := map[string]bool{}
+	for i, item := range marks {
+		markPath := fmt.Sprintf("%s/%d", path, i)
+		mark, ok := item.(map[string]any)
+		if !ok {
+			failures.add(markPath, "invalid_type", "mark 必须是 object")
+			continue
+		}
+		if len(mark) != 1 {
+			failures.add(markPath, "unknown_property", "mark 只能包含 type")
+		}
+		typeName, ok := mark["type"].(string)
+		if !ok || !allowed[typeName] {
+			failures.add(markPath+"/type", "invalid_value", "未知富文本 mark 类型")
+		} else if seen[typeName] {
+			failures.add(markPath+"/type", "duplicate", "mark 不可重复")
+		}
+		seen[typeName] = true
+	}
+}
+
+func validateNumber(value string, field schema.ContentField, path string, failures *validationErrors) {
+	number, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return
+	}
+	if field.Constraints.Minimum != nil {
+		minimum, valid := new(big.Rat).SetString(*field.Constraints.Minimum)
+		if valid && number.Cmp(minimum) < 0 {
+			failures.add(path, "out_of_range", "字段值小于 minimum")
+		}
+	}
+	if field.Constraints.Maximum != nil {
+		maximum, valid := new(big.Rat).SetString(*field.Constraints.Maximum)
+		if valid && number.Cmp(maximum) > 0 {
+			failures.add(path, "out_of_range", "字段值大于 maximum")
+		}
+	}
+}
+
+func hasOption(field schema.ContentField, value string) bool {
+	for _, option := range field.Constraints.EnumOptions {
+		if option.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func isNullJSON(value json.RawMessage) bool {
+	return len(value) == 0 || bytes.Equal(bytes.TrimSpace(value), []byte("null"))
+}
+
+func escapePointer(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, "~", "~0"), "/", "~1")
+}

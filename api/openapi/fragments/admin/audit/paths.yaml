@@ -1,0 +1,70 @@
+/audit/events:
+  get:
+    operationId: listAdminAuditEvents
+    summary: 只读查询审计事件
+    parameters:
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+      - { name: actor_type, in: query, schema: { type: string, enum: [user, system] } }
+      - { name: actor_id, in: query, schema: { type: string, minLength: 1 } }
+      - { name: action, in: query, schema: { type: string, pattern: "^[a-z][a-z0-9_]*$" } }
+      - { name: resource_type, in: query, schema: { type: string, pattern: "^[a-z][a-z0-9_]*$" } }
+      - { name: resource_id, in: query, schema: { type: string, minLength: 1 } }
+      - { name: result, in: query, schema: { type: string, enum: [success, failure] } }
+      - { name: occurred_from, in: query, schema: { type: string, format: date-time } }
+      - { name: occurred_to, in: query, schema: { type: string, format: date-time } }
+      - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      - { name: cursor, in: query, schema: { type: string, minLength: 1 } }
+    responses:
+      "200":
+        description: 按 occurred_at DESC、id DESC 返回审计事件。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/AuditEventListResponse
+      "400": &badRequest
+        description: 筛选条件或游标无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "401": &unauthenticated
+        description: 管理会话无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": &forbidden
+        description: 缺少 audit.view。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/audit/events/{event_id}:
+  parameters:
+    - name: event_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    operationId: getAdminAuditEvent
+    summary: 获取单个审计事件
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 审计事件详情。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/AuditEvent
+      "401": *unauthenticated
+      "403": *forbidden
+      "404":
+        description: 审计事件不存在。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse

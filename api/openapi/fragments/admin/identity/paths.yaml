@@ -1,0 +1,123 @@
+/users:
+  get:
+    operationId: listAdminUsers
+    summary: 列出管理用户
+    parameters:
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+      - name: status
+        in: query
+        schema:
+          $ref: ./schemas.yaml#/$defs/UserStatus
+      - name: auth_method
+        in: query
+        schema:
+          $ref: ./schemas.yaml#/$defs/AuthMethod
+      - name: query
+        in: query
+        schema: { type: string, minLength: 1, maxLength: 120 }
+      - &limit
+        name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - &cursor
+        name: cursor
+        in: query
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 用户列表，按 updated_at DESC、id DESC 返回。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/UserListResponse
+      "400": &badRequest
+        description: 查询参数或游标无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "401": &unauthenticated
+        description: 管理会话无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": &forbidden
+        description: 权限不足。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/users/{user_id}:
+  parameters:
+    - &userId
+      name: user_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    operationId: getAdminUser
+    summary: 获取管理用户详情
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 用户详情和完整角色 ID 集合。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/User
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": &notFound
+        description: 用户不存在。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  patch:
+    operationId: setAdminUserStatus
+    summary: 启用或禁用管理用户
+    parameters:
+      - *sessionCookie
+      - &origin
+        name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - &csrf
+        name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/SetUserStatusRequest
+    responses:
+      "200":
+        description: 用户状态已更新。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/User
+      "400":
+        description: 请求校验失败。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ValidationErrorResponse
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409":
+        description: 操作会移除最后一个有效应急管理员。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse

@@ -1,0 +1,232 @@
+/models:
+  get:
+    operationId: listAdminContentModels
+    summary: 列出动态内容模型
+    parameters:
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+        description: HttpOnly 管理会话 Cookie；前端不得读取或自行构造。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: ./schemas.yaml#/$defs/ResourceStatus
+    responses:
+      "200":
+        description: 模型列表，默认包含 active 和 archived。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentModelListResponse
+      "401": &unauthenticated
+        description: 管理会话无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": &forbidden
+        description: 权限不足。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  post:
+    operationId: createAdminContentModel
+    summary: 创建动态内容模型
+    parameters: &writeHeaders
+      - *sessionCookie
+      - name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateContentModelRequest
+    responses:
+      "201":
+        description: 模型已创建。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentModel
+      "400": &validationFailed
+        description: 请求校验失败，error.code 为 validation_failed。
+        content:
+          application/json:
+            schema:
+              $ref: ../identity/schemas.yaml#/$defs/ValidationErrorResponse
+      "401": *unauthenticated
+      "403": *forbidden
+      "409": &conflict
+        description: 稳定标识冲突或资源状态冲突。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/models/{model_id}:
+  parameters: &modelId
+    - name: model_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    operationId: getAdminContentModel
+    summary: 获取动态内容模型和完整字段树
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 模型详情。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentModel
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": &notFound
+        description: 资源不存在。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  patch:
+    operationId: updateAdminContentModel
+    summary: 修改动态内容模型显示信息
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateContentModelRequest
+    responses:
+      "200":
+        description: 模型已更新。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentModel
+      "400": *validationFailed
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+  delete:
+    operationId: archiveAdminContentModel
+    summary: 归档动态内容模型
+    parameters: *writeHeaders
+    responses:
+      "204": { description: 模型已归档。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+/models/{model_id}/fields:
+  parameters: *modelId
+  get:
+    operationId: listAdminContentModelFields
+    summary: 列出模型字段
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 字段列表，包含归档字段。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentFieldListResponse
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+  post:
+    operationId: createAdminContentModelField
+    summary: 创建模型字段或字段树
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/ContentFieldInput
+    responses:
+      "201":
+        description: 字段已创建。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentField
+      "400": *validationFailed
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+/models/{model_id}/fields/{field_id}:
+  parameters:
+    - name: model_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    - name: field_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    operationId: getAdminContentModelField
+    summary: 获取模型字段和子字段树
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 字段详情。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentField
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+  patch:
+    operationId: updateAdminContentModelField
+    summary: 修改模型字段
+    description: key 不可修改；模型曾产生内容后 type 不可修改。
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/ContentFieldPatch
+    responses:
+      "200":
+        description: 字段已更新。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentField
+      "400": *validationFailed
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409":
+        description: 字段类型已锁定、标识冲突或资源已归档。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  delete:
+    operationId: archiveAdminContentModelField
+    summary: 归档模型字段
+    parameters: *writeHeaders
+    responses:
+      "204": { description: 字段及其 children 已归档。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
