@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"regexp"
@@ -50,6 +51,84 @@ func validateContent(raw json.RawMessage, fields []schema.ContentField) (json.Ra
 		return nil, fmt.Errorf("编码动态内容: %w", err)
 	}
 	return encoded, nil
+}
+
+func revisionDerivatives(content json.RawMessage, revision Revision, fields []schema.ContentField) ([]FieldValue, []Relation, error) {
+	var object map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil {
+		return nil, nil, err
+	}
+	values := []FieldValue{}
+	relations := []Relation{}
+	for _, field := range fields {
+		value, exists := object[field.Key]
+		if !exists || value == nil || field.Status == schema.StatusArchived {
+			continue
+		}
+		if field.Type == schema.FieldTypeSingleRelation || field.Type == schema.FieldTypeMultiRelation {
+			ids := []string{}
+			if field.Type == schema.FieldTypeSingleRelation {
+				ids = append(ids, value.(string))
+			} else {
+				for _, item := range value.([]any) {
+					ids = append(ids, item.(string))
+				}
+			}
+			for position, id := range ids {
+				relations = append(relations, Relation{RevisionID: revision.ID, EntryID: revision.EntryID, ModelID: revision.ModelID, FieldID: field.ID, TargetEntryID: id, TargetModelID: *field.Constraints.TargetModelID, Position: position})
+			}
+			continue
+		}
+		if !field.Constraints.Unique && !field.Constraints.Filterable && !field.Constraints.Sortable {
+			continue
+		}
+		projected, err := projectFieldValue(revision, field, value)
+		if err != nil {
+			var failures validationErrors
+			failures.add("/content/"+escapePointer(field.Key), "projection_out_of_range", "字段值超出投影范围")
+			return nil, nil, failures.err()
+		}
+		values = append(values, projected)
+	}
+	return values, relations, nil
+}
+
+func projectFieldValue(revision Revision, field schema.ContentField, value any) (FieldValue, error) {
+	result := FieldValue{RevisionID: revision.ID, EntryID: revision.EntryID, ModelID: revision.ModelID, FieldID: field.ID}
+	switch field.Type {
+	case schema.FieldTypeSingleLineText, schema.FieldTypeMultiLineText, schema.FieldTypeSingleSelect:
+		v := value.(string)
+		result.ValueType, result.StringValue = "string", &v
+	case schema.FieldTypeInteger:
+		integer, ok := new(big.Int).SetString(value.(json.Number).String(), 10)
+		if !ok || !integer.IsInt64() {
+			return result, errors.New("integer 超出 BIGINT")
+		}
+		v := integer.Int64()
+		result.ValueType, result.IntegerValue = "integer", &v
+	case schema.FieldTypeDecimal:
+		text := value.(string)
+		parts := strings.Split(strings.TrimPrefix(text, "-"), ".")
+		if len(parts[0]) > 35 || len(parts) == 2 && len(parts[1]) > 30 {
+			return result, errors.New("decimal 超出 DECIMAL(65,30)")
+		}
+		result.ValueType, result.DecimalValue = "decimal", &text
+	case schema.FieldTypeBoolean:
+		v := value.(bool)
+		result.ValueType, result.BooleanValue = "boolean", &v
+	case schema.FieldTypeDate:
+		v, _ := time.Parse("2006-01-02", value.(string))
+		result.ValueType, result.DateValue = "date", &v
+	case schema.FieldTypeDatetime:
+		v, _ := time.Parse(time.RFC3339Nano, value.(string))
+		v = v.UTC()
+		result.ValueType, result.DatetimeValue = "datetime", &v
+	default:
+		return result, errors.New("字段不可投影")
+	}
+	return result, nil
 }
 
 func uniqueValues(content json.RawMessage, fields []schema.ContentField) ([]UniqueValue, error) {
@@ -152,8 +231,32 @@ func validateValue(value any, field schema.ContentField, path string, failures *
 		return nil
 	}
 	switch field.Type {
-	case schema.FieldTypeSingleMedia, schema.FieldTypeMultiMedia, schema.FieldTypeSingleRelation, schema.FieldTypeMultiRelation:
+	case schema.FieldTypeSingleMedia, schema.FieldTypeMultiMedia:
 		failures.add(path, "unsupported_non_null_value", "当前版本不支持该字段的非空值")
+	case schema.FieldTypeSingleRelation:
+		if text, ok := value.(string); !ok || text == "" {
+			failures.add(path, "invalid_type", "单关联必须是非空条目 ID")
+		}
+	case schema.FieldTypeMultiRelation:
+		items, ok := value.([]any)
+		if !ok {
+			failures.add(path, "invalid_type", "多关联必须是条目 ID 数组")
+			return value
+		}
+		if len(items) > 50 {
+			failures.add(path, "out_of_range", "多关联最多包含 50 项")
+		}
+		seen := map[string]bool{}
+		for i, item := range items {
+			text, ok := item.(string)
+			itemPath := fmt.Sprintf("%s/%d", path, i)
+			if !ok || text == "" {
+				failures.add(itemPath, "invalid_type", "关联项必须是非空条目 ID")
+			} else if seen[text] {
+				failures.add(itemPath, "duplicate", "关联条目不可重复")
+			}
+			seen[text] = true
+		}
 	case schema.FieldTypeSingleLineText, schema.FieldTypeMultiLineText:
 		text, ok := value.(string)
 		if !ok {
@@ -200,7 +303,7 @@ func validateValue(value any, field schema.ContentField, path string, failures *
 	case schema.FieldTypeDatetime:
 		text, ok := value.(string)
 		parsed, err := time.Parse(time.RFC3339Nano, text)
-		if !ok || err != nil {
+		if !ok || err != nil || parsed.Nanosecond()%1000 != 0 {
 			failures.add(path, "invalid_format", "字段值必须是 RFC 3339 字符串")
 		} else {
 			return parsed.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)

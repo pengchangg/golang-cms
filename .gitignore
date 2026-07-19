@@ -2,6 +2,6 @@
 .env.*
 !.env.example
 coverage.out
-cms
+/cms
 web/dist/
 web/node_modules/

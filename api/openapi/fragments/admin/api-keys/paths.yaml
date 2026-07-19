@@ -1,0 +1,147 @@
+x-integration-status: integrated
+/api-keys:
+  get:
+    x-integration-status: integrated
+    operationId: listAdminAPIKeys
+    summary: 列出 API Key 非敏感元数据
+    parameters:
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+      - name: status
+        in: query
+        schema:
+          $ref: ./schemas.yaml#/$defs/APIKeyStatus
+      - &limit
+        name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - &cursor
+        name: cursor
+        in: query
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 按 created_at DESC、id DESC 返回。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/APIKeyListResponse
+      "400": &badRequest
+        description: 请求校验或游标失败。
+        content:
+          application/json:
+            schema:
+              anyOf:
+                - $ref: ../identity/schemas.yaml#/$defs/ValidationErrorResponse
+                - $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "401": &unauthenticated
+        description: 管理会话无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": &forbidden
+        description: 权限不足。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  post:
+    x-integration-status: integrated
+    operationId: createAdminAPIKey
+    summary: 创建并一次性返回完整 API Key
+    parameters: &writeHeaders
+      - *sessionCookie
+      - name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateAPIKeyRequest
+    responses:
+      "201": &secretResponse
+        description: 完整 key 只在本响应出现一次。
+        headers:
+          Cache-Control:
+            schema: { const: no-store }
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/APIKeySecret
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": &notFound
+        description: API Key 或模型不存在。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/api-keys/{api_key_id}:
+  parameters: &apiKeyId
+    - name: api_key_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    x-integration-status: integrated
+    operationId: getAdminAPIKey
+    summary: 获取 API Key 非敏感元数据
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: API Key 元数据，不含 secret、salt 或 hash。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/APIKey
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+  delete:
+    x-integration-status: integrated
+    operationId: revokeAdminAPIKey
+    summary: 立即撤销 API Key
+    parameters: *writeHeaders
+    responses:
+      "204": { description: API Key 已撤销。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": &keyConflict
+        description: API Key 已撤销、已过期或不能执行当前动作。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/api-keys/{api_key_id}/rotate:
+  parameters: *apiKeyId
+  post:
+    x-integration-status: integrated
+    operationId: rotateAdminAPIKey
+    summary: 创建替代 Key 并立即撤销旧 Key
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/RotateAPIKeyRequest
+    responses:
+      "201": *secretResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *keyConflict

@@ -55,6 +55,22 @@ paths:
     $ref: ./fragments/admin/content/paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1revisions
   /models/{model_id}/entries/{entry_id}/revisions/{revision_id}:
     $ref: ./fragments/admin/content/paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1revisions~1{revision_id}
+  /models/{model_id}/entries/{entry_id}/submit:
+    $ref: ./fragments/admin/content/workflow-paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1submit
+  /models/{model_id}/entries/{entry_id}/approve:
+    $ref: ./fragments/admin/content/workflow-paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1approve
+  /models/{model_id}/entries/{entry_id}/reject:
+    $ref: ./fragments/admin/content/workflow-paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1reject
+  /models/{model_id}/entries/{entry_id}/unpublish:
+    $ref: ./fragments/admin/content/workflow-paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1unpublish
+  /models/{model_id}/entries/{entry_id}/workflow-events:
+    $ref: ./fragments/admin/content/workflow-paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1workflow-events
+  /api-keys:
+    $ref: ./fragments/admin/api-keys/paths.yaml#/~1api-keys
+  /api-keys/{api_key_id}:
+    $ref: ./fragments/admin/api-keys/paths.yaml#/~1api-keys~1{api_key_id}
+  /api-keys/{api_key_id}/rotate:
+    $ref: ./fragments/admin/api-keys/paths.yaml#/~1api-keys~1{api_key_id}~1rotate
 components:
   securitySchemes:
     AdminSession:

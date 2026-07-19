@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"cms/internal/identity"
 	"cms/internal/platform/apperror"
@@ -53,6 +55,41 @@ func TestListEntriesValidatesStatusAndLimit(t *testing.T) {
 		if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"code":"validation_failed"`)) {
 			t.Fatalf("非法列表参数响应错误: %d, %s", response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestListEntriesRejectsUnknownDuplicateAndInvalidF2Query(t *testing.T) {
+	service, _, _, _ := testService()
+	handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) { return contentPrincipal(permissionView), nil })
+	targets := []string{
+		"/api/admin/v1/models/mdl_1/entries?unknown=true",
+		"/api/admin/v1/models/mdl_1/entries?sort=id&sort=-id",
+		"/api/admin/v1/models/mdl_1/entries?workflow_status=unknown",
+		"/api/admin/v1/models/mdl_1/entries?include_total=1",
+		"/api/admin/v1/models/mdl_1/entries?sort=",
+		"/api/admin/v1/models/mdl_1/entries?sort=id,,title",
+		"/api/admin/v1/models/mdl_1/entries?filter=" + url.QueryEscape(`{"title":{"unknown":"x"}}`),
+	}
+	for _, target := range targets {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"code":"invalid_query"`)) {
+			t.Fatalf("非法 F2 查询响应错误 (%s): %d, %s", target, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestListEntriesAcceptsWorkflowFilterAndIncludesTotal(t *testing.T) {
+	service, repository, _, _ := testService()
+	now := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)
+	repository.entries["ent_1"] = EntrySummary{ID: "ent_1", ModelID: "mdl_1", Status: StatusDraft, CurrentDraftRevisionID: "rev_1", WorkflowStatus: WorkflowPendingReview, CreatedAt: now, UpdatedAt: now}
+	handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) { return contentPrincipal(permissionView), nil })
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/models/mdl_1/entries?workflow_status=pending_review&sort=-updated_at&include_total=true", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"workflow_status":"pending_review"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"total":1`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"total_is_estimate":false`)) {
+		t.Fatalf("F2 列表响应错误: %d, %s", response.Code, response.Body.String())
 	}
 }
 

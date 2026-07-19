@@ -106,12 +106,43 @@ export interface ContentModel extends ContentModelSummary { fields: ContentField
 export interface ContentRevision {
   id: string; entry_id: string; model_id: string; number: number
   content: Record<string, unknown>; created_by: string; created_at: string
+  workflow_status: WorkflowStatus; submitted_by: string | null; submitted_at: string | null
 }
+export type WorkflowStatus = 'draft' | 'pending_review' | 'rejected' | 'published' | 'unpublished'
+export type WorkflowRevision = ContentRevision
 export interface ContentEntrySummary {
   id: string; model_id: string; status: EntryStatus; current_draft_revision_id: string
+  workflow_status: WorkflowStatus; current_published_revision_id: string | null
+  expanded?: Record<string, ContentEntrySummary | ContentEntrySummary[]>
   created_by: string; created_at: string; updated_at: string
 }
-export interface ContentEntry extends ContentEntrySummary { current_draft_revision: ContentRevision }
+export interface ContentEntry extends ContentEntrySummary {
+  current_draft_revision: WorkflowRevision
+  current_published_revision: WorkflowRevision | null
+}
+export interface WorkflowEvent {
+  id: string; entry_id: string; revision_id: string
+  type: 'submitted' | 'approved' | 'rejected' | 'unpublished'
+  from_status: WorkflowStatus; to_status: WorkflowStatus
+  actor_id: string; reason: string | null; occurred_at: string
+}
+export interface EntryListQuery {
+  status?: EntryStatus; workflow_status?: WorkflowStatus; cursor?: string; limit?: number
+  filter?: string; relation_filter?: string; sort?: string; expand?: string; include_total?: boolean
+}
+export interface EntryListResponse extends CursorResponse<ContentEntrySummary> {
+  total?: number; total_is_estimate?: boolean
+}
+export type APIKeyStatus = 'active' | 'expired' | 'revoked'
+export interface APIKey {
+  id: string; name: string; prefix: string; model_ids: string[]; status: APIKeyStatus
+  expires_at: string | null; revoked_at: string | null; last_used_at: string | null
+  rotated_from_id: string | null; replaced_by_id: string | null
+  created_by: string; created_at: string
+}
+export interface APIKeySecret extends APIKey { key: string }
+export interface CreateAPIKeyRequest { name: string; model_ids: string[]; expires_at: string | null }
+export interface RotateAPIKeyRequest { name?: string; model_ids?: string[]; expires_at?: string | null }
 export interface AuditEvent {
   id: string; occurred_at: string; request_id: string; actor_type: 'user' | 'system'
   actor_id: string | null; action: string; resource_type: string; resource_id: string | null

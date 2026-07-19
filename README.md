@@ -1,6 +1,6 @@
 # 企业内部 CMS
 
-基于 Go、React 和 MySQL 8.0 的企业内部动态内容管理系统。当前已完成阶段一，支持认证、RBAC、动态模型、草稿 Revision、审计和对应管理页面。
+基于 Go、React 和 MySQL 8.0 的企业内部动态内容管理系统。当前已完成阶段二，支持认证、RBAC、动态模型、不可变 Revision、审核发布、API Key、只读内容 API、审计和对应管理页面。
 
 ## 文档
 
@@ -8,6 +8,16 @@
 - [多 Agent 开发计划](docs/development-plan.md)
 - [F0 共享契约](docs/contracts/f0.md)
 - [F1 阶段一契约](docs/contracts/f1.md)
+- [F2 阶段二契约](docs/contracts/f2.md)
+
+## 阶段二能力
+
+- 固定的草稿、待审核、驳回、发布和下线工作流
+- 禁止提交人自审，审核通过时原子切换发布指针
+- Revision 级类型化投影、动态过滤排序和一层关联展开
+- API Key 模型范围、过期、撤销和无宽限期轮换
+- `/api/content/v1` 只读已发布内容，支持强 ETag 和条件请求
+- 审核队列、工作流事件和 API Key 管理页面
 
 ## 环境要求
 

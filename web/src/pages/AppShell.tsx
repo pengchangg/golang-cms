@@ -19,6 +19,7 @@ const ModelDesignerPage = lazy(() => import('./ModelDesignerPage'))
 const EntriesPage = lazy(() => import('./EntriesPage'))
 const EntryEditorPage = lazy(() => import('./EntryEditorPage'))
 const AuditPage = lazy(() => import('./AuditPage'))
+const APIKeysPage = lazy(() => import('./APIKeysPage'))
 const { Header, Sider, Content } = Layout
 
 export default function AppShell() {
@@ -76,7 +77,7 @@ export default function AppShell() {
       <Sider className="app-sider" width={240} breakpoint="lg" collapsedWidth={0} trigger={null}>
         <a className="brand" href="/" aria-label="内容管理系统首页"><span aria-hidden="true">内</span><strong>内容管理系统</strong></a>
         <nav aria-label="主导航">{menu}</nav>
-        <Typography.Text className="shell-phase">管理端 · P1</Typography.Text>
+        <Typography.Text className="shell-phase">管理端 · P2</Typography.Text>
       </Sider>
       <Drawer className="mobile-navigation" placement="left" title="内容管理系统" open={drawerOpen} onClose={() => setDrawerOpen(false)}>
         <nav aria-label="移动端主导航">{menu}</nav>
@@ -100,7 +101,8 @@ export default function AppShell() {
               <Route path="models/:modelId" element={systemRoute('models.view', <ModelDesignerPage principal={principal} />)} />
               <Route path="content/:modelId" element={contentRoute('content.view', <EntriesPage principal={principal} />)} />
               <Route path="content/:modelId/new" element={contentRoute('content.create', <EntryEditorPage principal={principal} />)} />
-              <Route path="content/:modelId/:entryId" element={contentRoute('content.update', <EntryEditorPage principal={principal} />)} />
+              <Route path="content/:modelId/:entryId" element={contentRoute('content.view', <EntryEditorPage principal={principal} />)} />
+              <Route path="api-keys" element={systemRoute('api_keys.view', <APIKeysPage principal={principal} />)} />
               <Route path="audit" element={systemRoute('audit.view', <AuditPage />)} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

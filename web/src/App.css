@@ -98,6 +98,18 @@ button, a { touch-action: manipulation; }
 .dynamic-field .dynamic-form { padding: 8px 0 0 16px; border-left: 2px solid rgb(37 107 85 / 20%); }
 .audit-detail { max-width: 900px; margin-top: 32px; }
 .audit-detail pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.content-filter-panel { max-width: 1100px; margin-bottom: 14px; padding: 18px; border-block: 1px solid var(--line); background: rgb(255 254 249 / 55%); }
+.content-filter-panel .ant-select, .content-filter-panel .ant-input { min-width: 150px; }
+.result-count { display: block; margin-bottom: 18px; }
+.workflow-state { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.editor-notice { max-width: 1100px; margin-bottom: 18px; }
+.entry-workspace { display: grid; max-width: 1100px; align-items: start; gap: 36px; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .5fr); }
+.workflow-history { position: sticky; top: 90px; padding: 4px 0 4px 28px; border-left: 1px solid var(--line); }
+.workflow-history h3 { margin: 0 0 28px; font-family: "Songti SC", "Noto Serif SC", serif; }
+.reject-reason { margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid #a63a32; background: #f7e9e5; white-space: pre-wrap; }
+.api-key-filter { min-width: 180px; margin-bottom: 24px; }
+.secret-modal .ant-modal-content { border-top: 5px solid var(--green); }
+.secret-value { margin: 20px 0 12px !important; padding: 16px; border: 1px solid var(--line); background: #f3f3eb; overflow-wrap: anywhere; }
 
 @media (max-width: 991px) {
   .app-sider { display: none; }
@@ -123,6 +135,12 @@ button, a { touch-action: manipulation; }
   .permission-matrix { border-top: 1px solid var(--line); border-left: 0; padding-inline: 8px; }
   .permission-matrix .ant-checkbox-group { grid-template-columns: 1fr; }
   .dynamic-field { padding-inline: 12px; }
+  .entry-workspace { grid-template-columns: 1fr; }
+  .workflow-history { position: static; padding: 24px 0 0; border-top: 1px solid var(--line); border-left: 0; }
+  .workflow-actions { width: 100%; }
+  .workflow-actions .ant-btn { min-height: 44px; flex: 1; }
+  .content-filter-panel { padding-inline: 12px; }
+  .content-filter-panel .ant-space, .content-filter-panel .ant-space-item, .content-filter-panel .ant-select, .content-filter-panel .ant-input { width: 100%; }
 }
 @media (hover: hover) {
   .brand:hover { color: var(--green); }

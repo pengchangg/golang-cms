@@ -46,3 +46,15 @@ func conflict(code, message string) error {
 func invalidCursor() error {
 	return &apperror.Error{Kind: apperror.KindInvalidArgument, Code: "invalid_cursor", Message: "分页游标无效"}
 }
+
+func invalidQuery() error {
+	return &apperror.Error{Kind: apperror.KindInvalidArgument, Code: "invalid_query", Message: "内容查询无效"}
+}
+
+func publishedNotFound(resource string) error {
+	code := "published_content_not_found"
+	if resource == "模型" {
+		code = "published_model_not_found"
+	}
+	return &apperror.Error{Kind: apperror.KindNotFound, Code: code, Message: "已发布" + resource + "不存在"}
+}

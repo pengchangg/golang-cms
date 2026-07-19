@@ -31,5 +31,5 @@ export function DataState({ loading, error, empty, retry, children }: { loading:
 }
 
 export function PendingApiNotice() {
-  return <Alert className="pending-notice" type="info" showIcon title="后端接口尚未聚合时，本页会如实显示请求错误" description="仅设置开发变量 VITE_ENABLE_P1_MOCK=true 时使用显式演示数据，生产环境不会伪造成功响应。" />
+  return <Alert className="pending-notice" type="info" showIcon title="后端接口尚未聚合时，本页会如实显示请求错误" description="仅设置开发变量 VITE_ENABLE_P1_MOCK=true 或 VITE_ENABLE_F2_MOCK=true 时使用显式演示数据，生产环境不会伪造成功响应。" />
 }

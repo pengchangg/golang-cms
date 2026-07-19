@@ -10,6 +10,9 @@ if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_AUTH_MOCK === 'true') {
 if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_P1_MOCK === 'true') {
   await import('./mocks/p1').then(({ enableP1Mock }) => enableP1Mock())
 }
+if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_F2_MOCK === 'true') {
+  await import('./mocks/f2').then(({ enableF2Mock }) => enableF2Mock())
+}
 
 const root = document.getElementById('root')
 

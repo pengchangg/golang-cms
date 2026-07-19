@@ -125,7 +125,7 @@ $defs:
   ContentRevision:
     type: object
     additionalProperties: false
-    required: [id, entry_id, model_id, number, content, created_by, created_at]
+    required: [id, entry_id, model_id, number, content, workflow_status, created_by, submitted_by, submitted_at, created_at]
     properties:
       id: { type: string, minLength: 1 }
       entry_id: { type: string, minLength: 1 }
@@ -135,10 +135,14 @@ $defs:
         $ref: "#/$defs/DynamicContent"
       created_by: { type: string, minLength: 1 }
       created_at: { type: string, format: date-time }
+      workflow_status:
+        $ref: ./workflow-schemas.yaml#/$defs/WorkflowStatus
+      submitted_by: { type: [string, "null"], minLength: 1 }
+      submitted_at: { type: [string, "null"], format: date-time }
   ContentEntrySummary:
     type: object
     additionalProperties: false
-    required: [id, model_id, status, current_draft_revision_id, created_by, created_at, updated_at]
+    required: [id, model_id, status, current_draft_revision_id, workflow_status, current_published_revision_id, created_by, created_at, updated_at]
     properties:
       id: { type: string, minLength: 1 }
       model_id: { type: string, minLength: 1 }
@@ -148,10 +152,21 @@ $defs:
       created_by: { type: string, minLength: 1 }
       created_at: { type: string, format: date-time }
       updated_at: { type: string, format: date-time }
+      workflow_status:
+        $ref: ./workflow-schemas.yaml#/$defs/WorkflowStatus
+      current_published_revision_id: { type: [string, "null"], minLength: 1 }
+      expanded:
+        type: object
+        additionalProperties:
+          oneOf:
+            - $ref: "#/$defs/ContentEntrySummary"
+            - type: array
+              items:
+                $ref: "#/$defs/ContentEntrySummary"
   ContentEntry:
     type: object
     additionalProperties: false
-    required: [id, model_id, status, current_draft_revision_id, current_draft_revision, created_by, created_at, updated_at]
+    required: [id, model_id, status, current_draft_revision_id, current_draft_revision, workflow_status, current_published_revision_id, current_published_revision, created_by, created_at, updated_at]
     properties:
       id: { type: string, minLength: 1 }
       model_id: { type: string, minLength: 1 }
@@ -163,6 +178,13 @@ $defs:
       created_by: { type: string, minLength: 1 }
       created_at: { type: string, format: date-time }
       updated_at: { type: string, format: date-time }
+      workflow_status:
+        $ref: ./workflow-schemas.yaml#/$defs/WorkflowStatus
+      current_published_revision_id: { type: [string, "null"], minLength: 1 }
+      current_published_revision:
+        oneOf:
+          - $ref: "#/$defs/ContentRevision"
+          - type: "null"
   CreateContentEntryRequest:
     type: object
     additionalProperties: false
@@ -188,6 +210,8 @@ $defs:
         items:
           $ref: "#/$defs/ContentEntrySummary"
       next_cursor: { type: [string, "null"], minLength: 1 }
+      total: { type: integer, minimum: 0, maximum: 10000 }
+      total_is_estimate: { type: boolean }
   ContentRevisionListResponse:
     type: object
     additionalProperties: false

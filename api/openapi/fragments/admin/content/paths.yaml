@@ -26,6 +26,29 @@
         name: cursor
         in: query
         schema: { type: string, minLength: 1 }
+      - name: workflow_status
+        in: query
+        schema:
+          $ref: ./workflow-schemas.yaml#/$defs/WorkflowStatus
+      - name: filter
+        in: query
+        schema: { type: string }
+        description: URL 编码 JSON object，最多 5 个可过滤字段。
+      - name: relation_filter
+        in: query
+        schema: { type: string }
+        description: URL 编码 JSON object，最多 2 个根级关联字段。
+      - name: sort
+        in: query
+        schema: { type: string }
+        description: 最多 3 个字段，前缀 - 表示降序。
+      - name: expand
+        in: query
+        schema: { type: string }
+        description: 最多 3 个根级关联字段，只展开一层。
+      - name: include_total
+        in: query
+        schema: { type: boolean, default: false }
     responses:
       "200":
         description: 按 updated_at DESC、id DESC 返回条目。

@@ -18,16 +18,105 @@ import (
 )
 
 type memoryRepository struct {
-	entries    map[string]EntrySummary
-	revisions  map[string][]Revision
-	unique     map[string]map[string]string
-	created    int
-	updated    int
-	lockEvents *[]string
+	entries     map[string]EntrySummary
+	revisions   map[string][]Revision
+	unique      map[string]map[string]string
+	created     int
+	updated     int
+	lockEvents  *[]string
+	published   map[string]string
+	events      []WorkflowEvent
+	fieldValues []FieldValue
+	relations   []Relation
+	listCalls   int
+	expandCalls int
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{entries: map[string]EntrySummary{}, revisions: map[string][]Revision{}, unique: map[string]map[string]string{}}
+	return &memoryRepository{entries: map[string]EntrySummary{}, revisions: map[string][]Revision{}, unique: map[string]map[string]string{}, published: map[string]string{}}
+}
+func (r *memoryRepository) CreateFieldValues(_ context.Context, _ database.Querier, values []FieldValue) error {
+	r.fieldValues = append(r.fieldValues, values...)
+	return nil
+}
+func (r *memoryRepository) CreateRelations(_ context.Context, _ database.Querier, values []Relation) error {
+	r.relations = append(r.relations, values...)
+	return nil
+}
+func (r *memoryRepository) ValidateRelationTargets(_ context.Context, _ database.Querier, values []Relation) error {
+	for _, value := range values {
+		entry, ok := r.entries[value.TargetEntryID]
+		if !ok || entry.ModelID != value.TargetModelID || entry.Status == StatusArchived {
+			return errors.New("关联目标无效")
+		}
+	}
+	return nil
+}
+func (r *memoryRepository) GetWorkflowEntry(ctx context.Context, q database.Querier, modelID, entryID string) (Entry, error) {
+	entry, err := r.GetEntry(ctx, q, modelID, entryID)
+	if err != nil {
+		return entry, err
+	}
+	entry.WorkflowStatus = entry.CurrentDraftRevision.WorkflowStatus
+	if id := r.published[entryID]; id != "" {
+		entry.CurrentPublishedRevisionID = &id
+		revision, err := r.GetRevision(ctx, q, modelID, entryID, id)
+		if err != nil {
+			return entry, err
+		}
+		entry.CurrentPublishedRevision = &revision
+	}
+	return entry, nil
+}
+func (r *memoryRepository) LockRevision(ctx context.Context, q database.Querier, modelID, entryID, revisionID string) (Revision, error) {
+	return r.GetRevision(ctx, q, modelID, entryID, revisionID)
+}
+func (r *memoryRepository) TransitionRevision(_ context.Context, _ database.Querier, id string, from, to WorkflowStatus, submitter *string, submittedAt *time.Time) (bool, error) {
+	for entryID, revisions := range r.revisions {
+		for i := range revisions {
+			if revisions[i].ID == id {
+				if revisions[i].WorkflowStatus != from {
+					return false, nil
+				}
+				revisions[i].WorkflowStatus = to
+				if revisions[i].SubmittedBy == nil {
+					revisions[i].SubmittedBy = submitter
+					revisions[i].SubmittedAt = submittedAt
+				}
+				r.revisions[entryID] = revisions
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+func (r *memoryRepository) SetPublishedPointer(_ context.Context, _ database.Querier, _, entryID, revisionID string, _ time.Time) error {
+	r.published[entryID] = revisionID
+	return nil
+}
+func (r *memoryRepository) DeletePublishedPointer(_ context.Context, _ database.Querier, _, entryID, revisionID string) (bool, error) {
+	if r.published[entryID] != revisionID {
+		return false, nil
+	}
+	delete(r.published, entryID)
+	return true, nil
+}
+func (r *memoryRepository) CreateWorkflowEvent(_ context.Context, _ database.Querier, _ string, event WorkflowEvent) error {
+	r.events = append(r.events, event)
+	return nil
+}
+func (r *memoryRepository) ListWorkflowEvents(_ context.Context, _ database.Querier, _, entryID string, limit int, cursor *WorkflowEventCursor) ([]WorkflowEvent, error) {
+	items := []WorkflowEvent{}
+	for i := len(r.events) - 1; i >= 0; i-- {
+		event := r.events[i]
+		if event.EntryID == entryID && (cursor == nil || event.OccurredAt.Before(cursor.OccurredAt) || event.OccurredAt.Equal(cursor.OccurredAt) && event.ID < cursor.ID) {
+			items = append(items, event)
+		}
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }
 
 func (r *memoryRepository) HasAnyContent(_ context.Context, _ database.Querier, modelID string) (bool, error) {
@@ -38,17 +127,38 @@ func (r *memoryRepository) HasAnyContent(_ context.Context, _ database.Querier, 
 	}
 	return false, nil
 }
-func (r *memoryRepository) ListEntries(_ context.Context, _ database.Querier, modelID string, status EntryStatus, limit int, cursor *EntryCursor) ([]EntrySummary, error) {
+func (r *memoryRepository) ListEntries(_ context.Context, _ database.Querier, modelID string, query AdminEntryQuery, _ map[string]schema.ContentField, limit int, _ *EntryCursor) ([]EntrySummary, [][]*string, error) {
+	r.listCalls++
 	items := []EntrySummary{}
 	for _, item := range r.entries {
-		if item.ModelID == modelID && item.Status == status && (cursor == nil || item.UpdatedAt.Before(cursor.UpdatedAt) || item.UpdatedAt.Equal(cursor.UpdatedAt) && item.ID < cursor.ID) {
+		if item.ModelID == modelID && item.Status == query.Status && (query.WorkflowStatus == nil || item.WorkflowStatus == *query.WorkflowStatus) {
 			items = append(items, item)
 		}
 	}
 	if len(items) > limit {
 		items = items[:limit]
 	}
-	return items, nil
+	values := make([][]*string, len(items))
+	for i, item := range items {
+		values[i] = []*string{pointerString(item.UpdatedAt.Format(time.RFC3339Nano)), pointerString(item.ID)}
+	}
+	return items, values, nil
+}
+func (r *memoryRepository) CountEntries(_ context.Context, _ database.Querier, modelID string, query AdminEntryQuery, _ map[string]schema.ContentField) (int, bool, error) {
+	count := 0
+	for _, item := range r.entries {
+		if item.ModelID == modelID && item.Status == query.Status && (query.WorkflowStatus == nil || item.WorkflowStatus == *query.WorkflowStatus) {
+			count++
+		}
+	}
+	if count > 10000 {
+		return 10000, true, nil
+	}
+	return count, false, nil
+}
+func (r *memoryRepository) ExpandEntries(context.Context, database.Querier, []EntrySummary, []schema.ContentField, []string) error {
+	r.expandCalls++
+	return nil
 }
 func (r *memoryRepository) GetEntry(_ context.Context, _ database.Querier, modelID, entryID string) (Entry, error) {
 	entry, ok := r.entries[entryID]
@@ -141,11 +251,20 @@ func (r *memoryRepository) GetRevision(_ context.Context, _ database.Querier, mo
 }
 
 type memoryModels struct {
-	model      schema.ContentModel
-	lockEvents *[]string
+	model          schema.ContentModel
+	models         map[string]schema.ContentModel
+	lockEvents     *[]string
+	lockedModelIDs *[]string
 }
 
-func (m memoryModels) GetModel(context.Context, database.Querier, string) (schema.ContentModel, error) {
+func (m memoryModels) GetModel(_ context.Context, _ database.Querier, id string) (schema.ContentModel, error) {
+	if m.models != nil {
+		model, ok := m.models[id]
+		if !ok {
+			return schema.ContentModel{}, notFound("模型")
+		}
+		return model, nil
+	}
 	return m.model, nil
 }
 func (m memoryModels) LockModel(context.Context, database.Querier, string) (schema.ContentModelSummary, error) {
@@ -153,6 +272,23 @@ func (m memoryModels) LockModel(context.Context, database.Querier, string) (sche
 		*m.lockEvents = append(*m.lockEvents, "model")
 	}
 	return m.model.ContentModelSummary, nil
+}
+func (m memoryModels) LockModels(_ context.Context, _ database.Querier, ids []string) (map[string]schema.ContentModelSummary, error) {
+	if m.lockEvents != nil {
+		*m.lockEvents = append(*m.lockEvents, "model")
+	}
+	if m.lockedModelIDs != nil {
+		*m.lockedModelIDs = append((*m.lockedModelIDs)[:0], ids...)
+	}
+	result := make(map[string]schema.ContentModelSummary, len(ids))
+	for _, id := range ids {
+		model, err := m.GetModel(context.Background(), nil, id)
+		if err != nil {
+			return nil, err
+		}
+		result[id] = model.ContentModelSummary
+	}
+	return result, nil
 }
 
 type directTx struct{ calls int }
@@ -273,12 +409,131 @@ func TestPermissionDefaultsToDenyAndSystemPermissionCannotSubstitute(t *testing.
 	assertApplicationCode(t, err, "permission_denied")
 }
 
-func TestCursorBindsListAndFilters(t *testing.T) {
-	entryCursor, err := encodeCursor(cursorEnvelope{Kind: "entries", ModelID: "mdl_1", Status: "draft", UpdatedAt: "2026-07-18T00:00:00Z", ID: "ent_1"})
+func TestWorkflowPublishEditAndUnpublish(t *testing.T) {
+	service, repository, _, _ := testService()
+	creator := contentPrincipal(permissionCreate, permissionUpdate, permissionSubmit)
+	created, err := service.CreateEntry(context.Background(), creator, testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"线上版本"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := decodeEntryCursor(entryCursor, "mdl_1", StatusArchived); err == nil {
+	if _, err = service.Submit(context.Background(), creator, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID}); err != nil {
+		t.Fatal(err)
+	}
+	reviewer := identity.NewPrincipal("usr_2", "审核人", nil, identity.AuthMethodOIDC, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{permissionReview, permissionPublish, permissionUnpublish}}})
+	published, err := service.Approve(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published.CurrentPublishedRevisionID == nil || *published.CurrentPublishedRevisionID != created.CurrentDraftRevisionID || published.CurrentPublishedRevision.WorkflowStatus != WorkflowPublished {
+		t.Fatalf("发布指针错误: %#v", published)
+	}
+	edited, err := service.UpdateEntry(context.Background(), creator, testMeta(), "mdl_1", created.ID, UpdateEntryRequest{BaseRevisionID: created.CurrentDraftRevisionID, Content: json.RawMessage(`{"title":"下一版"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.published[created.ID] != created.CurrentDraftRevisionID || edited.CurrentDraftRevisionID == created.CurrentDraftRevisionID {
+		t.Fatal("编辑已发布内容提前移动发布指针")
+	}
+	if _, err = service.Unpublish(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID}); err != nil {
+		t.Fatal(err)
+	}
+	if repository.published[created.ID] != "" {
+		t.Fatal("下线后发布指针未删除")
+	}
+}
+
+func TestWorkflowRejectSelfReviewAndVersionConditions(t *testing.T) {
+	service, repository, _, _ := testService()
+	creator := contentPrincipal(permissionCreate, permissionSubmit, permissionReview, permissionPublish)
+	created, err := service.CreateEntry(context.Background(), creator, testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"内容"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Submit(context.Background(), creator, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Approve(context.Background(), creator, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID})
+	assertApplicationCode(t, err, "self_review_forbidden")
+	if len(repository.events) != 1 || repository.revisions[created.ID][0].WorkflowStatus != WorkflowPendingReview {
+		t.Fatal("禁止自审时改变了状态或事件")
+	}
+	reviewer := identity.NewPrincipal("usr_2", "审核人", nil, identity.AuthMethodOIDC, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{permissionReview}}})
+	_, err = service.Reject(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RejectRevisionRequest{RevisionID: "rev_stale", Reason: "原因"})
+	assertApplicationCode(t, err, "workflow_revision_conflict")
+	_, err = service.Reject(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RejectRevisionRequest{RevisionID: created.CurrentDraftRevisionID, Reason: "  "})
+	assertApplicationCode(t, err, "validation_failed")
+	result, err := service.Reject(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RejectRevisionRequest{RevisionID: created.CurrentDraftRevisionID, Reason: "  需要修改  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.WorkflowStatus != WorkflowRejected || repository.events[len(repository.events)-1].Reason == nil || *repository.events[len(repository.events)-1].Reason != "需要修改" {
+		t.Fatal("驳回状态或理由错误")
+	}
+}
+
+func TestRevisionDerivativesProjectAndPreserveRelationOrder(t *testing.T) {
+	targetModel := "mdl_target"
+	fields := []schema.ContentField{{ID: "fld_score", Key: "score", Type: schema.FieldTypeInteger, Constraints: schema.FieldConstraints{Filterable: true}, Status: schema.StatusActive}, {ID: "fld_related", Key: "related", Type: schema.FieldTypeMultiRelation, Constraints: schema.FieldConstraints{TargetModelID: &targetModel}, Status: schema.StatusActive}}
+	revision := Revision{ID: "rev_1", EntryID: "ent_1", ModelID: "mdl_1"}
+	content, err := validateContent(json.RawMessage(`{"score":42,"related":["ent_2","ent_3"]}`), fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, relations, err := revisionDerivatives(content, revision, fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 1 || values[0].IntegerValue == nil || *values[0].IntegerValue != 42 || len(relations) != 2 || relations[1].Position != 1 {
+		t.Fatalf("派生投影或关联错误: %#v %#v", values, relations)
+	}
+}
+
+func BenchmarkProjectionPredicate(b *testing.B) {
+	field := schema.ContentField{Type: schema.FieldTypeInteger}
+	filter := PublishedFilter{Operator: "gte", Value: json.RawMessage(`42`)}
+	for b.Loop() {
+		projectionPredicate("f0", field, filter)
+	}
+}
+
+func TestPublishedQueryValidationAndCursorBinding(t *testing.T) {
+	fields := []schema.ContentField{{ID: "fld_score", Key: "score", Type: schema.FieldTypeInteger, Constraints: schema.FieldConstraints{Filterable: true, Sortable: true}, Status: schema.StatusActive}}
+	if _, err := validatePublishedQuery(fields, PublishedQuery{Filters: []PublishedFilter{{FieldKey: "score", Operator: "eq", Value: json.RawMessage(`"42"`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := projectionPredicate("f0", fields[0], PublishedFilter{Operator: "eq", Value: json.RawMessage(`"42"`)}); ok {
+		t.Fatal("整数过滤不应接受字符串")
+	}
+	query := PublishedQuery{Limit: 20, Sort: []PublishedSort{{FieldKey: "score"}}}
+	binding, _ := publishedQueryBinding("mdl_1", []string{"mdl_1"}, query)
+	value, _ := encodePublishedCursor(publishedCursor{Binding: binding, Values: []*string{pointerString("42"), pointerString("ent_1")}})
+	if _, err := decodePublishedCursor(value, binding); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := publishedQueryBinding("mdl_1", []string{"mdl_2"}, query)
+	if _, err := decodePublishedCursor(value, other); err == nil {
+		t.Fatal("游标不应跨模型授权范围复用")
+	}
+}
+
+func pointerString(value string) *string { return &value }
+
+func TestRepresentativeExplainUsesProjectionAndKeysetPlan(t *testing.T) {
+	query, args := ExplainPublishedEntries("mdl_1", "fld_score", 20)
+	if !strings.HasPrefix(query, "EXPLAIN ") || strings.Contains(query, "JSON_EXTRACT") || strings.Contains(query, " OFFSET ") || !strings.Contains(query, "content_field_values") || len(args) != 4 {
+		t.Fatalf("代表性查询计划辅助不符合投影键集查询要求: %s", query)
+	}
+}
+
+func TestCursorBindsListAndFilters(t *testing.T) {
+	binding, _ := adminEntryQueryBinding("mdl_1", AdminEntryQuery{Status: StatusDraft, Limit: 20})
+	entryCursor, err := encodeCursor(cursorEnvelope{Kind: "entries", Binding: binding, Values: []*string{pointerString("2026-07-18T00:00:00Z"), pointerString("ent_1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherBinding, _ := adminEntryQueryBinding("mdl_1", AdminEntryQuery{Status: StatusArchived, Limit: 20})
+	if _, err := decodeEntryCursor(entryCursor, otherBinding); err == nil {
 		t.Fatal("条目游标不应跨筛选条件使用")
 	}
 	revisionCursor, _ := encodeCursor(cursorEnvelope{Kind: "revisions", ModelID: "mdl_1", EntryID: "ent_1", Number: 2})
@@ -287,12 +542,173 @@ func TestCursorBindsListAndFilters(t *testing.T) {
 	}
 }
 
+func TestAdminEntryQueryValidationAndCursorBindsAllConditions(t *testing.T) {
+	target := "mdl_related"
+	fields := []schema.ContentField{
+		{ID: "fld_score", Key: "score", Type: schema.FieldTypeInteger, Constraints: schema.FieldConstraints{Filterable: true, Sortable: true}, Status: schema.StatusActive},
+		{ID: "fld_related", Key: "related", Type: schema.FieldTypeMultiRelation, Constraints: schema.FieldConstraints{TargetModelID: &target}, Status: schema.StatusActive},
+	}
+	query := AdminEntryQuery{Status: StatusDraft, WorkflowStatus: workflowStatusPointer(WorkflowPendingReview), Limit: 20, Filters: []PublishedFilter{{FieldKey: "score", Operator: "gte", Value: json.RawMessage(`42`)}}, RelationFilters: []PublishedRelationFilter{{FieldKey: "related", EntryID: "ent_target"}}, Sort: []PublishedSort{{FieldKey: "score", Descending: true}}, Expand: []string{"related"}, IncludeTotal: true}
+	if _, err := validateAdminEntryQuery(fields, query); err != nil {
+		t.Fatal(err)
+	}
+	binding, _ := adminEntryQueryBinding("mdl_1", query)
+	cursor, _ := encodeCursor(cursorEnvelope{Kind: "entries", Binding: binding, Values: []*string{pointerString("42"), pointerString("ent_1")}})
+	changed := query
+	changed.IncludeTotal = false
+	otherBinding, _ := adminEntryQueryBinding("mdl_1", changed)
+	if _, err := decodeEntryCursor(cursor, otherBinding); err == nil {
+		t.Fatal("游标不应在 include_total 变化后复用")
+	}
+	changed = query
+	changed.Expand = nil
+	otherBinding, _ = adminEntryQueryBinding("mdl_1", changed)
+	if _, err := decodeEntryCursor(cursor, otherBinding); err == nil {
+		t.Fatal("游标不应在 expand 变化后复用")
+	}
+	if _, err := validateAdminEntryQuery(fields, AdminEntryQuery{Status: StatusDraft, Limit: 20, Filters: []PublishedFilter{{FieldKey: "score", Operator: "eq", Value: json.RawMessage(`"42"`)}}}); err == nil {
+		t.Fatal("整数过滤不应接受字符串")
+	}
+	if _, err := validateAdminEntryQuery(fields, AdminEntryQuery{Status: StatusDraft, Limit: 20, Sort: []PublishedSort{{FieldKey: "related"}}}); err == nil {
+		t.Fatal("未声明 sortable 的字段不应排序")
+	}
+}
+
+func TestListEntriesRequiresViewPermissionForEveryExpandedTarget(t *testing.T) {
+	targetModelID := "mdl_target"
+	source := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{{ID: "fld_related", Key: "related", Type: schema.FieldTypeSingleRelation, Constraints: schema.FieldConstraints{TargetModelID: &targetModelID}, Status: schema.StatusActive}}}
+	target := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: targetModelID, Status: schema.StatusActive}}
+	repository := newMemoryRepository()
+	service := NewService(Dependencies{Repository: repository, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": source, targetModelID: target}}})
+	principal := contentPrincipal(permissionView)
+
+	_, err := service.ListEntries(context.Background(), principal, "mdl_1", AdminEntryQuery{Status: StatusDraft, Limit: 20, Expand: []string{"related"}})
+	assertApplicationCode(t, err, "permission_denied")
+	if repository.listCalls != 0 || repository.expandCalls != 0 {
+		t.Fatalf("目标模型授权失败前不应查询或展开条目: list=%d expand=%d", repository.listCalls, repository.expandCalls)
+	}
+
+	principal = identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodOIDC, nil, []identity.ModelPermissions{
+		{ModelID: "mdl_1", Permissions: []string{permissionView}},
+		{ModelID: targetModelID, Permissions: []string{permissionView}},
+	})
+	if _, err = service.ListEntries(context.Background(), principal, "mdl_1", AdminEntryQuery{Status: StatusDraft, Limit: 20, Expand: []string{"related"}}); err != nil {
+		t.Fatal(err)
+	}
+	if repository.listCalls != 1 || repository.expandCalls != 1 {
+		t.Fatalf("授权后应正常查询并展开: list=%d expand=%d", repository.listCalls, repository.expandCalls)
+	}
+}
+
+func TestPublishedContentUsesOnlyActiveRootFields(t *testing.T) {
+	fields := []schema.ContentField{
+		{Key: "title", Status: schema.StatusActive},
+		{Key: "old", Status: schema.StatusArchived},
+		{Key: "group", Status: schema.StatusActive, Children: []schema.ContentField{{Key: "old_child", Status: schema.StatusArchived}}},
+	}
+	content, err := activeRootContent(json.RawMessage(`{"title":"可见","old":"归档","group":{"old_child":"仍保留"},"unknown":true}`), fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != `{"group":{"old_child":"仍保留"},"title":"可见"}` {
+		t.Fatalf("发布 content 未按 active 根字段裁剪: %s", content)
+	}
+}
+
+func TestExpandedEntryIsNonRecursiveAndOmitsRevisionNumber(t *testing.T) {
+	value := PublishedEntry{Expanded: map[string]any{"related": ExpandedEntry{ID: "ent_2", ModelID: "mdl_2", ModelKey: "target", RevisionID: "rev_2", Content: json.RawMessage(`{}`)}}}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err = json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	target := document["expanded"].(map[string]any)["related"].(map[string]any)
+	if _, ok := target["revision_number"]; ok {
+		t.Fatal("ExpandedEntry 不应包含 revision_number")
+	}
+	if _, ok := target["expanded"]; ok {
+		t.Fatal("ExpandedEntry 不应递归包含 expanded")
+	}
+}
+
+func TestRelationTargetsHaveStableModelEntryLockOrder(t *testing.T) {
+	values := []Relation{
+		{TargetModelID: "mdl_b", TargetEntryID: "ent_2"},
+		{TargetModelID: "mdl_a", TargetEntryID: "ent_3"},
+		{TargetModelID: "mdl_a", TargetEntryID: "ent_1"},
+		{TargetModelID: "mdl_a", TargetEntryID: "ent_1"},
+	}
+	targets := orderedRelationTargets(values)
+	got := make([]string, len(targets))
+	for i, target := range targets {
+		got[i] = target.TargetModelID + "/" + target.TargetEntryID
+	}
+	if strings.Join(got, ",") != "mdl_a/ent_1,mdl_a/ent_3,mdl_b/ent_2" {
+		t.Fatalf("关联目标锁顺序不稳定: %v", got)
+	}
+}
+
+func TestCreateLocksSourceAndRelationModelsBeforeValidatingTargets(t *testing.T) {
+	targetModelID := "mdl_target"
+	source := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{{ID: "fld_related", Key: "related", Type: schema.FieldTypeSingleRelation, Constraints: schema.FieldConstraints{TargetModelID: &targetModelID}, Status: schema.StatusActive}}}
+	target := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: targetModelID, Status: schema.StatusActive}}
+	repository, lockedIDs := newMemoryRepository(), []string{}
+	repository.entries["ent_target"] = EntrySummary{ID: "ent_target", ModelID: targetModelID, Status: StatusDraft}
+	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": source, targetModelID: target}, lockedModelIDs: &lockedIDs}, Audit: &auditRecorder{}})
+	service.newID = func(prefix string) (string, error) { return prefix + "1", nil }
+
+	if _, err := service.CreateEntry(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"related":"ent_target"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(lockedIDs, ",") != "mdl_1,mdl_target" {
+		t.Fatalf("必须先统一锁住源和目标模型，实际为 %v", lockedIDs)
+	}
+}
+
+func TestAdminEntriesSQLUsesDraftPointerProjectionRelationsAndWorkflow(t *testing.T) {
+	fields := map[string]schema.ContentField{
+		"score":   {ID: "fld_score", Key: "score", Type: schema.FieldTypeInteger},
+		"related": {ID: "fld_related", Key: "related", Type: schema.FieldTypeMultiRelation},
+	}
+	query := AdminEntryQuery{Status: StatusDraft, WorkflowStatus: workflowStatusPointer(WorkflowRejected), Filters: []PublishedFilter{{FieldKey: "score", Operator: "gte", Value: json.RawMessage(`10`)}}, RelationFilters: []PublishedRelationFilter{{FieldKey: "related", EntryID: "ent_target"}}, Sort: []PublishedSort{{FieldKey: "score", Descending: true}}}
+	from, joinArgs, where, whereArgs, orders := adminEntriesSQL("mdl_1", query, fields)
+	joined := from + strings.Join(where, " ")
+	for _, required := range []string{"content_draft_pointers", "content_revisions rv ON rv.id=p.revision_id", "content_field_values", "content_relations", "rv.workflow_status=?"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("管理查询缺少 %s: %s", required, joined)
+		}
+	}
+	if strings.Contains(joined, "JSON_EXTRACT") || len(joinArgs) != 4 || len(whereArgs) != 4 || len(orders) != 2 || orders[1].Expression != "e.id" || !orders[1].Descending {
+		t.Fatalf("管理查询参数或稳定排序错误: %#v %#v %#v", joinArgs, whereArgs, orders)
+	}
+}
+
+func TestIncludeTotalCapsAtTenThousandAsEstimate(t *testing.T) {
+	repository := newMemoryRepository()
+	for i := 0; i < 10001; i++ {
+		id := fmt.Sprintf("ent_%05d", i)
+		repository.entries[id] = EntrySummary{ID: id, ModelID: "mdl_1", Status: StatusDraft}
+	}
+	total, estimate, err := repository.CountEntries(context.Background(), nil, "mdl_1", AdminEntryQuery{Status: StatusDraft}, nil)
+	if err != nil || total != 10000 || !estimate {
+		t.Fatalf("计数上限错误: total=%d estimate=%v err=%v", total, estimate, err)
+	}
+}
+
+func workflowStatusPointer(value WorkflowStatus) *WorkflowStatus { return &value }
+
 func testService() (*Service, *memoryRepository, *directTx, *auditRecorder) {
 	repository, tx, audits := newMemoryRepository(), &directTx{}, &auditRecorder{}
 	model := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{{ID: "fld_title", Key: "title", Type: schema.FieldTypeSingleLineText, Required: true, DefaultValue: json.RawMessage("null"), Status: schema.StatusActive}}}
 	service := NewService(Dependencies{Repository: repository, Transactor: tx, ModelRepository: memoryModels{model: model}, Audit: audits})
-	ids := []string{"ent_1", "rev_1", "evt_1", "rev_2", "evt_2", "evt_3"}
-	service.newID = func(string) (string, error) { id := ids[0]; ids = ids[1:]; return id, nil }
+	counters := map[string]int{}
+	service.newID = func(prefix string) (string, error) {
+		counters[prefix]++
+		return fmt.Sprintf("%s%d", prefix, counters[prefix]), nil
+	}
 	service.now = func() time.Time { return time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC) }
 	return service, repository, tx, audits
 }

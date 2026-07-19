@@ -72,4 +72,42 @@ describe('API Client', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/v1/models/mdl%2Fa/entries/ent%2Fb')
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ base_revision_id: 'rev_1', content: { title: '草稿' } }) }))
   })
+
+  it('工作流动作显式携带目标 Revision 和驳回理由', async () => {
+    authStore.setSession(session)
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ id: 'ent_1' })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.submitEntry('mdl/a', 'ent/b', 'rev_2')
+    await api.approveEntry('mdl/a', 'ent/b', 'rev_2')
+    await api.rejectEntry('mdl/a', 'ent/b', 'rev_2', '信息来源不足')
+    await api.unpublishEntry('mdl/a', 'ent/b', 'rev_2')
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/admin/v1/models/mdl%2Fa/entries/ent%2Fb/submit',
+      '/api/admin/v1/models/mdl%2Fa/entries/ent%2Fb/approve',
+      '/api/admin/v1/models/mdl%2Fa/entries/ent%2Fb/reject',
+      '/api/admin/v1/models/mdl%2Fa/entries/ent%2Fb/unpublish',
+    ])
+    expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ method: 'POST', body: JSON.stringify({ revision_id: 'rev_2', reason: '信息来源不足' }) }))
+  })
+
+  it('内容列表按 F2 编码过滤排序参数', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ items: [], next_cursor: null })))
+    await api.listEntries('mdl_1', { workflow_status: 'pending_review', filter: '{"title":{"eq":"公告"}}', relation_filter: '{"author":{"contains":"ent_1"}}', sort: '-title', include_total: true })
+    expect(fetch).toHaveBeenCalledWith('/api/admin/v1/models/mdl_1/entries?workflow_status=pending_review&filter=%7B%22title%22%3A%7B%22eq%22%3A%22%E5%85%AC%E5%91%8A%22%7D%7D&relation_filter=%7B%22author%22%3A%7B%22contains%22%3A%22ent_1%22%7D%7D&sort=-title&include_total=true', expect.any(Object))
+  })
+
+  it('创建和轮换 API Key 禁止客户端缓存完整密钥', async () => {
+    authStore.setSession(session)
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(Response.json({ key: 'cmsk_secret' }, { status: 201 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.createAPIKey({ name: '官网', model_ids: ['mdl_1'], expires_at: null })
+    await api.rotateAPIKey('key/a')
+
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({ method: 'POST', cache: 'no-store', body: JSON.stringify({ name: '官网', model_ids: ['mdl_1'], expires_at: null }) }))
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/v1/api-keys/key%2Fa/rotate')
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'POST', cache: 'no-store', body: '{}' }))
+  })
 })

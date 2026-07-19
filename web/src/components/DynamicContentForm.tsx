@@ -4,7 +4,7 @@ import { useState } from 'react'
 
 import type { ContentField } from '../api/types'
 
-const unsupported = new Set(['single_media', 'multi_media', 'single_relation', 'multi_relation'])
+const unsupported = new Set(['single_media', 'multi_media'])
 
 function JsonEditor({ value, onChange, label }: { value: unknown; onChange: (value: unknown) => void; label: string }) {
   const serialized = value == null ? '' : JSON.stringify(value, null, 2)
@@ -21,7 +21,11 @@ export function DynamicContentForm({ fields, content, onChange, disabled = false
     const value = content[field.key]
     let control
     if (unsupported.has(field.type)) {
-      control = <Alert type="warning" showIcon title="本阶段不可编辑" description="媒体与关联字段需等待对应能力冻结和后端实现，仅允许留空。" />
+      control = <Alert type="warning" showIcon title="媒体字段不可编辑" description="本阶段不提供媒体选择能力，已有值会原样保留。" />
+    } else if (field.type === 'single_relation') {
+      control = <Input value={typeof value === 'string' ? value : ''} onChange={(event) => update(field.key, event.target.value || null)} placeholder={`目标条目 ID · ${field.constraints.target_model_id ?? '未配置模型'}`} disabled={disabled} />
+    } else if (field.type === 'multi_relation') {
+      control = <Select mode="tags" value={Array.isArray(value) ? value as string[] : []} onChange={(next) => update(field.key, next)} placeholder={`目标条目 ID，最多 50 项 · ${field.constraints.target_model_id ?? '未配置模型'}`} maxCount={50} tokenSeparators={[',', ' ']} disabled={disabled} />
     } else if (field.type === 'single_line_text') control = <Input value={typeof value === 'string' ? value : ''} onChange={(e) => update(field.key, e.target.value)} disabled={disabled} />
     else if (field.type === 'multi_line_text') control = <Input.TextArea rows={4} value={typeof value === 'string' ? value : ''} onChange={(e) => update(field.key, e.target.value)} disabled={disabled} />
     else if (field.type === 'integer') control = <InputNumber precision={0} value={typeof value === 'number' ? value : null} onChange={(next) => update(field.key, next)} disabled={disabled} />

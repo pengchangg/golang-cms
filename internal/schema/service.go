@@ -291,6 +291,19 @@ func (s *Service) UpdateField(ctx context.Context, principal identity.Principal,
 					return conflict("field_type_locked", "模型已有内容，字段类型不可修改")
 				}
 			}
+			projectionEnabled := !field.Constraints.Unique && input.Constraints.Unique || !field.Constraints.Filterable && input.Constraints.Filterable || !field.Constraints.Sortable && input.Constraints.Sortable
+			if projectionEnabled {
+				if s.content == nil {
+					return fmt.Errorf("ContentExistenceChecker 未装配")
+				}
+				exists, err := s.content.HasAnyContent(ctx, modelID)
+				if err != nil {
+					return err
+				}
+				if exists {
+					return conflict("field_projection_backfill_required", "模型已有内容，启用查询能力需要受控回填")
+				}
+			}
 			now := s.now()
 			field.DisplayName = input.DisplayName
 			field.Description = input.Description

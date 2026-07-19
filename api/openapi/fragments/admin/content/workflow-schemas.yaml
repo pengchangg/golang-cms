@@ -1,0 +1,92 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/content/workflow-schemas.yaml
+x-integration-status: integrated
+$defs:
+  WorkflowStatus:
+    type: string
+    enum: [draft, pending_review, rejected, published, unpublished]
+  RevisionConditionRequest:
+    type: object
+    additionalProperties: false
+    required: [revision_id]
+    properties:
+      revision_id: { type: string, minLength: 1 }
+  RejectRevisionRequest:
+    type: object
+    additionalProperties: false
+    required: [revision_id, reason]
+    properties:
+      revision_id: { type: string, minLength: 1 }
+      reason: { type: string, minLength: 1, maxLength: 1000 }
+  WorkflowEventType:
+    type: string
+    enum: [submitted, approved, rejected, unpublished]
+  WorkflowEvent:
+    type: object
+    additionalProperties: false
+    required:
+      [id, entry_id, revision_id, type, from_status, to_status, actor_id, reason, occurred_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      entry_id: { type: string, minLength: 1 }
+      revision_id: { type: string, minLength: 1 }
+      type:
+        $ref: "#/$defs/WorkflowEventType"
+      from_status:
+        $ref: "#/$defs/WorkflowStatus"
+      to_status:
+        $ref: "#/$defs/WorkflowStatus"
+      actor_id: { type: string, minLength: 1 }
+      reason: { type: [string, "null"], minLength: 1, maxLength: 1000 }
+      occurred_at: { type: string, format: date-time }
+  WorkflowRevision:
+    type: object
+    additionalProperties: false
+    required:
+      [id, entry_id, model_id, number, content, created_by, created_at, workflow_status, submitted_by, submitted_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      entry_id: { type: string, minLength: 1 }
+      model_id: { type: string, minLength: 1 }
+      number: { type: integer, minimum: 1 }
+      content:
+        $ref: ./schemas.yaml#/$defs/DynamicContent
+      created_by: { type: string, minLength: 1 }
+      created_at: { type: string, format: date-time }
+      workflow_status:
+        $ref: "#/$defs/WorkflowStatus"
+      submitted_by: { type: [string, "null"], minLength: 1 }
+      submitted_at: { type: [string, "null"], format: date-time }
+  WorkflowEntry:
+    type: object
+    additionalProperties: false
+    required:
+      [id, model_id, status, current_draft_revision_id, current_draft_revision, workflow_status, current_published_revision_id, current_published_revision, created_by, created_at, updated_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      model_id: { type: string, minLength: 1 }
+      status:
+        $ref: ./schemas.yaml#/$defs/EntryStatus
+      current_draft_revision_id: { type: string, minLength: 1 }
+      current_draft_revision:
+        $ref: "#/$defs/WorkflowRevision"
+      workflow_status:
+        $ref: "#/$defs/WorkflowStatus"
+      current_published_revision_id: { type: [string, "null"], minLength: 1 }
+      current_published_revision:
+        oneOf:
+          - $ref: "#/$defs/WorkflowRevision"
+          - type: "null"
+      created_by: { type: string, minLength: 1 }
+      created_at: { type: string, format: date-time }
+      updated_at: { type: string, format: date-time }
+  WorkflowEventListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/WorkflowEvent"
+      next_cursor: { type: [string, "null"], minLength: 1 }

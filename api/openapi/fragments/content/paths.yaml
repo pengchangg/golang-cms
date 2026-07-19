@@ -1,0 +1,154 @@
+x-integration-status: integrated
+/models:
+  get:
+    x-integration-status: integrated
+    operationId: listPublishedContentModels
+    summary: 列出 API Key 范围内的 active 模型
+    parameters:
+      - &authorization
+        name: Authorization
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: "^Bearer cmsk_[a-z2-7]{12}_[A-Za-z0-9_-]{43}$"
+      - &ifNoneMatch
+        name: If-None-Match
+        in: header
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 只返回 Key 授权且 active 的模型，按 key ASC、id ASC。
+        headers: &cacheHeaders
+          ETag:
+            required: true
+            schema: { type: string, minLength: 1 }
+          Cache-Control:
+            required: true
+            schema: { const: "private, no-cache" }
+          X-Request-ID:
+            required: true
+            schema: { type: string, minLength: 1 }
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/PublishedModelListResponse
+      "304": &notModified
+        description: If-None-Match 与当前授权响应的 ETag 匹配，无响应体。
+        headers: *cacheHeaders
+      "401": &unauthenticated
+        description: 缺少、无效、过期或已撤销的 API Key。
+        content:
+          application/json:
+            schema:
+              $ref: ../shared/error.yaml#/$defs/ErrorResponse
+/models/{model_key}:
+  parameters: &modelKey
+    - name: model_key
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+  get:
+    x-integration-status: integrated
+    operationId: getPublishedContentModel
+    summary: 获取授权模型及 active 字段
+    parameters: [*authorization, *ifNoneMatch]
+    responses:
+      "200":
+        description: 模型详情，不包含归档字段。
+        headers: *cacheHeaders
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/PublishedModel
+      "304": *notModified
+      "401": *unauthenticated
+      "404": &modelNotFound
+        description: 模型不存在、已归档或不在 API Key 范围，error.code 为 published_model_not_found。
+        content:
+          application/json:
+            schema:
+              $ref: ../shared/error.yaml#/$defs/ErrorResponse
+/models/{model_key}/entries:
+  parameters: *modelKey
+  get:
+    x-integration-status: integrated
+    operationId: listPublishedContentEntries
+    summary: 查询当前已发布内容
+    parameters:
+      - *authorization
+      - *ifNoneMatch
+      - &limit
+        name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - &cursor
+        name: cursor
+        in: query
+        schema: { type: string, minLength: 1 }
+      - name: filter
+        in: query
+        schema: { type: string, minLength: 2 }
+        description: URL 编码 JSON object，最多 5 个 filterable 标量字段。
+      - name: relation_filter
+        in: query
+        schema: { type: string, minLength: 2 }
+        description: URL 编码 JSON object，最多 2 个根级关联字段，每项使用 contains。
+      - name: sort
+        in: query
+        schema: { type: string, minLength: 1 }
+        description: 最多 3 个 sortable 字段，逗号分隔，减号前缀表示降序。
+      - &expand
+        name: expand
+        in: query
+        schema: { type: string, minLength: 1 }
+        description: 最多 3 个根级关联字段，逗号分隔，只展开一层。
+    responses:
+      "200":
+        description: 只从当前发布指针读取；默认按 published_at DESC、id DESC。
+        headers: *cacheHeaders
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/PublishedEntryListResponse
+      "304": *notModified
+      "400": &invalidQuery
+        description: 查询或游标不合法，error.code 为 invalid_query 或 invalid_cursor。
+        content:
+          application/json:
+            schema:
+              $ref: ../shared/error.yaml#/$defs/ErrorResponse
+      "401": *unauthenticated
+      "404": *modelNotFound
+/models/{model_key}/entries/{entry_id}:
+  parameters:
+    - name: model_key
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+    - name: entry_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    x-integration-status: integrated
+    operationId: getPublishedContentEntry
+    summary: 获取一个当前已发布内容条目
+    parameters: [*authorization, *ifNoneMatch, *expand]
+    responses:
+      "200":
+        description: 只返回当前发布 Revision。
+        headers: *cacheHeaders
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/PublishedEntry
+      "304": *notModified
+      "400": *invalidQuery
+      "401": *unauthenticated
+      "404":
+        description: 模型不可见时为 published_model_not_found；条目未发布或不存在时为 published_content_not_found。
+        content:
+          application/json:
+            schema:
+              $ref: ../shared/error.yaml#/$defs/ErrorResponse

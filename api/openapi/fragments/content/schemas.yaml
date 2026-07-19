@@ -1,0 +1,156 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/content/schemas.yaml
+x-integration-status: integrated
+$defs:
+  FieldType:
+    type: string
+    enum:
+      - single_line_text
+      - multi_line_text
+      - rich_text
+      - integer
+      - decimal
+      - boolean
+      - date
+      - datetime
+      - single_select
+      - multi_select
+      - json
+      - single_media
+      - multi_media
+      - single_relation
+      - multi_relation
+      - object
+      - repeatable_group
+  EnumOption:
+    type: object
+    additionalProperties: false
+    required: [value, label]
+    properties:
+      value: { type: string, minLength: 1, maxLength: 120 }
+      label: { type: string, minLength: 1, maxLength: 120 }
+  PublishedFieldConstraints:
+    type: object
+    additionalProperties: false
+    required: [unique, filterable, sortable]
+    properties:
+      min_length: { type: integer, minimum: 0 }
+      max_length: { type: integer, minimum: 0 }
+      minimum: { type: string, pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$' }
+      maximum: { type: string, pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$' }
+      enum_options:
+        type: array
+        items:
+          $ref: "#/$defs/EnumOption"
+      target_model_key:
+        type: string
+        pattern: "^[a-z][a-z0-9_]{0,63}$"
+      unique: { type: boolean }
+      filterable: { type: boolean }
+      sortable: { type: boolean }
+  PublishedField:
+    type: object
+    additionalProperties: false
+    required: [id, key, display_name, description, type, required, constraints, children]
+    properties:
+      id: { type: string, minLength: 1 }
+      key: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+      type:
+        $ref: "#/$defs/FieldType"
+      required: { type: boolean }
+      constraints:
+        $ref: "#/$defs/PublishedFieldConstraints"
+      children:
+        type: array
+        items:
+          $ref: "#/$defs/PublishedField"
+  PublishedModelSummary:
+    type: object
+    additionalProperties: false
+    required: [id, key, display_name, description, updated_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      key: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+      updated_at: { type: string, format: date-time }
+  PublishedModel:
+    type: object
+    additionalProperties: false
+    required: [id, key, display_name, description, updated_at, fields]
+    properties:
+      id: { type: string, minLength: 1 }
+      key: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+      updated_at: { type: string, format: date-time }
+      fields:
+        type: array
+        items:
+          $ref: "#/$defs/PublishedField"
+  PublishedModelListResponse:
+    type: object
+    additionalProperties: false
+    required: [items]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/PublishedModelSummary"
+  DynamicContent:
+    type: object
+    description: 以 active 模型根字段 key 为属性名，值遵循 F1/F2 字段编码。
+  ExpandedEntry:
+    type: object
+    additionalProperties: false
+    required: [id, model_id, model_key, revision_id, content, published_at, updated_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      model_id: { type: string, minLength: 1 }
+      model_key: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+      revision_id: { type: string, minLength: 1 }
+      content:
+        $ref: "#/$defs/DynamicContent"
+      published_at: { type: string, format: date-time }
+      updated_at: { type: string, format: date-time }
+  ExpandedRelations:
+    type: object
+    additionalProperties:
+      oneOf:
+        - $ref: "#/$defs/ExpandedEntry"
+        - type: array
+          items:
+            $ref: "#/$defs/ExpandedEntry"
+    description: 只含请求展开且当前可见的根级关联字段；不会递归包含 expanded。
+  PublishedEntry:
+    type: object
+    additionalProperties: false
+    required:
+      [id, model_id, model_key, revision_id, revision_number, content, expanded, published_at, updated_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      model_id: { type: string, minLength: 1 }
+      model_key: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+      revision_id: { type: string, minLength: 1 }
+      revision_number: { type: integer, minimum: 1 }
+      content:
+        $ref: "#/$defs/DynamicContent"
+      expanded:
+        $ref: "#/$defs/ExpandedRelations"
+      published_at: { type: string, format: date-time }
+      updated_at:
+        type: string
+        format: date-time
+        description: 当前发布 Revision 的创建时间，不受未发布草稿影响。
+  PublishedEntryListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/PublishedEntry"
+      next_cursor: { type: [string, "null"], minLength: 1 }

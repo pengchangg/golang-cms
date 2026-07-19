@@ -1,0 +1,144 @@
+x-integration-status: integrated
+/models/{model_id}/entries/{entry_id}/submit:
+  parameters: &entryId
+    - name: model_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    - name: entry_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  post: &revisionAction
+    x-integration-status: integrated
+    operationId: submitAdminContentRevision
+    summary: 提交当前草稿 Revision 审核
+    parameters: &writeHeaders
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+      - name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./workflow-schemas.yaml#/$defs/RevisionConditionRequest
+    responses: &actionResponses
+      "200":
+        description: 工作流转换和指针变更已原子提交。
+        content:
+          application/json:
+            schema:
+              $ref: ./workflow-schemas.yaml#/$defs/WorkflowEntry
+      "400": &badRequest
+        description: 请求体校验失败，error.code 为 validation_failed。
+        content:
+          application/json:
+            schema:
+              $ref: ../identity/schemas.yaml#/$defs/ValidationErrorResponse
+      "401": &unauthenticated
+        description: 管理会话无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": &forbidden
+        description: 缺少目标模型的动作权限。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "404": &notFound
+        description: 模型、条目或 Revision 不存在。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "409": &workflowConflict
+        description: 指针冲突、非法转换或禁止自审。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/models/{model_id}/entries/{entry_id}/approve:
+  parameters: *entryId
+  post:
+    x-integration-status: integrated
+    operationId: approveAdminContentRevision
+    summary: 审核并发布待审核 Revision
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./workflow-schemas.yaml#/$defs/RevisionConditionRequest
+    responses: *actionResponses
+/models/{model_id}/entries/{entry_id}/reject:
+  parameters: *entryId
+  post:
+    x-integration-status: integrated
+    operationId: rejectAdminContentRevision
+    summary: 驳回待审核 Revision
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./workflow-schemas.yaml#/$defs/RejectRevisionRequest
+    responses: *actionResponses
+/models/{model_id}/entries/{entry_id}/unpublish:
+  parameters: *entryId
+  post:
+    x-integration-status: integrated
+    operationId: unpublishAdminContentRevision
+    summary: 下线当前发布 Revision
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./workflow-schemas.yaml#/$defs/RevisionConditionRequest
+    responses: *actionResponses
+/models/{model_id}/entries/{entry_id}/workflow-events:
+  parameters: *entryId
+  get:
+    x-integration-status: integrated
+    operationId: listAdminContentWorkflowEvents
+    summary: 列出不可变工作流事件
+    parameters:
+      - *sessionCookie
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 按 occurred_at DESC、id DESC 返回工作流事件。
+        content:
+          application/json:
+            schema:
+              $ref: ./workflow-schemas.yaml#/$defs/WorkflowEventListResponse
+      "400":
+        description: 游标无效，error.code 为 invalid_cursor。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound

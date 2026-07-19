@@ -1,8 +1,9 @@
 import { authStore } from '../auth/store'
 import type {
-  AuditEvent, ContentEntry, ContentEntrySummary, ContentField, ContentFieldInput,
-  ContentModel, ContentModelSummary, CursorResponse, ErrorResponse, ModelPermission,
-  Role, SessionResponse, SystemPermission, User, UserStatus, UserSummary,
+  APIKey, APIKeySecret, APIKeyStatus, AuditEvent, ContentEntry, ContentField, ContentFieldInput,
+  ContentModel, ContentModelSummary, CreateAPIKeyRequest, CursorResponse, EntryListQuery,
+  EntryListResponse, ErrorResponse, ModelPermission, Role, RotateAPIKeyRequest, SessionResponse,
+  SystemPermission, User, UserStatus, UserSummary, WorkflowEvent,
 } from './types'
 
 const API_BASE = '/api/admin/v1'
@@ -86,7 +87,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>
 }
 
-function queryString(values: Record<string, string | number | undefined | null>) {
+function queryString(values: Record<string, string | number | boolean | undefined | null>) {
   const query = new URLSearchParams()
   Object.entries(values).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') query.set(key, String(value))
@@ -120,10 +121,19 @@ export const api = {
   getModel: (id: string) => request<ContentModel>(`/models/${encodeURIComponent(id)}`),
   createModel: (body: { key: string; display_name: string; description?: string }) => request<ContentModel>('/models', json('POST', body)),
   createField: (modelId: string, body: ContentFieldInput) => request<ContentField>(`/models/${encodeURIComponent(modelId)}/fields`, json('POST', body)),
-  listEntries: (modelId: string, status = 'draft', cursor?: string) => request<CursorResponse<ContentEntrySummary>>(`/models/${encodeURIComponent(modelId)}/entries${queryString({ status, cursor })}`),
+  listEntries: (modelId: string, query: EntryListQuery = {}) => request<EntryListResponse>(`/models/${encodeURIComponent(modelId)}/entries${queryString({ ...query })}`),
   getEntry: (modelId: string, entryId: string) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}`),
   createEntry: (modelId: string, content: Record<string, unknown>) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries`, json('POST', { content })),
   updateEntry: (modelId: string, entryId: string, base_revision_id: string, content: Record<string, unknown>) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}`, json('PATCH', { base_revision_id, content })),
+  submitEntry: (modelId: string, entryId: string, revision_id: string) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}/submit`, json('POST', { revision_id })),
+  approveEntry: (modelId: string, entryId: string, revision_id: string) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}/approve`, json('POST', { revision_id })),
+  rejectEntry: (modelId: string, entryId: string, revision_id: string, reason: string) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}/reject`, json('POST', { revision_id, reason })),
+  unpublishEntry: (modelId: string, entryId: string, revision_id: string) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}/unpublish`, json('POST', { revision_id })),
+  listWorkflowEvents: (modelId: string, entryId: string, cursor?: string) => request<CursorResponse<WorkflowEvent>>(`/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}/workflow-events${queryString({ cursor })}`),
+  listAPIKeys: (status?: APIKeyStatus, cursor?: string) => request<CursorResponse<APIKey>>(`/api-keys${queryString({ status, cursor })}`),
+  createAPIKey: (body: CreateAPIKeyRequest) => request<APIKeySecret>('/api-keys', { ...json('POST', body), cache: 'no-store' }),
+  revokeAPIKey: (id: string) => request<void>(`/api-keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  rotateAPIKey: (id: string, body: RotateAPIKeyRequest = {}) => request<APIKeySecret>(`/api-keys/${encodeURIComponent(id)}/rotate`, { ...json('POST', body), cache: 'no-store' }),
   listAuditEvents: (filters: Record<string, string | undefined>) => request<CursorResponse<AuditEvent>>(`/audit/events${queryString(filters)}`),
 }
 

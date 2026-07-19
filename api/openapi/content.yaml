@@ -8,8 +8,23 @@ info:
     identifier: LicenseRef-Proprietary
 servers:
   - url: /api/content/v1
-paths: {}
+security:
+  - APIKey: []
+paths:
+  /models:
+    $ref: ./fragments/content/paths.yaml#/~1models
+  /models/{model_key}:
+    $ref: ./fragments/content/paths.yaml#/~1models~1{model_key}
+  /models/{model_key}/entries:
+    $ref: ./fragments/content/paths.yaml#/~1models~1{model_key}~1entries
+  /models/{model_key}/entries/{entry_id}:
+    $ref: ./fragments/content/paths.yaml#/~1models~1{model_key}~1entries~1{entry_id}
 components:
+  securitySchemes:
+    APIKey:
+      type: http
+      scheme: bearer
+      bearerFormat: cmsk
   schemas:
     ErrorResponse:
       $ref: ./fragments/shared/error.yaml#/$defs/ErrorResponse
