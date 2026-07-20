@@ -1,5 +1,7 @@
 FROM hub-docker-mirrors.laiyouxi.com/library/node:24.18.0-alpine AS web-build
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG VITE_ASSETS_ENABLED=true
+ENV VITE_ASSETS_ENABLED=${VITE_ASSETS_ENABLED}
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm config set registry "${NPM_REGISTRY}" && npm ci

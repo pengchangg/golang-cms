@@ -1,13 +1,20 @@
 import { authStore } from '../auth/store'
 import type {
-  APIKey, APIKeySecret, APIKeyStatus, AuditEvent, ContentEntry, ContentField, ContentFieldInput,
+  APIKey, APIKeySecret, APIKeyStatus, Asset, AssetStatus, AssetUpload, AuditEvent, ContentEntry, ContentField, ContentFieldInput,
   ContentModel, ContentModelSummary, CreateAPIKeyRequest, CursorResponse, EntryListQuery,
-  EntryListResponse, ErrorResponse, ModelPermission, Role, RotateAPIKeyRequest, SessionResponse,
-  SystemPermission, User, UserStatus, UserSummary, WorkflowEvent,
+  EntryListResponse, ErrorResponse, ImportUpload, Job, JobStatus, JobType, ModelPermission, Role, RotateAPIKeyRequest, SessionResponse,
+  SystemPermission, TransferErrorListResponse, User, UserStatus, UserSummary, WorkflowEvent, CreateAssetUploadRequest, CreateExportRequest,
 } from './types'
 
 const API_BASE = '/api/admin/v1'
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+const BACKEND_SAFE_ASSET_MAX_BYTES = 100 * 1024 * 1024
+const configuredAssetMaxBytes = Number(import.meta.env.VITE_ASSET_MAX_BYTES)
+
+export const ASSET_MAX_BYTES = Number.isFinite(configuredAssetMaxBytes) && configuredAssetMaxBytes > 0
+  ? Math.min(Math.floor(configuredAssetMaxBytes), BACKEND_SAFE_ASSET_MAX_BYTES)
+  : BACKEND_SAFE_ASSET_MAX_BYTES
+export const ASSET_MAX_LABEL = `${ASSET_MAX_BYTES / 1024 / 1024} MiB`
 
 export class ApiError extends Error {
   readonly status: number
@@ -100,6 +107,10 @@ function json(method: string, body: unknown): RequestInit {
   return { method, body: JSON.stringify(body) }
 }
 
+function idempotencyKey() {
+  return crypto.randomUUID().replaceAll('-', '')
+}
+
 export const api = {
   getSession: () => request<SessionResponse>('/auth/session'),
   localLogin: (username: string, password: string) =>
@@ -135,6 +146,38 @@ export const api = {
   revokeAPIKey: (id: string) => request<void>(`/api-keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   rotateAPIKey: (id: string, body: RotateAPIKeyRequest = {}) => request<APIKeySecret>(`/api-keys/${encodeURIComponent(id)}/rotate`, { ...json('POST', body), cache: 'no-store' }),
   listAuditEvents: (filters: Record<string, string | undefined>) => request<CursorResponse<AuditEvent>>(`/audit/events${queryString(filters)}`),
+  listAssets: (filters: { status?: AssetStatus; mime_type?: string; limit?: number; cursor?: string } = {}) => request<CursorResponse<Asset>>(`/assets${queryString(filters)}`),
+  getAsset: (id: string) => request<Asset>(`/assets/${encodeURIComponent(id)}`),
+  createAssetUpload: (body: CreateAssetUploadRequest) => request<AssetUpload>('/assets/uploads', { ...json('POST', body), cache: 'no-store' }),
+  confirmAssetUpload: (id: string) => request<Asset>(`/assets/${encodeURIComponent(id)}/confirm`, json('POST', {})),
+  updateAsset: (id: string, filename: string) => request<Asset>(`/assets/${encodeURIComponent(id)}`, json('PATCH', { filename })),
+  archiveAsset: (id: string) => request<void>(`/assets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  createImportUpload: (modelId: string, body: { filename: string; size: number; sha256: string }) => request<ImportUpload>(`/models/${encodeURIComponent(modelId)}/imports/uploads`, { ...json('POST', body), cache: 'no-store' }),
+  createImport: (modelId: string, upload_id: string) => request<Job>(`/models/${encodeURIComponent(modelId)}/imports`, { ...json('POST', { upload_id }), headers: { 'Idempotency-Key': idempotencyKey() } }),
+  createExport: (modelId: string, body: CreateExportRequest) => request<Job>(`/models/${encodeURIComponent(modelId)}/exports`, { ...json('POST', body), headers: { 'Idempotency-Key': idempotencyKey() } }),
+  listJobs: (filters: { type?: JobType; status?: JobStatus; model_id?: string; limit?: number; cursor?: string } = {}) => request<CursorResponse<Job>>(`/jobs${queryString(filters)}`),
+  getJob: (id: string) => request<Job>(`/jobs/${encodeURIComponent(id)}`),
+  cancelJob: (id: string) => request<Job>(`/jobs/${encodeURIComponent(id)}/cancel`, json('POST', {})),
+  retryJob: (id: string) => request<Job>(`/jobs/${encodeURIComponent(id)}/retry`, json('POST', {})),
+  listJobErrors: (id: string, cursor?: string) => request<TransferErrorListResponse>(`/jobs/${encodeURIComponent(id)}/errors${queryString({ cursor })}`),
+}
+
+export async function putSignedUpload(upload: { method: 'PUT'; url: string; headers: Record<string, string> }, file: Blob) {
+  const response = await fetch(upload.url, { method: upload.method, headers: upload.headers, body: file })
+  if (!response.ok) throw new Error(`对象存储上传失败（${response.status}）`)
+}
+
+export async function hashUploadFile(file: File) {
+  if (file.size > ASSET_MAX_BYTES) {
+    throw new Error(`文件“${file.name}”超过 ${ASSET_MAX_LABEL} 上限，已拒绝读取。浏览器 SHA-256 不支持流式计算，请选择更小的文件。`)
+  }
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+export function adminDownloadUrl(path: string) {
+  if (!path.startsWith('/') || path.startsWith('//')) throw new TypeError('下载路径必须是同源绝对路径')
+  return `${API_BASE}${path}`
 }
 
 export function safeReturnTo(value: unknown) {

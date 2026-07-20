@@ -21,9 +21,18 @@ describe('动态内容表单', () => {
     expect(screen.getByLabelText('rich_text JSON')).toHaveValue('{\n  "type": "doc"\n}')
   })
 
-  it.each(['single_media', 'multi_media'] as const)('%s 显示不可编辑提示', (type) => {
-    render(<DynamicContentForm fields={[field(type)]} content={{}} onChange={vi.fn()} />)
-    expect(screen.getByText('媒体字段不可编辑')).toBeVisible()
+  it('单媒体提供素材选择器并保留现有素材 ID', () => {
+    render(<DynamicContentForm fields={[field('single_media')]} content={{ single_media: 'ast_cover' }} onChange={vi.fn()} />)
+    expect(screen.getByRole('button', { name: '更换素材' })).toBeVisible()
+    expect(screen.getByText('ast_cover')).toBeVisible()
+  })
+
+  it('多媒体按首次出现顺序去重并限制为 50 项', () => {
+    const ids = Array.from({ length: 52 }, (_, index) => `ast_${index}`)
+    render(<DynamicContentForm fields={[field('multi_media')]} content={{ multi_media: ['ast_0', 'ast_0', ...ids.slice(1)] }} onChange={vi.fn()} />)
+    expect(screen.getByText('已选 50 / 50')).toBeVisible()
+    expect(screen.getByText('1.')).toBeVisible()
+    expect(screen.queryByText('ast_50')).not.toBeInTheDocument()
   })
 
   it('允许编辑单关联条目 ID', () => {

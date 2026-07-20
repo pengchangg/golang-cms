@@ -1,0 +1,20 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/content/assets/schemas.yaml
+x-integration-status: integrated
+$defs:
+  AssetID:
+    type: string
+    minLength: 1
+    description: 内容媒体值中的不透明素材 ID；客户端通过素材路由下载。
+  SingleMediaValue:
+    description: single_media 字段值；缺省或 null 表示无素材。
+    oneOf:
+      - $ref: "#/$defs/AssetID"
+      - type: "null"
+  MultiMediaValue:
+    type: array
+    description: multi_media 字段值；顺序有意义，不允许重复，最多 50 项。
+    maxItems: 50
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/AssetID"

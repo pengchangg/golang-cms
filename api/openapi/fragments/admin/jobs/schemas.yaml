@@ -1,0 +1,62 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/jobs/schemas.yaml
+x-integration-status: integrated
+$defs:
+  JobType:
+    type: string
+    enum: [csv_import, csv_export]
+  JobStatus:
+    type: string
+    enum: [queued, running, succeeded, failed, canceled]
+  Job:
+    type: object
+    additionalProperties: false
+    required: [id, type, status, model_id, progress, attempt, max_attempts, cancel_requested_at, error_code, error_message, created_by, created_at, started_at, finished_at, expires_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      type:
+        $ref: "#/$defs/JobType"
+      status:
+        $ref: "#/$defs/JobStatus"
+      model_id: { type: string, minLength: 1 }
+      progress: { type: integer, minimum: 0, maximum: 100 }
+      attempt: { type: integer, minimum: 0, maximum: 3 }
+      max_attempts: { const: 3 }
+      cancel_requested_at: { type: [string, "null"], format: date-time }
+      error_code: { type: [string, "null"], minLength: 1 }
+      error_message: { type: [string, "null"], minLength: 1 }
+      created_by: { type: string, minLength: 1 }
+      created_at: { type: string, format: date-time }
+      started_at: { type: [string, "null"], format: date-time }
+      finished_at: { type: [string, "null"], format: date-time }
+      expires_at: { type: [string, "null"], format: date-time }
+  JobListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/Job"
+      next_cursor: { type: [string, "null"], minLength: 1 }
+  TransferError:
+    type: object
+    additionalProperties: false
+    required: [row, field, code, message]
+    properties:
+      row: { type: integer, minimum: 1 }
+      field: { type: string }
+      code: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
+      message: { type: string, minLength: 1 }
+  TransferErrorListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor, errors_truncated]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/TransferError"
+      next_cursor: { type: [string, "null"], minLength: 1 }
+      errors_truncated: { type: boolean }

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"time"
 
+	"cms/internal/platform/database"
 	"cms/internal/schema"
 )
 
@@ -99,6 +100,29 @@ type Relation struct {
 	Position                                                            int
 }
 
+// MediaReference 是内容模块交给素材模块持久化的不可变 Revision 引用。
+type MediaReference struct {
+	RevisionID  string
+	EntryID     string
+	ModelID     string
+	FieldID     string
+	AssetID     string
+	JSONPointer string
+	Position    int
+}
+
+// MediaPrechecker 支持在写入前独立预检并锁定素材。
+type MediaPrechecker interface {
+	ValidateAvailable(context.Context, database.Querier, []MediaReference) error
+}
+
+// MediaReferenceManager 由素材模块实现，内容模块只消费事务感知的窄接口。
+type MediaReferenceManager interface {
+	MediaPrechecker
+	InsertRevisionReferences(context.Context, database.Querier, []MediaReference) error
+	ValidatePublishableRevision(context.Context, database.Querier, string) error
+}
+
 type PublishedModel struct {
 	ID          string           `json:"id"`
 	Key         string           `json:"key"`
@@ -184,6 +208,12 @@ type PublishedContentReader interface {
 type CreateEntryRequest struct {
 	Content json.RawMessage `json:"content"`
 }
+
+type ImportDraft struct {
+	Content json.RawMessage
+}
+
+type DraftSource func(func(ImportDraft) error) error
 
 func (r *CreateEntryRequest) UnmarshalJSON(data []byte) error {
 	return decodeContentRequest(data, "", &r.Content)

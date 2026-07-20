@@ -13,6 +13,9 @@ if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_P1_MOCK === 'true') {
 if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_F2_MOCK === 'true') {
   await import('./mocks/f2').then(({ enableF2Mock }) => enableF2Mock())
 }
+if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_F3_MOCK === 'true') {
+  await import('./mocks/f3').then(({ enableF3Mock }) => enableF3Mock())
+}
 
 const root = document.getElementById('root')
 

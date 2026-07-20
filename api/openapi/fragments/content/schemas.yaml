@@ -101,7 +101,7 @@ $defs:
           $ref: "#/$defs/PublishedModelSummary"
   DynamicContent:
     type: object
-    description: 以 active 模型根字段 key 为属性名，值遵循 F1/F2 字段编码。
+    description: 以 active 模型根字段 key 为属性名，值遵循 F1/F2 字段编码；single_media 和 multi_media（包括嵌套字段）分别遵循根 OpenAPI components.schemas.SingleMediaValue 和 components.schemas.MultiMediaValue，其中素材 ID 遵循 components.schemas.AssetID。
   ExpandedEntry:
     type: object
     additionalProperties: false

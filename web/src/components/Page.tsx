@@ -1,5 +1,5 @@
 import { Alert, Button, Empty, Spin, Typography } from 'antd'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { RequestError } from './RequestError'
 
@@ -12,15 +12,35 @@ export function PageHeader({ eyebrow, title, description, extra }: { eyebrow: st
 // eslint-disable-next-line react-refresh/only-export-components
 export function useApiData<T>(load: () => Promise<T>, dependencies: readonly unknown[] = []) {
   const [state, setState] = useState<{ data?: T; error?: unknown; loading: boolean }>({ loading: true })
-  const [attempt, setAttempt] = useState(0)
+  const dataRef = useRef<T | undefined>(undefined)
+  const [attempt, setAttempt] = useState({ id: 0, background: false })
   useEffect(() => {
     let active = true
-    load().then((data) => active && setState({ data, loading: false }), (error) => active && setState({ error, loading: false }))
+    load().then((data) => {
+      if (!active) return
+      dataRef.current = data
+      setState({ data, loading: false })
+    }, (error) => {
+      if (!active) return
+      if (attempt.background && dataRef.current !== undefined) {
+        setState((current) => ({ ...current, loading: false }))
+        return
+      }
+      dataRef.current = undefined
+      setState({ error, loading: false })
+    })
     return () => { active = false }
     // 调用方通过依赖项明确控制重新请求。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...dependencies, attempt])
-  return { ...state, reload: () => setAttempt((value) => value + 1), setData: (data: T) => setState({ data, loading: false }) }
+  return {
+    ...state,
+    reload: (background = false) => setAttempt((value) => ({ id: value.id + 1, background })),
+    setData: (data: T) => {
+      dataRef.current = data
+      setState({ data, loading: false })
+    },
+  }
 }
 
 export function DataState({ loading, error, empty, retry, children }: { loading: boolean; error?: unknown; empty?: boolean; retry: () => void; children: ReactNode }) {
@@ -31,5 +51,5 @@ export function DataState({ loading, error, empty, retry, children }: { loading:
 }
 
 export function PendingApiNotice() {
-  return <Alert className="pending-notice" type="info" showIcon title="后端接口尚未聚合时，本页会如实显示请求错误" description="仅设置开发变量 VITE_ENABLE_P1_MOCK=true 或 VITE_ENABLE_F2_MOCK=true 时使用显式演示数据，生产环境不会伪造成功响应。" />
+  return <Alert className="pending-notice" type="info" showIcon title="后端接口尚未聚合时，本页会如实显示请求错误" description="仅设置对应的 VITE_ENABLE_*_MOCK=true 开发变量时使用显式演示数据，生产环境不会伪造成功响应。" />
 }

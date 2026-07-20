@@ -19,6 +19,8 @@ paths:
     $ref: ./fragments/content/paths.yaml#/~1models~1{model_key}~1entries
   /models/{model_key}/entries/{entry_id}:
     $ref: ./fragments/content/paths.yaml#/~1models~1{model_key}~1entries~1{entry_id}
+  /assets/{asset_id}:
+    $ref: ./fragments/content/assets/paths.yaml#/~1assets~1{asset_id}
 components:
   securitySchemes:
     APIKey:
@@ -28,3 +30,9 @@ components:
   schemas:
     ErrorResponse:
       $ref: ./fragments/shared/error.yaml#/$defs/ErrorResponse
+    AssetID:
+      $ref: ./fragments/content/assets/schemas.yaml#/$defs/AssetID
+    SingleMediaValue:
+      $ref: ./fragments/content/assets/schemas.yaml#/$defs/SingleMediaValue
+    MultiMediaValue:
+      $ref: ./fragments/content/assets/schemas.yaml#/$defs/MultiMediaValue

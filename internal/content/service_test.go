@@ -32,6 +32,20 @@ type memoryRepository struct {
 	expandCalls int
 }
 
+type mediaRecorder struct{ events *[]string }
+
+func (m mediaRecorder) ValidateAvailable(context.Context, database.Querier, []MediaReference) error {
+	*m.events = append(*m.events, "asset")
+	return nil
+}
+func (m mediaRecorder) InsertRevisionReferences(context.Context, database.Querier, []MediaReference) error {
+	*m.events = append(*m.events, "insert_asset_reference")
+	return nil
+}
+func (m mediaRecorder) ValidatePublishableRevision(context.Context, database.Querier, string) error {
+	return nil
+}
+
 func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{entries: map[string]EntrySummary{}, revisions: map[string][]Revision{}, unique: map[string]map[string]string{}, published: map[string]string{}}
 }
@@ -44,6 +58,9 @@ func (r *memoryRepository) CreateRelations(_ context.Context, _ database.Querier
 	return nil
 }
 func (r *memoryRepository) ValidateRelationTargets(_ context.Context, _ database.Querier, values []Relation) error {
+	if r.lockEvents != nil && len(values) > 0 {
+		*r.lockEvents = append(*r.lockEvents, "target")
+	}
 	for _, value := range values {
 		entry, ok := r.entries[value.TargetEntryID]
 		if !ok || entry.ModelID != value.TargetModelID || entry.Status == StatusArchived {
@@ -378,6 +395,61 @@ func TestUpdateLocksModelBeforeEntry(t *testing.T) {
 	}
 }
 
+func TestImportDraftsWritesAllRowsAndCompletionInOneTransaction(t *testing.T) {
+	service, repository, _, _ := testService()
+	principal := contentPrincipal(permissionCreate)
+	completed := false
+	err := service.ImportDrafts(context.Background(), principal, testMeta(), "mdl_1", func(yield func(ImportDraft) error) error {
+		for _, title := range []string{"第一条", "第二条"} {
+			if err := yield(ImportDraft{Content: json.RawMessage(fmt.Sprintf(`{"title":%q}`, title))}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, func(database.Querier) error { completed = true; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.entries) != 2 || !completed {
+		t.Fatalf("批量写入或完成标记缺失: entries=%d completed=%v", len(repository.entries), completed)
+	}
+}
+
+func TestImportDraftsRepeatsSourceWithoutRetainingRowBuffers(t *testing.T) {
+	service, repository, _, _ := testService()
+	passes := 0
+	source := func(yield func(ImportDraft) error) error {
+		passes++
+		buffer := make([]byte, 0, 64)
+		for _, title := range []string{"第一条", "第二条"} {
+			buffer = append(buffer[:0], fmt.Sprintf(`{"title":%q}`, title)...)
+			if err := yield(ImportDraft{Content: json.RawMessage(buffer)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := service.ImportDrafts(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", source, nil); err != nil {
+		t.Fatal(err)
+	}
+	if passes != 2 {
+		t.Fatalf("DraftSource 遍历次数=%d，期望 2", passes)
+	}
+	titles := map[string]bool{}
+	for _, revisions := range repository.revisions {
+		var value struct {
+			Title string `json:"title"`
+		}
+		if err := json.Unmarshal(revisions[0].Content, &value); err != nil {
+			t.Fatal(err)
+		}
+		titles[value.Title] = true
+	}
+	if !titles["第一条"] || !titles["第二条"] {
+		t.Fatalf("导入保留了可复用行缓冲: %v", titles)
+	}
+}
+
 func TestUniqueValueConflictAndArchiveRelease(t *testing.T) {
 	repository, tx, audits := newMemoryRepository(), &directTx{}, &auditRecorder{}
 	model := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{{ID: "fld_title", Key: "title", Type: schema.FieldTypeSingleLineText, DefaultValue: json.RawMessage("null"), Constraints: schema.FieldConstraints{Unique: true}, Status: schema.StatusActive}}}
@@ -665,6 +737,81 @@ func TestCreateLocksSourceAndRelationModelsBeforeValidatingTargets(t *testing.T)
 	}
 	if strings.Join(lockedIDs, ",") != "mdl_1,mdl_target" {
 		t.Fatalf("必须先统一锁住源和目标模型，实际为 %v", lockedIDs)
+	}
+}
+
+func TestCreateLocksRelationTargetsBeforeAssets(t *testing.T) {
+	targetModelID := "mdl_target"
+	events := []string{}
+	model := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{
+		{ID: "fld_related", Key: "related", Type: schema.FieldTypeSingleRelation, Constraints: schema.FieldConstraints{TargetModelID: &targetModelID}, Status: schema.StatusActive},
+		{ID: "fld_image", Key: "image", Type: schema.FieldTypeSingleMedia, Status: schema.StatusActive},
+	}}
+	repository := newMemoryRepository()
+	repository.lockEvents = &events
+	repository.entries["ent_target"] = EntrySummary{ID: "ent_target", ModelID: targetModelID, Status: StatusDraft}
+	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": model, targetModelID: {ContentModelSummary: schema.ContentModelSummary{ID: targetModelID, Status: schema.StatusActive}}}}, Media: mediaRecorder{events: &events}, Audit: &auditRecorder{}})
+	service.newID = func(prefix string) (string, error) { return prefix + "1", nil }
+
+	if _, err := service.CreateEntry(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"related":"ent_target","image":"ast_1"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(events, ",") != "target,asset,insert_asset_reference" {
+		t.Fatalf("锁顺序应为关系目标、素材，实际为 %v", events)
+	}
+}
+
+func TestUpdateLocksSourceEntryThenRelationTargetsThenAssets(t *testing.T) {
+	targetModelID := "mdl_target"
+	events := []string{}
+	model := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{
+		{ID: "fld_related", Key: "related", Type: schema.FieldTypeSingleRelation, Constraints: schema.FieldConstraints{TargetModelID: &targetModelID}, Status: schema.StatusActive},
+		{ID: "fld_image", Key: "image", Type: schema.FieldTypeSingleMedia, Status: schema.StatusActive},
+	}}
+	repository := newMemoryRepository()
+	repository.lockEvents = &events
+	repository.entries["ent_source"] = EntrySummary{ID: "ent_source", ModelID: "mdl_1", Status: StatusDraft, CurrentDraftRevisionID: "rev_base"}
+	repository.entries["ent_target"] = EntrySummary{ID: "ent_target", ModelID: targetModelID, Status: StatusDraft}
+	repository.revisions["ent_source"] = []Revision{{ID: "rev_base", EntryID: "ent_source", ModelID: "mdl_1", Number: 1, Content: json.RawMessage(`{}`), WorkflowStatus: WorkflowDraft}}
+	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": model, targetModelID: {ContentModelSummary: schema.ContentModelSummary{ID: targetModelID, Status: schema.StatusActive}}}}, Media: mediaRecorder{events: &events}, Audit: &auditRecorder{}})
+	service.newID = func(prefix string) (string, error) { return prefix + "next", nil }
+
+	_, err := service.UpdateEntry(context.Background(), contentPrincipal(permissionUpdate), testMeta(), "mdl_1", "ent_source", UpdateEntryRequest{BaseRevisionID: "rev_base", Content: json.RawMessage(`{"related":"ent_target","image":"ast_1"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(events[:3], ",") != "entry,target,asset" {
+		t.Fatalf("更新锁顺序应为源条目、关系目标、素材，实际为 %v", events)
+	}
+}
+
+func TestImportPrechecksAllRelationTargetsBeforeAnyAsset(t *testing.T) {
+	targetModelID := "mdl_target"
+	events := []string{}
+	model := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{
+		{ID: "fld_related", Key: "related", Type: schema.FieldTypeSingleRelation, Constraints: schema.FieldConstraints{TargetModelID: &targetModelID}, Status: schema.StatusActive},
+		{ID: "fld_image", Key: "image", Type: schema.FieldTypeSingleMedia, Status: schema.StatusActive},
+	}}
+	repository := newMemoryRepository()
+	repository.lockEvents = &events
+	repository.entries["ent_a"] = EntrySummary{ID: "ent_a", ModelID: targetModelID, Status: StatusDraft}
+	repository.entries["ent_b"] = EntrySummary{ID: "ent_b", ModelID: targetModelID, Status: StatusDraft}
+	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": model, targetModelID: {ContentModelSummary: schema.ContentModelSummary{ID: targetModelID, Status: schema.StatusActive}}}}, Media: mediaRecorder{events: &events}, Audit: &auditRecorder{}})
+	service.newID = func(prefix string) (string, error) {
+		return fmt.Sprintf("%s%d", prefix, len(repository.revisions)+len(repository.entries)), nil
+	}
+
+	err := service.ImportDrafts(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", func(yield func(ImportDraft) error) error {
+		if err := yield(ImportDraft{Content: json.RawMessage(`{"related":"ent_b","image":"ast_b"}`)}); err != nil {
+			return err
+		}
+		return yield(ImportDraft{Content: json.RawMessage(`{"related":"ent_a","image":"ast_a"}`)})
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) < 2 || events[0] != "target" || events[1] != "asset" {
+		t.Fatalf("批量保存必须先锁全部关系目标再锁素材，实际为 %v", events)
 	}
 }
 

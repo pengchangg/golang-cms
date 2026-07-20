@@ -48,6 +48,7 @@ type Dependencies struct {
 	Repository      Repository
 	ModelRepository ModelRepository
 	Audit           audit.Writer
+	Media           MediaReferenceManager
 }
 
 type Service struct {
@@ -56,6 +57,7 @@ type Service struct {
 	repository Repository
 	models     ModelRepository
 	audit      audit.Writer
+	media      MediaReferenceManager
 	now        func() time.Time
 	newID      func(string) (string, error)
 }
@@ -65,7 +67,7 @@ var _ schema.ContentExistenceChecker = (*Service)(nil)
 type RequestMeta struct{ RequestID, IP, UserAgent string }
 
 func NewService(dependencies Dependencies) *Service {
-	return &Service{db: dependencies.DB, tx: dependencies.Transactor, repository: dependencies.Repository, models: dependencies.ModelRepository, audit: dependencies.Audit, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, newID: randomID}
+	return &Service{db: dependencies.DB, tx: dependencies.Transactor, repository: dependencies.Repository, models: dependencies.ModelRepository, audit: dependencies.Audit, media: dependencies.Media, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, newID: randomID}
 }
 
 func (s *Service) HasAnyContent(ctx context.Context, modelID string) (bool, error) {
@@ -213,70 +215,153 @@ func (s *Service) CreateEntry(ctx context.Context, principal identity.Principal,
 	}
 	var result Entry
 	err = s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		if err := requireModelPermission(principal, modelID, permissionCreate); err != nil {
-			return err
-		}
-		unlockedModel, err := s.models.GetModel(ctx, q, modelID)
-		if err != nil {
-			return err
-		}
-		content, err := validateContent(request.Content, unlockedModel.Fields)
-		if err != nil {
-			return err
-		}
-		revision := Revision{ID: revisionID, EntryID: entryID, ModelID: modelID, Number: 1, Content: content, WorkflowStatus: WorkflowDraft, CreatedBy: principal.UserID}
-		_, relations, err := revisionDerivatives(content, revision, unlockedModel.Fields)
-		if err != nil {
-			return err
-		}
-		lockedModels, err := s.lockRelationModels(ctx, q, modelID, relations)
-		if err != nil {
-			return err
-		}
-		model := lockedModels[modelID]
-		if model.Status == schema.StatusArchived {
-			return conflict("resource_archived", "归档模型不能创建内容")
-		}
-		fullModel, err := s.models.GetModel(ctx, q, modelID)
-		if err != nil {
-			return err
-		}
-		content, err = validateContent(request.Content, fullModel.Fields)
-		if err != nil {
-			return err
-		}
-		if err = ensureRelationModelsLocked(content, revision, fullModel.Fields, lockedModels); err != nil {
-			return err
-		}
-		now := s.now()
-		revision = Revision{ID: revisionID, EntryID: entryID, ModelID: modelID, Number: 1, Content: content, WorkflowStatus: WorkflowDraft, CreatedBy: principal.UserID, CreatedAt: now}
-		entry := EntrySummary{ID: entryID, ModelID: modelID, Status: StatusDraft, CurrentDraftRevisionID: revisionID, CreatedBy: principal.UserID, CreatedAt: now, UpdatedAt: now}
-		if err := s.repository.CreateEntry(ctx, q, entry); err != nil {
-			return err
-		}
-		if err := s.repository.CreateRevision(ctx, q, revision); err != nil {
-			return err
-		}
-		if err := s.repository.SetDraftPointer(ctx, q, modelID, entryID, revisionID); err != nil {
-			return err
-		}
-		if err := s.writeRevisionDerivatives(ctx, q, revision, fullModel.Fields); err != nil {
-			return err
-		}
-		values, err := uniqueValues(content, fullModel.Fields)
-		if err != nil {
-			return err
-		}
-		if err := s.replaceUniqueValues(ctx, q, modelID, entryID, fullModel.Fields, values); err != nil {
-			return err
-		}
-		if err := s.appendAudit(ctx, q, principal, meta, "content_entry_created", "content_entry", entryID, map[string]any{"model_id": modelID, "revision_id": revisionID}); err != nil {
-			return err
-		}
-		result, err = s.repository.GetEntry(ctx, q, modelID, entryID)
-		return err
+		var writeErr error
+		result, writeErr = s.createDraftInTx(ctx, q, principal, meta, modelID, entryID, revisionID, request.Content)
+		return writeErr
 	})
 	return result, err
+}
+
+// ImportDrafts 在一个事务中复用普通内容完整写入语义，任一行失败则全部回滚。
+func (s *Service) ImportDrafts(ctx context.Context, principal identity.Principal, meta RequestMeta, modelID string, source DraftSource, committed func(database.Querier) error) error {
+	if source == nil {
+		return fmt.Errorf("草稿数据源不能为空")
+	}
+	return s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		precheck, err := s.precheckDraftBatch(ctx, q, modelID, source)
+		if err != nil {
+			return err
+		}
+		if err = source(func(draft ImportDraft) error {
+			entryID, err := s.newID("ent_")
+			if err != nil {
+				return err
+			}
+			revisionID, err := s.newID("rev_")
+			if err != nil {
+				return err
+			}
+			_, err = s.createDraftInTx(ctx, q, principal, meta, modelID, entryID, revisionID, draft.Content, precheck)
+			return err
+		}); err != nil {
+			return err
+		}
+		if committed != nil {
+			return committed(q)
+		}
+		return nil
+	})
+}
+
+type draftBatchPrecheck struct {
+	model        schema.ContentModel
+	lockedModels map[string]schema.ContentModelSummary
+	relations    map[string]bool
+	assets       map[string]bool
+}
+
+func (s *Service) createDraftInTx(ctx context.Context, q database.Querier, principal identity.Principal, meta RequestMeta, modelID, entryID, revisionID string, raw json.RawMessage, prechecked ...*draftBatchPrecheck) (Entry, error) {
+	if err := requireModelPermission(principal, modelID, permissionCreate); err != nil {
+		return Entry{}, err
+	}
+	var batch *draftBatchPrecheck
+	if len(prechecked) > 0 {
+		batch = prechecked[0]
+	}
+	var unlockedModel schema.ContentModel
+	var err error
+	if batch != nil {
+		unlockedModel = batch.model
+	} else {
+		unlockedModel, err = s.models.GetModel(ctx, q, modelID)
+		if err != nil {
+			return Entry{}, err
+		}
+	}
+	content, err := validateContent(raw, unlockedModel.Fields)
+	if err != nil {
+		return Entry{}, err
+	}
+	candidate := Revision{ID: revisionID, EntryID: entryID, ModelID: modelID, Content: content}
+	_, relations, err := revisionDerivatives(content, candidate, unlockedModel.Fields)
+	if err != nil {
+		return Entry{}, err
+	}
+	var lockedModels map[string]schema.ContentModelSummary
+	if batch == nil {
+		lockedModels, err = s.lockRelationModels(ctx, q, modelID, relations)
+		if err != nil {
+			return Entry{}, err
+		}
+	} else {
+		lockedModels = batch.lockedModels
+	}
+	if lockedModels[modelID].Status == schema.StatusArchived {
+		return Entry{}, conflict("resource_archived", "归档模型不能创建内容")
+	}
+	var model schema.ContentModel
+	if batch == nil {
+		model, err = s.models.GetModel(ctx, q, modelID)
+		if err != nil {
+			return Entry{}, err
+		}
+	} else {
+		model = batch.model
+	}
+	content, err = validateContent(raw, model.Fields)
+	if err != nil {
+		return Entry{}, err
+	}
+	if err = ensureRelationModelsLocked(content, candidate, model.Fields, lockedModels); err != nil {
+		return Entry{}, err
+	}
+	if batch != nil {
+		_, currentRelations, derivativeErr := revisionDerivatives(content, candidate, model.Fields)
+		if derivativeErr != nil {
+			return Entry{}, derivativeErr
+		}
+		currentReferences, derivativeErr := mediaReferences(content, candidate, model.Fields)
+		if derivativeErr != nil {
+			return Entry{}, derivativeErr
+		}
+		for _, relation := range currentRelations {
+			if !batch.relations[relation.TargetModelID+"\x00"+relation.TargetEntryID] {
+				return Entry{}, conflict("model_schema_conflict", "导入关系目标未在统一锁定集合中")
+			}
+		}
+		for _, reference := range currentReferences {
+			if !batch.assets[reference.AssetID] {
+				return Entry{}, conflict("model_schema_conflict", "导入素材未在统一锁定集合中")
+			}
+		}
+	}
+	now := s.now()
+	revision := Revision{ID: revisionID, EntryID: entryID, ModelID: modelID, Number: 1, Content: content, WorkflowStatus: WorkflowDraft, CreatedBy: principal.UserID, CreatedAt: now}
+	entry := EntrySummary{ID: entryID, ModelID: modelID, Status: StatusDraft, CurrentDraftRevisionID: revisionID, WorkflowStatus: WorkflowDraft, CreatedBy: principal.UserID, CreatedAt: now, UpdatedAt: now}
+	if err = s.repository.CreateEntry(ctx, q, entry); err != nil {
+		return Entry{}, err
+	}
+	if err = s.repository.CreateRevision(ctx, q, revision); err != nil {
+		return Entry{}, err
+	}
+	if err = s.repository.SetDraftPointer(ctx, q, modelID, entryID, revisionID); err != nil {
+		return Entry{}, err
+	}
+	derivativesReady := batch != nil
+	if err = s.writeRevisionDerivatives(ctx, q, revision, model.Fields, derivativesReady, derivativesReady); err != nil {
+		return Entry{}, err
+	}
+	values, err := uniqueValues(content, model.Fields)
+	if err != nil {
+		return Entry{}, err
+	}
+	if err = s.replaceUniqueValues(ctx, q, modelID, entryID, model.Fields, values); err != nil {
+		return Entry{}, err
+	}
+	if err = s.appendAudit(ctx, q, principal, meta, "content_entry_created", "content_entry", entryID, map[string]any{"model_id": modelID, "revision_id": revisionID}); err != nil {
+		return Entry{}, err
+	}
+	return s.repository.GetEntry(ctx, q, modelID, entryID)
 }
 
 func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal, meta RequestMeta, modelID, entryID string, request UpdateEntryRequest) (Entry, error) {
@@ -315,16 +400,6 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 		if modelSummary.Status == schema.StatusArchived {
 			return conflict("resource_archived", "归档模型不能修改内容")
 		}
-		entry, err := s.repository.LockEntry(ctx, q, modelID, entryID)
-		if err != nil {
-			return err
-		}
-		if entry.Status == StatusArchived {
-			return conflict("resource_archived", "归档内容不可修改")
-		}
-		if entry.CurrentDraftRevisionID != request.BaseRevisionID {
-			return conflict("draft_revision_conflict", "草稿已被其他保存更新")
-		}
 		model, err := s.models.GetModel(ctx, q, modelID)
 		if err != nil {
 			return err
@@ -335,6 +410,25 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 		}
 		if err = ensureRelationModelsLocked(content, candidate, model.Fields, lockedModels); err != nil {
 			return err
+		}
+		entry, err := s.repository.LockEntry(ctx, q, modelID, entryID)
+		if err != nil {
+			return err
+		}
+		if entry.Status == StatusArchived {
+			return conflict("resource_archived", "归档内容不可修改")
+		}
+		if entry.CurrentDraftRevisionID != request.BaseRevisionID {
+			return conflict("draft_revision_conflict", "草稿已被其他保存更新")
+		}
+		_, relations, err = revisionDerivatives(content, candidate, model.Fields)
+		if err != nil {
+			return err
+		}
+		if f2, ok := s.repository.(F2Repository); ok {
+			if err = f2.ValidateRelationTargets(ctx, q, relations); err != nil {
+				return err
+			}
 		}
 		current, err := s.repository.GetRevision(ctx, q, modelID, entryID, entry.CurrentDraftRevisionID)
 		if err != nil {
@@ -348,7 +442,7 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 		if err := s.repository.CreateRevision(ctx, q, revision); err != nil {
 			return err
 		}
-		if err := s.writeRevisionDerivatives(ctx, q, revision, model.Fields); err != nil {
+		if err := s.writeRevisionDerivatives(ctx, q, revision, model.Fields, true, false); err != nil {
 			return err
 		}
 		if err := s.repository.SetDraftPointer(ctx, q, modelID, entryID, revisionID); err != nil {
@@ -448,22 +542,184 @@ func (s *Service) ArchiveEntry(ctx context.Context, principal identity.Principal
 	})
 }
 
-func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Querier, revision Revision, fields []schema.ContentField) error {
-	f2, ok := s.repository.(F2Repository)
-	if !ok {
-		return nil
+func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Querier, revision Revision, fields []schema.ContentField, prechecked ...bool) error {
+	references, err := mediaReferences(revision.Content, revision, fields)
+	if err != nil {
+		return err
 	}
+	f2, ok := s.repository.(F2Repository)
 	values, relations, err := revisionDerivatives(revision.Content, revision, fields)
 	if err != nil {
 		return err
 	}
-	if err = f2.ValidateRelationTargets(ctx, q, relations); err != nil {
-		return err
+	relationsPrechecked := len(prechecked) > 0 && prechecked[0]
+	mediaPrechecked := len(prechecked) > 1 && prechecked[1]
+	if !relationsPrechecked {
+		if ok {
+			if err = f2.ValidateRelationTargets(ctx, q, relations); err != nil {
+				return err
+			}
+		}
+	}
+	if !mediaPrechecked {
+		if err = precheckMedia(ctx, q, s.media, references); err != nil {
+			return err
+		}
+	}
+	if len(references) > 0 {
+		if s.media == nil {
+			return fmt.Errorf("媒体引用管理器未装配")
+		}
+		if err = s.media.InsertRevisionReferences(ctx, q, references); err != nil {
+			return err
+		}
+	}
+	if !ok {
+		return nil
 	}
 	if err = f2.CreateFieldValues(ctx, q, values); err != nil {
 		return err
 	}
 	return f2.CreateRelations(ctx, q, relations)
+}
+
+func precheckMedia(ctx context.Context, q database.Querier, checker MediaPrechecker, references []MediaReference) error {
+	if len(references) == 0 {
+		return nil
+	}
+	if checker == nil {
+		return fmt.Errorf("媒体引用管理器未装配")
+	}
+	return checker.ValidateAvailable(ctx, q, references)
+}
+
+func (s *Service) precheckDraftBatch(ctx context.Context, q database.Querier, modelID string, source DraftSource) (*draftBatchPrecheck, error) {
+	model, err := s.models.GetModel(ctx, q, modelID)
+	if err != nil {
+		return nil, err
+	}
+	const maxImportIdentifiers = 200000
+	relationSet := map[string]Relation{}
+	mediaSet := map[string]MediaReference{}
+	err = source(func(draft ImportDraft) error {
+		relations, references := draftIdentifiers(draft.Content, modelID, model.Fields)
+		for _, relation := range relations {
+			relationSet[relation.TargetModelID+"\x00"+relation.TargetEntryID] = relation
+		}
+		for _, reference := range references {
+			mediaSet[reference.AssetID] = reference
+		}
+		if len(relationSet)+len(mediaSet) > maxImportIdentifiers {
+			var failures validationErrors
+			failures.add("/content", "identifier_limit_exceeded", "导入关系目标和素材标识总数超过限制")
+			return failures.err()
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	allRelations := make([]Relation, 0, len(relationSet))
+	for _, relation := range relationSet {
+		allRelations = append(allRelations, relation)
+	}
+	lockedModels, err := s.lockRelationModels(ctx, q, modelID, allRelations)
+	if err != nil {
+		return nil, err
+	}
+	if lockedModels[modelID].Status == schema.StatusArchived {
+		return nil, conflict("resource_archived", "归档模型不能创建内容")
+	}
+	model, err = s.models.GetModel(ctx, q, modelID)
+	if err != nil {
+		return nil, err
+	}
+	if !model.UpdatedAt.Equal(lockedModels[modelID].UpdatedAt) {
+		return nil, conflict("model_schema_conflict", "模型已变化，请重试")
+	}
+	allReferences := make([]MediaReference, 0, len(mediaSet))
+	for _, reference := range mediaSet {
+		allReferences = append(allReferences, reference)
+	}
+	if f2, ok := s.repository.(F2Repository); ok {
+		if err = f2.ValidateRelationTargets(ctx, q, allRelations); err != nil {
+			return nil, err
+		}
+	}
+	if err = precheckMedia(ctx, q, s.media, allReferences); err != nil {
+		return nil, err
+	}
+	relations := make(map[string]bool, len(relationSet))
+	for key := range relationSet {
+		relations[key] = true
+	}
+	assets := make(map[string]bool, len(mediaSet))
+	for key := range mediaSet {
+		assets[key] = true
+	}
+	return &draftBatchPrecheck{model: model, lockedModels: lockedModels, relations: relations, assets: assets}, nil
+}
+
+func draftIdentifiers(raw json.RawMessage, modelID string, fields []schema.ContentField) ([]Relation, []MediaReference) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil {
+		return nil, nil
+	}
+	relations := []Relation{}
+	references := []MediaReference{}
+	var walk func(map[string]json.RawMessage, []schema.ContentField)
+	walk = func(value map[string]json.RawMessage, fields []schema.ContentField) {
+		for _, field := range fields {
+			item, ok := value[field.Key]
+			if !ok || isNullJSON(item) || field.Status == schema.StatusArchived {
+				continue
+			}
+			switch field.Type {
+			case schema.FieldTypeSingleRelation:
+				var id string
+				if field.Constraints.TargetModelID != nil && json.Unmarshal(item, &id) == nil && id != "" {
+					relations = append(relations, Relation{ModelID: modelID, FieldID: field.ID, TargetEntryID: id, TargetModelID: *field.Constraints.TargetModelID})
+				}
+			case schema.FieldTypeMultiRelation:
+				var ids []string
+				if field.Constraints.TargetModelID != nil && json.Unmarshal(item, &ids) == nil {
+					for _, id := range ids {
+						if id != "" {
+							relations = append(relations, Relation{ModelID: modelID, FieldID: field.ID, TargetEntryID: id, TargetModelID: *field.Constraints.TargetModelID})
+						}
+					}
+				}
+			case schema.FieldTypeSingleMedia:
+				var id string
+				if json.Unmarshal(item, &id) == nil && id != "" {
+					references = append(references, MediaReference{ModelID: modelID, FieldID: field.ID, AssetID: id})
+				}
+			case schema.FieldTypeMultiMedia:
+				var ids []string
+				if json.Unmarshal(item, &ids) == nil {
+					for _, id := range ids {
+						if id != "" {
+							references = append(references, MediaReference{ModelID: modelID, FieldID: field.ID, AssetID: id})
+						}
+					}
+				}
+			case schema.FieldTypeObject:
+				var child map[string]json.RawMessage
+				if json.Unmarshal(item, &child) == nil {
+					walk(child, field.Children)
+				}
+			case schema.FieldTypeRepeatableGroup:
+				var groups []map[string]json.RawMessage
+				if json.Unmarshal(item, &groups) == nil {
+					for _, group := range groups {
+						walk(group, field.Children)
+					}
+				}
+			}
+		}
+	}
+	walk(object, fields)
+	return relations, references
 }
 
 func (s *Service) rebuildUniqueValues(ctx context.Context, q database.Querier, modelID, entryID string, fields []schema.ContentField) error {
@@ -570,6 +826,24 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 		}
 		if revision.WorkflowStatus != from {
 			return conflict("invalid_workflow_transition", "Revision 状态不允许该转换")
+		}
+		if eventType == "approved" {
+			model, modelErr := s.models.GetModel(ctx, q, modelID)
+			if modelErr != nil {
+				return modelErr
+			}
+			references, referenceErr := mediaReferences(revision.Content, revision, model.Fields)
+			if referenceErr != nil {
+				return referenceErr
+			}
+			if len(references) > 0 {
+				if s.media == nil {
+					return fmt.Errorf("媒体引用管理器未装配")
+				}
+				if err = s.media.ValidatePublishableRevision(ctx, q, revisionID); err != nil {
+					return err
+				}
+			}
 		}
 		if !draftPointer && eventType != "unpublished" && revision.SubmittedBy != nil && *revision.SubmittedBy == principal.UserID {
 			return conflict("self_review_forbidden", "提交人不能审核自己的 Revision")

@@ -1,0 +1,73 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/assets/schemas.yaml
+x-integration-status: integrated
+$defs:
+  AssetStatus:
+    type: string
+    enum: [quarantined, available, archived]
+  Asset:
+    type: object
+    additionalProperties: false
+    required: [id, filename, mime_type, size, sha256, etag, status, created_by, created_at, confirmed_at, archived_at]
+    properties:
+      id: { type: string, minLength: 1 }
+      filename: { type: string, minLength: 1, maxLength: 255 }
+      mime_type: { type: string, minLength: 1, maxLength: 255 }
+      size: { type: integer, minimum: 1, maximum: 5368709120 }
+      sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+      etag: { type: [string, "null"], minLength: 1 }
+      status:
+        $ref: "#/$defs/AssetStatus"
+      created_by: { type: string, minLength: 1 }
+      created_at: { type: string, format: date-time }
+      confirmed_at: { type: [string, "null"], format: date-time }
+      archived_at: { type: [string, "null"], format: date-time }
+  CreateAssetUploadRequest:
+    type: object
+    additionalProperties: false
+    required: [filename, mime_type, size, sha256]
+    properties:
+      filename: { type: string, minLength: 1, maxLength: 255 }
+      mime_type: { type: string, minLength: 1, maxLength: 255 }
+      size: { type: integer, minimum: 1, maximum: 5368709120 }
+      sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+  SignedUpload:
+    type: object
+    additionalProperties: false
+    required: [method, url, headers, expires_at]
+    properties:
+      method: { const: PUT }
+      url: { type: string, format: uri }
+      headers:
+        type: object
+        additionalProperties: { type: string }
+      expires_at: { type: string, format: date-time }
+  AssetUpload:
+    type: object
+    additionalProperties: false
+    required: [asset, upload]
+    properties:
+      asset:
+        $ref: "#/$defs/Asset"
+      upload:
+        $ref: "#/$defs/SignedUpload"
+  ConfirmAssetUploadRequest:
+    type: object
+    additionalProperties: false
+  UpdateAssetRequest:
+    type: object
+    additionalProperties: false
+    minProperties: 1
+    required: [filename]
+    properties:
+      filename: { type: string, minLength: 1, maxLength: 255 }
+  AssetListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/Asset"
+      next_cursor: { type: [string, "null"], minLength: 1 }

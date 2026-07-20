@@ -1,0 +1,39 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/transfers/schemas.yaml
+x-integration-status: integrated
+$defs:
+  CreateImportUploadRequest:
+    type: object
+    additionalProperties: false
+    required: [filename, size, sha256]
+    properties:
+      filename: { type: string, minLength: 1, maxLength: 255 }
+      size: { type: integer, minimum: 1 }
+      sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+  ImportUpload:
+    type: object
+    additionalProperties: false
+    required: [upload_id, method, url, headers, expires_at]
+    properties:
+      upload_id: { type: string, minLength: 1 }
+      method: { const: PUT }
+      url: { type: string, format: uri }
+      headers:
+        type: object
+        additionalProperties: { type: string }
+      expires_at: { type: string, format: date-time }
+  CreateImportRequest:
+    type: object
+    additionalProperties: false
+    required: [upload_id]
+    properties:
+      upload_id: { type: string, minLength: 1 }
+  CreateExportRequest:
+    type: object
+    additionalProperties: false
+    properties:
+      workflow_status:
+        $ref: ../content/workflow-schemas.yaml#/$defs/WorkflowStatus
+      filter: { type: string }
+      relation_filter: { type: string }
+      sort: { type: string }

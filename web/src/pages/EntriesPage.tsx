@@ -6,6 +6,7 @@ import { api } from '../api/client'
 import type { ContentEntrySummary, Principal, WorkflowStatus } from '../api/types'
 import { hasModelPermission, hasSystemPermission } from '../auth/permissions'
 import { DataState, PageHeader, PendingApiNotice, useApiData } from '../components/Page'
+import { TransferActions } from '../components/TransferActions'
 
 const workflowLabels: Record<WorkflowStatus, string> = {
   draft: '草稿', pending_review: '待审核', rejected: '已驳回', published: '已发布', unpublished: '已下线',
@@ -32,7 +33,7 @@ export default function EntriesPage({ principal }: { principal: Principal }) {
   const relationFields = model.data?.fields.filter((field) => field.status === 'active' && (field.type === 'single_relation' || field.type === 'multi_relation')) ?? []
   const sortableFields = model.data?.fields.filter((field) => field.status === 'active' && field.constraints.sortable) ?? []
 
-  return <><PageHeader eyebrow={workflowStatus === 'pending_review' ? '审核队列' : '动态内容'} title={workflowStatus === 'pending_review' ? '待审核内容' : '内容列表'} description="按工作流状态组织内容，并以模型声明的字段做基础过滤和稳定排序。" extra={<Link to={`/content/${modelId}/new`}><Button type="primary" disabled={!canCreate}>新建草稿</Button></Link>} /><PendingApiNotice />{!canViewModel ? <Alert className="editor-notice" type="info" showIcon title="无内容模型结构权限" description="仍可查看内容和执行已授权的审核操作，但不能使用依赖字段定义的过滤与编辑能力。" /> : null}<section className="content-filter-panel" aria-label="内容筛选与排序"><Space wrap>
+  return <><PageHeader eyebrow={workflowStatus === 'pending_review' ? '审核队列' : '动态内容'} title={workflowStatus === 'pending_review' ? '待审核内容' : '内容列表'} description="按工作流状态组织内容，并以模型声明的字段做基础过滤和稳定排序。" extra={<Space wrap><TransferActions principal={principal} modelId={modelId} exportQuery={{ workflow_status: workflowStatus, filter, relation_filter, sort }} /><Link to={`/content/${modelId}/new`}><Button type="primary" disabled={!canCreate}>新建草稿</Button></Link></Space>} /><PendingApiNotice />{!canViewModel ? <Alert className="editor-notice" type="info" showIcon title="无内容模型结构权限" description="仍可查看内容和执行已授权的审核操作，但不能使用依赖字段定义的过滤与编辑能力。" /> : null}<section className="content-filter-panel" aria-label="内容筛选与排序"><Space wrap>
     <Select aria-label="工作流状态" allowClear placeholder="全部工作流状态" value={workflowStatus} onChange={(value) => { setWorkflowStatus(value); setCursors([undefined]) }} options={Object.entries(workflowLabels).map(([value, label]) => ({ value, label }))} />
     {canReview ? <Button type={workflowStatus === 'pending_review' ? 'primary' : 'default'} onClick={() => { setWorkflowStatus('pending_review'); setCursors([undefined]) }}>待审核队列</Button> : null}
     <Select aria-label="过滤字段" allowClear placeholder="过滤字段" value={filterField} onChange={(value) => { setFilterField(value); setCursors([undefined]) }} options={scalarFields.map((field) => ({ value: field.key, label: field.display_name }))} />

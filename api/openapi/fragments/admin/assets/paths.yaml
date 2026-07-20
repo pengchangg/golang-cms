@@ -1,0 +1,201 @@
+x-integration-status: integrated
+/assets:
+  get:
+    x-integration-status: integrated
+    operationId: listAdminAssets
+    summary: 列出素材元数据
+    parameters:
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+      - name: status
+        in: query
+        schema:
+          $ref: ./schemas.yaml#/$defs/AssetStatus
+      - name: mime_type
+        in: query
+        schema: { type: string, minLength: 1, maxLength: 255 }
+      - &limit
+        name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - &cursor
+        name: cursor
+        in: query
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 按 created_at DESC、id DESC 返回素材。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/AssetListResponse
+      "400": &badRequest
+        description: 请求校验、查询或游标无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "401": &unauthenticated
+        description: 管理会话无效。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": &forbidden
+        description: 权限不足。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/assets/uploads:
+  post:
+    x-integration-status: integrated
+    operationId: createAdminAssetUpload
+    summary: 创建隔离素材和 OSS 签名上传
+    parameters: &writeHeaders
+      - *sessionCookie
+      - name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateAssetUploadRequest
+    responses:
+      "201":
+        description: 已创建 quarantined 素材并签发短时 PUT 请求。
+        headers:
+          Cache-Control:
+            schema: { const: no-store }
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/AssetUpload
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "413":
+        description: 文件超过允许大小，error.code 为 file_too_large。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "503": &storeUnavailable
+        description: OSS 临时不可用，error.code 为 object_store_unavailable。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/assets/{asset_id}:
+  parameters: &assetId
+    - name: asset_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    x-integration-status: integrated
+    operationId: getAdminAsset
+    summary: 获取素材元数据
+    parameters: [*sessionCookie]
+    responses:
+      "200": &assetResponse
+        description: 素材元数据，不包含对象 Key 或签名 URL。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/Asset
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": &notFound
+        description: 素材不存在。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  patch:
+    x-integration-status: integrated
+    operationId: updateAdminAsset
+    summary: 修改素材显示文件名
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateAssetRequest
+    responses:
+      "200": *assetResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": &assetConflict
+        description: 素材状态、上传或对象元数据冲突。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  delete:
+    x-integration-status: integrated
+    operationId: archiveAdminAsset
+    summary: 归档素材但保留对象和历史引用
+    parameters: *writeHeaders
+    responses:
+      "204": { description: 素材已归档。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *assetConflict
+/assets/{asset_id}/confirm:
+  parameters: *assetId
+  post:
+    x-integration-status: integrated
+    operationId: confirmAdminAssetUpload
+    summary: 核对 OSS 元数据并使素材可用
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/ConfirmAssetUploadRequest
+    responses:
+      "200": *assetResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *assetConflict
+      "503": *storeUnavailable
+/assets/{asset_id}/download:
+  parameters: *assetId
+  get:
+    x-integration-status: integrated
+    operationId: downloadAdminAsset
+    summary: 为可下载素材签发短时 OSS 地址
+    parameters: [*sessionCookie]
+    responses:
+      "302":
+        description: 重定向到短时私有 OSS 下载地址。
+        headers:
+          Location:
+            required: true
+            schema: { type: string, format: uri }
+          Cache-Control:
+            required: true
+            schema: { const: "private, no-store" }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *assetConflict
+      "503": *storeUnavailable

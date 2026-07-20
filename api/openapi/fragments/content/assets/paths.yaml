@@ -1,0 +1,49 @@
+x-integration-status: integrated
+/assets/{asset_id}:
+  parameters:
+    - name: asset_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    x-integration-status: integrated
+    operationId: downloadPublishedAsset
+    summary: 下载 API Key 授权发布内容引用的素材
+    parameters:
+      - name: Authorization
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: "^Bearer cmsk_[a-z2-7]{12}_[A-Za-z0-9_-]{43}$"
+    responses:
+      "302":
+        description: 重定向到短时私有 OSS 下载地址。
+        headers:
+          Location:
+            required: true
+            schema: { type: string, format: uri }
+          Cache-Control:
+            required: true
+            schema: { const: "private, no-store" }
+          X-Request-ID:
+            required: true
+            schema: { type: string, minLength: 1 }
+      "401":
+        description: 缺少、无效、过期或已撤销的 API Key。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "404":
+        description: 素材不存在或没有授权发布引用，error.code 为 published_asset_not_found。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "503":
+        description: OSS 临时不可用，error.code 为 object_store_unavailable。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse

@@ -71,6 +71,36 @@ paths:
     $ref: ./fragments/admin/api-keys/paths.yaml#/~1api-keys~1{api_key_id}
   /api-keys/{api_key_id}/rotate:
     $ref: ./fragments/admin/api-keys/paths.yaml#/~1api-keys~1{api_key_id}~1rotate
+  /assets:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1assets
+  /assets/uploads:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1uploads
+  /assets/{asset_id}:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}
+  /assets/{asset_id}/confirm:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}~1confirm
+  /assets/{asset_id}/download:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}~1download
+  /models/{model_id}/transfers/template:
+    $ref: ./fragments/admin/transfers/paths.yaml#/~1models~1{model_id}~1transfers~1template
+  /models/{model_id}/imports/uploads:
+    $ref: ./fragments/admin/transfers/paths.yaml#/~1models~1{model_id}~1imports~1uploads
+  /models/{model_id}/imports:
+    $ref: ./fragments/admin/transfers/paths.yaml#/~1models~1{model_id}~1imports
+  /models/{model_id}/exports:
+    $ref: ./fragments/admin/transfers/paths.yaml#/~1models~1{model_id}~1exports
+  /jobs:
+    $ref: ./fragments/admin/jobs/paths.yaml#/~1jobs
+  /jobs/{job_id}:
+    $ref: ./fragments/admin/jobs/paths.yaml#/~1jobs~1{job_id}
+  /jobs/{job_id}/cancel:
+    $ref: ./fragments/admin/jobs/paths.yaml#/~1jobs~1{job_id}~1cancel
+  /jobs/{job_id}/retry:
+    $ref: ./fragments/admin/jobs/paths.yaml#/~1jobs~1{job_id}~1retry
+  /jobs/{job_id}/errors:
+    $ref: ./fragments/admin/jobs/paths.yaml#/~1jobs~1{job_id}~1errors
+  /jobs/{job_id}/files/{file_kind}:
+    $ref: ./fragments/admin/jobs/paths.yaml#/~1jobs~1{job_id}~1files~1{file_kind}
 components:
   securitySchemes:
     AdminSession:
@@ -80,3 +110,9 @@ components:
   schemas:
     ErrorResponse:
       $ref: ./fragments/shared/error.yaml#/$defs/ErrorResponse
+    AssetID:
+      $ref: ./fragments/content/assets/schemas.yaml#/$defs/AssetID
+    SingleMediaValue:
+      $ref: ./fragments/content/assets/schemas.yaml#/$defs/SingleMediaValue
+    MultiMediaValue:
+      $ref: ./fragments/content/assets/schemas.yaml#/$defs/MultiMediaValue

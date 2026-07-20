@@ -110,6 +110,15 @@ button, a { touch-action: manipulation; }
 .api-key-filter { min-width: 180px; margin-bottom: 24px; }
 .secret-modal .ant-modal-content { border-top: 5px solid var(--green); }
 .secret-value { margin: 20px 0 12px !important; padding: 16px; border: 1px solid var(--line); background: #f3f3eb; overflow-wrap: anywhere; }
+.asset-picker { display: grid; gap: 10px; }
+.asset-selection { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; }
+.pagination-actions, .job-actions { margin-top: 20px; }
+.job-sheet, .job-errors { max-width: 1000px; padding: 24px; border-top: 1px solid var(--line); background: rgb(255 254 249 / 55%); }
+.job-sheet .ant-alert, .job-errors .ant-alert { margin-top: 20px; }
+.job-state { display: grid; align-items: center; gap: 18px; margin-bottom: 24px; grid-template-columns: auto minmax(180px, 420px); }
+.job-errors { margin-top: 28px; }
+.job-errors h2 { font-family: "Songti SC", "Noto Serif SC", serif; }
+.transfer-actions { justify-content: flex-end; }
 
 @media (max-width: 991px) {
   .app-sider { display: none; }
@@ -141,6 +150,11 @@ button, a { touch-action: manipulation; }
   .workflow-actions .ant-btn { min-height: 44px; flex: 1; }
   .content-filter-panel { padding-inline: 12px; }
   .content-filter-panel .ant-space, .content-filter-panel .ant-space-item, .content-filter-panel .ant-select, .content-filter-panel .ant-input { width: 100%; }
+  .transfer-actions, .transfer-actions .ant-btn { width: 100%; }
+  .job-sheet, .job-errors { padding-inline: 12px; }
+  .job-state { grid-template-columns: 1fr; }
+  .job-actions, .job-actions .ant-btn, .job-actions a { width: 100%; }
+  .ant-modal { max-width: calc(100vw - 24px); }
 }
 @media (hover: hover) {
   .brand:hover { color: var(--green); }

@@ -231,8 +231,30 @@ func validateValue(value any, field schema.ContentField, path string, failures *
 		return nil
 	}
 	switch field.Type {
-	case schema.FieldTypeSingleMedia, schema.FieldTypeMultiMedia:
-		failures.add(path, "unsupported_non_null_value", "当前版本不支持该字段的非空值")
+	case schema.FieldTypeSingleMedia:
+		if text, ok := value.(string); !ok || text == "" {
+			failures.add(path, "invalid_type", "单媒体必须是非空素材 ID")
+		}
+	case schema.FieldTypeMultiMedia:
+		items, ok := value.([]any)
+		if !ok {
+			failures.add(path, "invalid_type", "多媒体必须是素材 ID 数组")
+			return value
+		}
+		if len(items) > 50 {
+			failures.add(path, "out_of_range", "多媒体最多包含 50 项")
+		}
+		seen := map[string]bool{}
+		for i, item := range items {
+			text, ok := item.(string)
+			itemPath := fmt.Sprintf("%s/%d", path, i)
+			if !ok || text == "" {
+				failures.add(itemPath, "invalid_type", "媒体项必须是非空素材 ID")
+			} else if seen[text] {
+				failures.add(itemPath, "duplicate", "素材 ID 不可重复")
+			}
+			seen[text] = true
+		}
 	case schema.FieldTypeSingleRelation:
 		if text, ok := value.(string); !ok || text == "" {
 			failures.add(path, "invalid_type", "单关联必须是非空条目 ID")
@@ -359,6 +381,42 @@ func validateValue(value any, field schema.ContentField, path string, failures *
 		return result
 	}
 	return value
+}
+
+func mediaReferences(content json.RawMessage, revision Revision, fields []schema.ContentField) ([]MediaReference, error) {
+	var object map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil {
+		return nil, fmt.Errorf("读取媒体引用: %w", err)
+	}
+	result := []MediaReference{}
+	var walk func(map[string]any, []schema.ContentField, string)
+	walk = func(value map[string]any, fields []schema.ContentField, parent string) {
+		for _, field := range fields {
+			item, exists := value[field.Key]
+			if !exists || item == nil || field.Status == schema.StatusArchived {
+				continue
+			}
+			pointer := parent + "/" + escapePointer(field.Key)
+			switch field.Type {
+			case schema.FieldTypeSingleMedia:
+				result = append(result, MediaReference{RevisionID: revision.ID, EntryID: revision.EntryID, ModelID: revision.ModelID, FieldID: field.ID, AssetID: item.(string), JSONPointer: pointer, Position: 0})
+			case schema.FieldTypeMultiMedia:
+				for position, assetID := range item.([]any) {
+					result = append(result, MediaReference{RevisionID: revision.ID, EntryID: revision.EntryID, ModelID: revision.ModelID, FieldID: field.ID, AssetID: assetID.(string), JSONPointer: pointer, Position: position})
+				}
+			case schema.FieldTypeObject:
+				walk(item.(map[string]any), field.Children, pointer)
+			case schema.FieldTypeRepeatableGroup:
+				for position, group := range item.([]any) {
+					walk(group.(map[string]any), field.Children, fmt.Sprintf("%s/%d", pointer, position))
+				}
+			}
+		}
+	}
+	walk(object, fields, "")
+	return result, nil
 }
 
 func validateRichTextNode(node map[string]any, path, parent string, failures *validationErrors) {

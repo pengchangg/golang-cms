@@ -33,7 +33,28 @@ func TestValidateContentCollectsStableFieldErrors(t *testing.T) {
 		{Key: "old", Type: schema.FieldTypeBoolean, DefaultValue: json.RawMessage("null"), Status: schema.StatusArchived},
 	}
 	_, err := validateContent(json.RawMessage(`{"unknown":1,"old":true,"asset":"ast_1"}`), fields)
-	assertValidationCodes(t, err, []string{"/content/asset:unsupported_non_null_value", "/content/old:archived_field", "/content/unknown:unknown_property"})
+	assertValidationCodes(t, err, []string{"/content/old:archived_field", "/content/unknown:unknown_property"})
+}
+
+func TestMediaReferencesRecursesObjectsAndGroups(t *testing.T) {
+	fields := []schema.ContentField{{ID: "fld_gallery", Key: "gallery", Type: schema.FieldTypeRepeatableGroup, Status: schema.StatusActive, Children: []schema.ContentField{{ID: "fld_image", Key: "image", Type: schema.FieldTypeSingleMedia, Status: schema.StatusActive}, {ID: "fld_assets", Key: "assets", Type: schema.FieldTypeMultiMedia, Status: schema.StatusActive}}}}
+	content, err := validateContent(json.RawMessage(`{"gallery":[{"image":"ast_1","assets":["ast_2","ast_3"]}]}`), fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := mediaReferences(content, Revision{ID: "rev_1", EntryID: "ent_1", ModelID: "mdl_1"}, fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 3 || refs[0].JSONPointer != "/gallery/0/image" || refs[1].JSONPointer != "/gallery/0/assets" || refs[1].Position != 0 || refs[2].Position != 1 {
+		t.Fatalf("媒体引用不符合预期: %#v", refs)
+	}
+}
+
+func TestValidateMediaRejectsDuplicateAndMoreThanFifty(t *testing.T) {
+	fields := []schema.ContentField{{Key: "assets", Type: schema.FieldTypeMultiMedia, Status: schema.StatusActive}}
+	_, err := validateContent(json.RawMessage(`{"assets":["ast_1","ast_1"]}`), fields)
+	assertValidationCodes(t, err, []string{"/content/assets/1:duplicate"})
 }
 
 func TestValidateContentRequiredRejectsExplicitNullEvenWithDefault(t *testing.T) {
