@@ -61,7 +61,11 @@ func (s *Service) GetModel(ctx context.Context, principal identity.Principal, id
 	if err := s.authorizer.RequireSystemPermission(ctx, principal, permission.ModelsView); err != nil {
 		return ContentModel{}, err
 	}
-	return s.repository.GetModel(ctx, s.db, id)
+	model, err := s.repository.GetModel(ctx, s.db, id)
+	if err == nil {
+		model.Fields = normalizeFields(model.Fields)
+	}
+	return model, err
 }
 func (s *Service) GetField(ctx context.Context, principal identity.Principal, modelID, fieldID string) (ContentField, error) {
 	if err := s.authorizer.RequireSystemPermission(ctx, principal, permission.ModelsView); err != nil {
@@ -70,7 +74,11 @@ func (s *Service) GetField(ctx context.Context, principal identity.Principal, mo
 	if _, err := s.repository.GetModel(ctx, s.db, modelID); err != nil {
 		return ContentField{}, err
 	}
-	return s.repository.GetField(ctx, s.db, modelID, fieldID)
+	field, err := s.repository.GetField(ctx, s.db, modelID, fieldID)
+	if err == nil {
+		field.Children = normalizeFields(field.Children)
+	}
+	return field, err
 }
 func (s *Service) ListFields(ctx context.Context, principal identity.Principal, modelID string) ([]ContentField, error) {
 	model, err := s.GetModel(ctx, principal, modelID)
@@ -137,6 +145,9 @@ func (s *Service) UpdateModel(ctx context.Context, principal identity.Principal,
 		result, err = s.repository.GetModel(ctx, q, id)
 		return err
 	})
+	if err == nil {
+		result.Fields = normalizeFields(result.Fields)
+	}
 	return result, err
 }
 
@@ -333,6 +344,9 @@ func (s *Service) UpdateField(ctx context.Context, principal identity.Principal,
 			break
 		}
 	}
+	if err == nil {
+		result.Children = normalizeFields(result.Children)
+	}
 	return result, err
 }
 
@@ -433,6 +447,17 @@ func (s *Service) buildField(input ContentFieldInput, depth int, now time.Time) 
 	}
 	return field, nil
 }
+
+func normalizeFields(fields []ContentField) []ContentField {
+	if fields == nil {
+		return []ContentField{}
+	}
+	for i := range fields {
+		fields[i].Children = normalizeFields(fields[i].Children)
+	}
+	return fields
+}
+
 func (s *Service) lockRelationModels(ctx context.Context, q database.Querier, modelID string, input ContentFieldInput) (map[string]ContentModelSummary, error) {
 	ids := map[string]bool{modelID: true}
 	var collect func(ContentFieldInput)

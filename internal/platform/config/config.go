@@ -213,9 +213,12 @@ func validateSecurityConfig(cfg Config) error {
 	if len(cfg.SessionSecret) < 32 {
 		return errors.New("APP_SESSION_SECRET 长度不能少于 32 字节")
 	}
-	base, err := parseHTTPSURL("APP_BASE_URL", cfg.BaseURL)
+	base, err := parseHTTPURL("APP_BASE_URL", cfg.BaseURL)
 	if err != nil {
 		return err
+	}
+	if base.Scheme == "http" && !isLoopbackHost(base.Hostname()) {
+		return errors.New("APP_BASE_URL 仅回环地址允许使用 HTTP")
 	}
 	if base.RawQuery != "" || base.Fragment != "" || (base.Path != "" && base.Path != "/") {
 		return errors.New("APP_BASE_URL 只能包含 origin")
@@ -228,7 +231,7 @@ func validateSecurityConfig(cfg Config) error {
 		if issuer.Fragment != "" {
 			return errors.New("OIDC_ISSUER_URL 不能包含 fragment")
 		}
-		redirect, err := parseHTTPSURL("OIDC_REDIRECT_URL", cfg.OIDCRedirectURL)
+		redirect, err := parseHTTPURL("OIDC_REDIRECT_URL", cfg.OIDCRedirectURL)
 		if err != nil {
 			return err
 		}
@@ -246,6 +249,22 @@ func parseHTTPSURL(name, value string) (*url.URL, error) {
 		return nil, fmt.Errorf("%s 必须是合法 HTTPS URL", name)
 	}
 	return parsed, nil
+}
+
+func parseHTTPURL(name, value string) (*url.URL, error) {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return nil, fmt.Errorf("%s 必须是合法 HTTP 或 HTTPS URL", name)
+	}
+	return parsed, nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func envOrDefault(name, fallback string) string {

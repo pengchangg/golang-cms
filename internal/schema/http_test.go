@@ -12,6 +12,7 @@ import (
 
 	"cms/internal/identity"
 	"cms/internal/platform/apperror"
+	"cms/internal/platform/database"
 	"cms/internal/platform/httpx"
 )
 
@@ -34,6 +35,40 @@ func TestHTTPCreateModelContract(t *testing.T) {
 	}
 	if !state.authorizedInTx || !state.auditInTx {
 		t.Fatalf("state = %#v", state)
+	}
+}
+
+func TestHTTPGetModelNormalizesFieldArrays(t *testing.T) {
+	repository := nilFieldsRepository{memoryRepository: &memoryRepository{models: map[string]ContentModelSummary{
+		"mdl_empty": {ID: "mdl_empty", Key: "empty", DisplayName: "Empty", Status: StatusActive},
+		"mdl_field": {ID: "mdl_field", Key: "field", DisplayName: "Field", Status: StatusActive},
+	}}}
+	service := testService(repository, &transactionState{})
+	service.authorizer = permissiveAuthorizer{}
+	handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) { return testPrincipal(), nil })
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/models/mdl_empty", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if string(body["fields"]) != "[]" {
+		t.Fatalf("fields = %s", body["fields"])
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/admin/v1/models/mdl_field", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var model ContentModel
+	if err := json.Unmarshal(response.Body.Bytes(), &model); err != nil {
+		t.Fatal(err)
+	}
+	if len(model.Fields) != 1 || model.Fields[0].Children == nil {
+		t.Fatalf("fields = %#v", model.Fields)
 	}
 }
 
@@ -94,6 +129,19 @@ func TestRequestMetaNormalizesIPAndTruncatesUserAgentByCharacters(t *testing.T) 
 }
 
 type permissiveAuthorizer struct{}
+
+type nilFieldsRepository struct{ *memoryRepository }
+
+func (r nilFieldsRepository) GetModel(_ context.Context, _ database.Querier, id string) (ContentModel, error) {
+	model, ok := r.models[id]
+	if !ok {
+		return ContentModel{}, notFound("模型")
+	}
+	if id == "mdl_field" {
+		return ContentModel{ContentModelSummary: model, Fields: []ContentField{{ID: "fld_leaf", Children: nil}}}, nil
+	}
+	return ContentModel{ContentModelSummary: model}, nil
+}
 
 func (permissiveAuthorizer) RequireSystemPermission(_ context.Context, _ identity.Principal, _ string) error {
 	return nil

@@ -53,8 +53,7 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
     try {
       applyResult(await run(), success)
     } catch (error) {
-      if (error instanceof ApiError && error.code === 'self_review_forbidden') message.error('提交人不能审核自己的版本')
-      else if (error instanceof ApiError && ['workflow_revision_conflict', 'invalid_workflow_transition'].includes(error.code)) message.error('版本状态已变化，请重新载入')
+      if (error instanceof ApiError && ['workflow_revision_conflict', 'invalid_workflow_transition'].includes(error.code)) message.error('版本状态已变化，请重新载入')
       else throw error
     } finally {
       setActing(false)
@@ -93,7 +92,7 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
     {!canViewModel ? <Alert className="editor-notice" type="info" showIcon title="无内容模型结构权限" description="当前内容以只读原始数据展示。仍可查看审核详情并执行已授权的工作流操作，但不能编辑内容。" /> : null}
     {canViewModel && !model.loading && !model.error && !hasFields ? <Alert className="editor-notice" type="warning" showIcon title="模型没有字段定义" description="当前 Revision 仅以只读原始数据展示，不能将空表单保存为内容。" /> : null}
     {workflowStatus === 'published' ? <Alert className="editor-notice" type="info" showIcon title="正在编辑已发布内容" description="保存只会创建新草稿，线上版本保持不变，直到新版本通过审核。" /> : null}
-    {workflowStatus === 'pending_review' ? <Alert className="editor-notice" type="warning" showIcon title="待审核版本不可编辑" description="请通过或驳回当前版本，提交人不能审核自己的版本。" /> : null}
+    {workflowStatus === 'pending_review' ? <Alert className="editor-notice" type="warning" showIcon title="待审核版本不可编辑" description="请通过或驳回当前版本。" /> : null}
     {entry.data?.status === 'archived' ? <Alert type="warning" showIcon title="归档内容不可编辑" /> : null}
     <div className="entry-workspace">
       <DataState loading={entry.loading || (canViewModel && model.loading)} error={entry.error ?? (canViewModel ? model.error : undefined)} retry={() => { model.reload(); entry.reload() }}>

@@ -845,9 +845,6 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 				}
 			}
 		}
-		if !draftPointer && eventType != "unpublished" && revision.SubmittedBy != nil && *revision.SubmittedBy == principal.UserID {
-			return conflict("self_review_forbidden", "提交人不能审核自己的 Revision")
-		}
 		now := s.now()
 		var submitter *string
 		var submittedAt *time.Time

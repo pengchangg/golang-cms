@@ -65,7 +65,7 @@ x-integration-status: integrated
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "409": &workflowConflict
-        description: 指针冲突、非法转换或禁止自审。
+        description: 指针冲突或非法转换。
         content:
           application/json:
             schema:

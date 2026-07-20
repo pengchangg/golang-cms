@@ -63,6 +63,31 @@ func TestLocalLoginRequiresExactOriginAndSetsSecureCookie(t *testing.T) {
 	}
 }
 
+func TestLocalLoginOverHTTPDoesNotSetSecureCookie(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 7, 18, 1, 0, 0, 0, time.UTC)}
+	store := newMemoryStore()
+	hash, err := HashPassword("password", strings.NewReader("0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.local = User{ID: "usr_local", DisplayName: "Admin", Enabled: true, PasswordHash: hash}
+	service := testService(t, store, &fakeOIDC{}, clock)
+	module, err := NewModule(service, "http://localhost:8080", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	module.RegisterRoutes(mux)
+	response := loginRequest(httpx.RequestID(mux), "http://localhost:8080")
+	if response.Code != http.StatusOK {
+		t.Fatalf("login status = %d, body = %s", response.Code, response.Body.String())
+	}
+	cookie := response.Result().Cookies()[0]
+	if cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("cookie = %+v", cookie)
+	}
+}
+
 func TestLogoutChecksOriginThenSessionThenCSRF(t *testing.T) {
 	service, _, handler := testHandler(t)
 	login := loginRequest(handler, "https://cms.example.com")

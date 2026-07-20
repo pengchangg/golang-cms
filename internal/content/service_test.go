@@ -514,7 +514,7 @@ func TestWorkflowPublishEditAndUnpublish(t *testing.T) {
 	}
 }
 
-func TestWorkflowRejectSelfReviewAndVersionConditions(t *testing.T) {
+func TestWorkflowAllowsSubmitterToReviewWithPermissions(t *testing.T) {
 	service, repository, _, _ := testService()
 	creator := contentPrincipal(permissionCreate, permissionSubmit, permissionReview, permissionPublish)
 	created, err := service.CreateEntry(context.Background(), creator, testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"内容"}`)})
@@ -525,21 +525,37 @@ func TestWorkflowRejectSelfReviewAndVersionConditions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Approve(context.Background(), creator, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID})
-	assertApplicationCode(t, err, "self_review_forbidden")
-	if len(repository.events) != 1 || repository.revisions[created.ID][0].WorkflowStatus != WorkflowPendingReview {
-		t.Fatal("禁止自审时改变了状态或事件")
+	reviewerOnly := contentPrincipal(permissionReview)
+	_, err = service.Approve(context.Background(), reviewerOnly, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID})
+	assertApplicationCode(t, err, "permission_denied")
+	if repository.revisions[created.ID][0].WorkflowStatus != WorkflowPendingReview || len(repository.events) != 1 {
+		t.Fatal("缺少发布权限时改变了状态或事件")
 	}
-	reviewer := identity.NewPrincipal("usr_2", "审核人", nil, identity.AuthMethodOIDC, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{permissionReview}}})
-	_, err = service.Reject(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RejectRevisionRequest{RevisionID: "rev_stale", Reason: "原因"})
-	assertApplicationCode(t, err, "workflow_revision_conflict")
-	_, err = service.Reject(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RejectRevisionRequest{RevisionID: created.CurrentDraftRevisionID, Reason: "  "})
-	assertApplicationCode(t, err, "validation_failed")
-	result, err := service.Reject(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RejectRevisionRequest{RevisionID: created.CurrentDraftRevisionID, Reason: "  需要修改  "})
+	published, err := service.Approve(context.Background(), creator, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.WorkflowStatus != WorkflowRejected || repository.events[len(repository.events)-1].Reason == nil || *repository.events[len(repository.events)-1].Reason != "需要修改" {
+	if published.WorkflowStatus != WorkflowPublished || len(repository.events) != 2 || repository.events[1].ActorID != creator.UserID {
+		t.Fatalf("提交人审核发布结果错误: %#v/%#v", published, repository.events)
+	}
+
+	rejectedEntry, err := service.CreateEntry(context.Background(), creator, testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"待修改"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.Submit(context.Background(), creator, testMeta(), "mdl_1", rejectedEntry.ID, RevisionConditionRequest{RevisionID: rejectedEntry.CurrentDraftRevisionID}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Reject(context.Background(), creator, testMeta(), "mdl_1", rejectedEntry.ID, RejectRevisionRequest{RevisionID: "rev_stale", Reason: "原因"})
+	assertApplicationCode(t, err, "workflow_revision_conflict")
+	_, err = service.Reject(context.Background(), creator, testMeta(), "mdl_1", rejectedEntry.ID, RejectRevisionRequest{RevisionID: rejectedEntry.CurrentDraftRevisionID, Reason: "  "})
+	assertApplicationCode(t, err, "validation_failed")
+	result, err := service.Reject(context.Background(), creator, testMeta(), "mdl_1", rejectedEntry.ID, RejectRevisionRequest{RevisionID: rejectedEntry.CurrentDraftRevisionID, Reason: "  需要修改  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastEvent := repository.events[len(repository.events)-1]
+	if result.WorkflowStatus != WorkflowRejected || lastEvent.ActorID != creator.UserID || lastEvent.Reason == nil || *lastEvent.Reason != "需要修改" {
 		t.Fatal("驳回状态或理由错误")
 	}
 }

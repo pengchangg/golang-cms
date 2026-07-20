@@ -14,7 +14,7 @@
 ## 阶段二能力
 
 - 固定的草稿、待审核、驳回、发布和下线工作流
-- 禁止提交人自审，审核通过时原子切换发布指针
+- 审核动作按模型权限授权，审核通过时原子切换发布指针
 - Revision 级类型化投影、动态过滤排序和一层关联展开
 - API Key 模型范围、过期、撤销和无宽限期轮换
 - `/api/content/v1` 只读已发布内容，支持强 ETag 和条件请求
@@ -46,6 +46,14 @@ go env -w GOPROXY=https://goproxy.cn,direct
 Dockerfile 默认使用来游戏 Docker Hub 镜像、`goproxy.cn` 和 npmmirror；如需覆盖 Go 或 npm 镜像，可以在构建时传入 `GOPROXY` 或 `NPM_REGISTRY`。前端素材能力通过构建参数 `VITE_ASSETS_ENABLED` 注入，默认值为 `true`。
 
 ## 命令
+
+本地快速运行需要 Podman。以下命令会在 `127.0.0.1:13306` 自动创建持久化 MySQL 8.0 容器、构建前端、执行迁移、初始化本地管理员，并在 `http://localhost:18080` 启动应用；本地模式默认关闭 OIDC 和 OSS：
+
+```bash
+make dev
+```
+
+默认管理员为 `admin / cms-admin-local`。应用端口可直接覆盖，例如 `make dev DEV_APP_PORT=8080`。数据库端口、名称和凭证只在首次创建容器时生效；修改这些值前先运行 `make dev-clean`，再使用相同的 `DEV_DB_*` 变量执行 `make dev`。`make dev-stop` 停止 MySQL 但保留数据；`make dev-clean` 删除本地 MySQL 容器和数据卷。
 
 ```bash
 go run ./cmd/cms version
@@ -84,7 +92,7 @@ docker run --rm internal-cms:test version
 
 远程 MySQL TCP 连接必须在 DSN 中配置经过证书验证的 TLS。本机回环地址可以不启用 TLS；`MYSQL_ALLOW_INSECURE=true` 只允许用于明确隔离的开发或测试网络。
 
-OIDC 默认启用，本地应急网页登录默认关闭。仅在本地验收或企业 SSO 故障恢复期间，可以显式设置 `APP_LOCAL_LOGIN_ENABLED=true`；生产环境恢复 SSO 后应立即关闭。设置 `APP_OIDC_ENABLED=false` 时 OIDC 登录入口返回不可用。
+OIDC 默认启用，本地应急网页登录默认关闭。仅在本地验收或企业 SSO 故障恢复期间，可以显式设置 `APP_LOCAL_LOGIN_ENABLED=true`；生产环境恢复 SSO 后应立即关闭。设置 `APP_OIDC_ENABLED=false` 时 OIDC 登录入口返回不可用。应用自身监听普通 HTTP；`APP_BASE_URL` 应填写浏览器实际访问的 origin，Cookie 的 `Secure` 属性跟随其 scheme。只有 localhost 或回环 IP 可使用 `http://`；生产由网关终止 TLS 时，`APP_BASE_URL` 仍填写外部 `https://` 地址。
 
 素材与传输属于 V1 默认能力。`APP_ASSETS_ENABLED` 和前端构建变量 `VITE_ASSETS_ENABLED` 均默认 `true`；生产部署必须保持启用，并完整配置 `.env.example` 中全部 `ALIYUN_OSS_*`（STS Token 除外）、签名 TTL、MIME 列表、最大尺寸和 Worker 参数。应用会在注册运行时路由前验证 HTTPS Endpoint、私有 Bucket ACL、Region 以及对象读写能力，检查失败即拒绝启动。AccessKey、SecurityToken 和签名 URL 不得写入日志。
 

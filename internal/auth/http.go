@@ -21,6 +21,7 @@ const routePrefix = "/api/admin/v1/auth"
 type Module struct {
 	service           *Service
 	origin            string
+	secureCookies     bool
 	localLoginEnabled bool
 }
 
@@ -71,7 +72,7 @@ func NewModule(service *Service, baseURL string, localLoginEnabled bool) (*Modul
 	if err != nil {
 		return nil, err
 	}
-	return &Module{service: service, origin: origin, localLoginEnabled: localLoginEnabled}, nil
+	return &Module{service: service, origin: origin, secureCookies: strings.EqualFold(parsed.Scheme, "https"), localLoginEnabled: localLoginEnabled}, nil
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
@@ -236,19 +237,19 @@ func canonicalOrigin(value *url.URL) (string, error) {
 }
 
 func (m *Module) setCookie(w http.ResponseWriter, raw string, expires time.Time) {
-	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: raw, Path: "/api/admin/v1", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, Expires: expires.UTC()})
+	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: raw, Path: "/api/admin/v1", HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteLaxMode, Expires: expires.UTC()})
 }
 
 func (m *Module) clearCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: CookieName, Path: "/api/admin/v1", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0).UTC()})
+	http.SetCookie(w, &http.Cookie{Name: CookieName, Path: "/api/admin/v1", HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0).UTC()})
 }
 
 func (m *Module) setOIDCCookie(w http.ResponseWriter, binding string) {
-	http.SetCookie(w, &http.Cookie{Name: OIDCCookieName, Value: binding, Path: routePrefix + "/oidc/callback", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	http.SetCookie(w, &http.Cookie{Name: OIDCCookieName, Value: binding, Path: routePrefix + "/oidc/callback", HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteLaxMode, MaxAge: 600})
 }
 
 func (m *Module) clearOIDCCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: OIDCCookieName, Path: routePrefix + "/oidc/callback", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0).UTC()})
+	http.SetCookie(w, &http.Cookie{Name: OIDCCookieName, Path: routePrefix + "/oidc/callback", HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0).UTC()})
 }
 
 func sessionCookie(r *http.Request) (string, error) {

@@ -134,6 +134,24 @@ func TestLoadServeValidatesAuthenticationConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadServeAllowsHTTPBaseURL(t *testing.T) {
+	setValidServeEnvironment(t)
+	t.Setenv("APP_ASSETS_ENABLED", "false")
+	t.Setenv("APP_BASE_URL", "http://localhost:8080")
+	if _, err := Load("serve"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestLoadServeRejectsRemoteHTTPBaseURL(t *testing.T) {
+	setValidServeEnvironment(t)
+	t.Setenv("APP_ASSETS_ENABLED", "false")
+	t.Setenv("APP_BASE_URL", "http://cms.internal.example")
+	if _, err := Load("serve"); err == nil {
+		t.Fatal("Load() expected an error")
+	}
+}
+
 func TestLoadServeRejectsMismatchedOIDCRedirect(t *testing.T) {
 	t.Setenv("APP_ASSETS_ENABLED", "false")
 	t.Setenv("MYSQL_DSN", "cms:cms@tcp(localhost:3306)/cms")
