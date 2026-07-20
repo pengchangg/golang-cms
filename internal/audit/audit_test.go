@@ -29,7 +29,7 @@ func TestSQLWriterAppendsValidEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(q.args) != 13 {
+	if len(q.args) != 14 {
 		t.Fatalf("insert args = %d", len(q.args))
 	}
 }
@@ -39,6 +39,15 @@ func TestSQLWriterRejectsInvalidResultShape(t *testing.T) {
 	err := (SQLWriter{}).Append(context.Background(), q, Event{ID: "evt_1", OccurredAt: time.Now(), RequestID: "req", ActorType: "user", Action: "auth_logout_succeeded", ResourceType: "authentication", Result: "success", IP: "127.0.0.1"})
 	if err == nil {
 		t.Fatal("缺少 actor_id 的事件被接受")
+	}
+}
+
+func TestSQLWriterRequiresUserDisplayNameSnapshot(t *testing.T) {
+	q := &captureQuerier{}
+	actorID := "usr_1"
+	err := (SQLWriter{}).Append(context.Background(), q, Event{ID: "evt_1", OccurredAt: time.Now(), RequestID: "req", ActorType: "user", ActorID: &actorID, Action: "auth_logout_succeeded", ResourceType: "authentication", Result: "success", IP: "127.0.0.1"})
+	if err == nil {
+		t.Fatal("缺少操作者名称快照的用户事件被接受")
 	}
 }
 

@@ -4,6 +4,7 @@ import { useState } from 'react'
 
 import type { ContentField } from '../api/types'
 import { ASSETS_ENABLED } from '../config'
+import { fieldTypeMeta } from '../fieldTypes'
 import { AssetPicker } from './AssetPicker'
 
 function JsonEditor({ value, onChange, label }: { value: unknown; onChange: (value: unknown) => void; label: string }) {
@@ -38,6 +39,6 @@ export function DynamicContentForm({ fields, content, onChange, disabled = false
     else if (field.type === 'multi_select') control = <Checkbox.Group value={Array.isArray(value) ? value as string[] : []} options={(field.constraints.enum_options ?? []).map((item) => ({ label: item.label, value: item.value }))} onChange={(next) => update(field.key, next)} disabled={disabled} />
     else if (field.type === 'object') control = <DynamicContentForm fields={field.children} content={value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}} onChange={(next) => update(field.key, next)} disabled={disabled} canSelectAssets={canSelectAssets} />
     else control = <JsonEditor label={field.display_name} value={value} onChange={(next) => update(field.key, next)} />
-    return <section className="dynamic-field" key={field.id}><label><strong>{field.display_name}</strong>{field.required ? <span className="required-mark">必填</span> : null}</label><Typography.Text type="secondary"><code>{field.key}</code> · {field.type}</Typography.Text>{control}{field.description ? <Typography.Text type="secondary">{field.description}</Typography.Text> : null}</section>
+    return <section className="dynamic-field" key={field.id}><label><strong>{field.display_name}</strong>{field.required ? <span className="required-mark">必填</span> : null}</label><Typography.Text type="secondary"><code>{field.key}</code> · {fieldTypeMeta[field.type].label}</Typography.Text>{control}{field.description ? <Typography.Text type="secondary">{field.description}</Typography.Text> : null}</section>
   })}</div>
 }

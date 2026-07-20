@@ -13,19 +13,20 @@ import (
 )
 
 type Event struct {
-	ID           string         `json:"id"`
-	OccurredAt   time.Time      `json:"occurred_at"`
-	RequestID    string         `json:"request_id"`
-	ActorType    string         `json:"actor_type"`
-	ActorID      *string        `json:"actor_id"`
-	Action       string         `json:"action"`
-	ResourceType string         `json:"resource_type"`
-	ResourceID   *string        `json:"resource_id"`
-	Result       string         `json:"result"`
-	IP           string         `json:"ip"`
-	UserAgent    string         `json:"user_agent"`
-	Changes      map[string]any `json:"changes"`
-	FailureCode  *string        `json:"failure_code"`
+	ID               string         `json:"id"`
+	OccurredAt       time.Time      `json:"occurred_at"`
+	RequestID        string         `json:"request_id"`
+	ActorType        string         `json:"actor_type"`
+	ActorID          *string        `json:"actor_id"`
+	ActorDisplayName *string        `json:"actor_display_name"`
+	Action           string         `json:"action"`
+	ResourceType     string         `json:"resource_type"`
+	ResourceID       *string        `json:"resource_id"`
+	Result           string         `json:"result"`
+	IP               string         `json:"ip"`
+	UserAgent        string         `json:"user_agent"`
+	Changes          map[string]any `json:"changes"`
+	FailureCode      *string        `json:"failure_code"`
 }
 
 type Writer interface {
@@ -52,9 +53,9 @@ func (SQLWriter) Append(ctx context.Context, q database.Querier, event Event) er
 		return fmt.Errorf("编码审计变更摘要: %w", err)
 	}
 	_, err = q.ExecContext(ctx, `INSERT INTO audit_events
-		(id, occurred_at, request_id, actor_type, actor_id, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, event.ID, event.OccurredAt.UTC(), event.RequestID,
-		event.ActorType, event.ActorID, event.Action, event.ResourceType, event.ResourceID, event.Result,
+		(id, occurred_at, request_id, actor_type, actor_id, actor_display_name, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, event.ID, event.OccurredAt.UTC(), event.RequestID,
+		event.ActorType, event.ActorID, event.ActorDisplayName, event.Action, event.ResourceType, event.ResourceID, event.Result,
 		event.IP, event.UserAgent, encoded, event.FailureCode)
 	if err != nil {
 		return fmt.Errorf("追加审计事件: %w", err)
@@ -71,6 +72,12 @@ func validate(event Event) error {
 	}
 	if event.ActorType == "user" && (event.ActorID == nil || *event.ActorID == "") {
 		return errors.New("用户审计事件缺少操作者 ID")
+	}
+	if event.ActorType == "user" && (event.ActorDisplayName == nil || strings.TrimSpace(*event.ActorDisplayName) == "") {
+		return errors.New("用户审计事件缺少操作者名称")
+	}
+	if event.ActorType == "system" && event.ActorDisplayName != nil {
+		return errors.New("系统审计事件不能包含操作者名称")
 	}
 	if !auditCode.MatchString(event.Action) || !auditCode.MatchString(event.ResourceType) {
 		return errors.New("审计动作或资源类型不合法")

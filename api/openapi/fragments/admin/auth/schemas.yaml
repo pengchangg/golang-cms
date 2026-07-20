@@ -18,10 +18,15 @@ $defs:
   SessionResponse:
     type: object
     additionalProperties: false
-    required: [principal, csrf_token, idle_expires_at, expires_at]
+    required: [principal, content_models, csrf_token, idle_expires_at, expires_at]
     properties:
       principal:
         $ref: ../identity/schemas.yaml#/$defs/Principal
+      content_models:
+        type: array
+        description: 当前主体具有至少一项有效模型权限且仍处于活动状态的模型摘要。
+        items:
+          $ref: "#/$defs/SessionModelSummary"
       csrf_token:
         type: string
         minLength: 32
@@ -34,3 +39,11 @@ $defs:
         type: string
         format: date-time
         description: 会话创建后 12 小时的绝对过期时间，不可延长。
+  SessionModelSummary:
+    type: object
+    additionalProperties: false
+    required: [id, key, display_name]
+    properties:
+      id: { type: string, minLength: 1 }
+      key: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+      display_name: { type: string, minLength: 1, maxLength: 120 }

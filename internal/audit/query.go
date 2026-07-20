@@ -39,7 +39,7 @@ func (r *Reader) Get(ctx context.Context, principal Principal, id string) (Event
 	if err := requireAuditView(principal); err != nil {
 		return Event{}, err
 	}
-	return readEvent(r.db.QueryRowContext(ctx, `SELECT id, occurred_at, request_id, actor_type, actor_id, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code FROM audit_events WHERE id=?`, id))
+	return readEvent(r.db.QueryRowContext(ctx, `SELECT id, occurred_at, request_id, actor_type, actor_id, actor_display_name, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code FROM audit_events WHERE id=?`, id))
 }
 func (r *Reader) List(ctx context.Context, principal Principal, filter Filter) (List, error) {
 	if err := requireAuditView(principal); err != nil {
@@ -70,7 +70,7 @@ func (r *Reader) List(ctx context.Context, principal Principal, filter Filter) (
 		args = append(args, cursor.OccurredAt, cursor.OccurredAt, cursor.ID)
 	}
 	args = append(args, filter.Limit+1)
-	rows, err := r.db.QueryContext(ctx, `SELECT id, occurred_at, request_id, actor_type, actor_id, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code FROM audit_events WHERE `+strings.Join(where, " AND ")+` ORDER BY occurred_at DESC, id DESC LIMIT ?`, args...)
+	rows, err := r.db.QueryContext(ctx, `SELECT id, occurred_at, request_id, actor_type, actor_id, actor_display_name, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code FROM audit_events WHERE `+strings.Join(where, " AND ")+` ORDER BY occurred_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
 		return List{}, err
 	}
@@ -120,7 +120,7 @@ func readEvent(row *sql.Row) (Event, error) {
 func scanEvent(row scanner) (Event, error) {
 	var event Event
 	var changes []byte
-	if err := row.Scan(&event.ID, &event.OccurredAt, &event.RequestID, &event.ActorType, &event.ActorID, &event.Action, &event.ResourceType, &event.ResourceID, &event.Result, &event.IP, &event.UserAgent, &changes, &event.FailureCode); err != nil {
+	if err := row.Scan(&event.ID, &event.OccurredAt, &event.RequestID, &event.ActorType, &event.ActorID, &event.ActorDisplayName, &event.Action, &event.ResourceType, &event.ResourceID, &event.Result, &event.IP, &event.UserAgent, &changes, &event.FailureCode); err != nil {
 		return Event{}, err
 	}
 	if err := json.Unmarshal(changes, &event.Changes); err != nil {

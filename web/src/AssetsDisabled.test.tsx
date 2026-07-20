@@ -16,6 +16,7 @@ const session: SessionResponse = {
     system_permissions: ['assets.view', 'transfers.execute', 'transfers.download'],
     model_permissions: [{ model_id: 'mdl_1', permissions: ['content.view', 'content.create'] }],
   },
+  content_models: [{ id: 'mdl_1', key: 'articles', display_name: '文章' }],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-20T10:00:00Z',
   expires_at: '2026-07-20T20:00:00Z',

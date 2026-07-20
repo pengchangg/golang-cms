@@ -132,7 +132,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 			return fmt.Errorf("初始化 OIDC: %w", err)
 		}
 	}
-	authService, err := auth.NewService(auth.NewSQLStore(db, auditWriter), permissionProvider, oidcClient, auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
+	authService, err := auth.NewService(auth.NewSQLStore(db, auditWriter), permissionProvider, integration.AuthModelSummaryProvider{DB: db}, oidcClient, auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
 	if err != nil {
 		return err
 	}
@@ -389,7 +389,7 @@ func runAdmin(username, displayName string, logger *slog.Logger) error {
 	if _, err := migrate.Check(ctx, db, mustMigrations()); err != nil {
 		return err
 	}
-	service, err := auth.NewService(auth.NewSQLStore(db, audit.SQLWriter{}), nil, nil, auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
+	service, err := auth.NewService(auth.NewSQLStore(db, audit.SQLWriter{}), nil, nil, nil, auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
 	if err != nil {
 		return err
 	}

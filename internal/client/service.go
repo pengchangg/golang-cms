@@ -289,6 +289,7 @@ func (s *Service) appendAudit(ctx context.Context, q database.Querier, principal
 		return err
 	}
 	actor := principal.UserID
+	actorName := principal.DisplayName
 	resource := key.ID
 	changes := map[string]any{"id": key.ID, "prefix": key.Prefix, "name": key.Name, "model_ids": key.ModelIDs, "expires_at": key.ExpiresAt}
 	if key.RotatedFromID != nil {
@@ -297,7 +298,7 @@ func (s *Service) appendAudit(ctx context.Context, q database.Querier, principal
 	if key.ReplacedByID != nil {
 		changes["replaced_by_id"] = *key.ReplacedByID
 	}
-	return s.audit.Append(ctx, q, audit.Event{ID: id, OccurredAt: s.now(), RequestID: meta.RequestID, ActorType: "user", ActorID: &actor, Action: action, ResourceType: "api_key", ResourceID: &resource, Result: "success", IP: meta.IP, UserAgent: meta.UserAgent, Changes: changes})
+	return s.audit.Append(ctx, q, audit.Event{ID: id, OccurredAt: s.now(), RequestID: meta.RequestID, ActorType: "user", ActorID: &actor, ActorDisplayName: &actorName, Action: action, ResourceType: "api_key", ResourceID: &resource, Result: "success", IP: meta.IP, UserAgent: meta.UserAgent, Changes: changes})
 }
 
 type apiKeyCursorEnvelope struct {

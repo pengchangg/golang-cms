@@ -90,11 +90,22 @@ type RequestMeta struct {
 	UserAgent string
 }
 
+type SessionModelSummary struct {
+	ID          string `json:"id"`
+	Key         string `json:"key"`
+	DisplayName string `json:"display_name"`
+}
+
+type ModelSummaryProvider interface {
+	ActiveModelSummaries(context.Context, []string) ([]SessionModelSummary, error)
+}
+
 type SessionResponse struct {
-	Principal     identity.Principal `json:"principal"`
-	CSRFToken     string             `json:"csrf_token"`
-	IdleExpiresAt time.Time          `json:"idle_expires_at"`
-	ExpiresAt     time.Time          `json:"expires_at"`
+	Principal     identity.Principal    `json:"principal"`
+	ContentModels []SessionModelSummary `json:"content_models"`
+	CSRFToken     string                `json:"csrf_token"`
+	IdleExpiresAt time.Time             `json:"idle_expires_at"`
+	ExpiresAt     time.Time             `json:"expires_at"`
 }
 
 type sessionResult struct {

@@ -16,6 +16,7 @@ describe('动态内容表单', () => {
     const { rerender } = render(<DynamicContentForm fields={[field('single_line_text')]} content={{}} onChange={onChange} />)
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '标题' } })
     expect(onChange).toHaveBeenCalledWith({ single_line_text: '标题' })
+    expect(screen.getByText(/单行文本/)).toBeVisible()
 
     rerender(<DynamicContentForm fields={[field('rich_text')]} content={{ rich_text: { type: 'doc' } }} onChange={onChange} />)
     expect(screen.getByLabelText('rich_text JSON')).toHaveValue('{\n  "type": "doc"\n}')

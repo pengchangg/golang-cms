@@ -4,13 +4,17 @@ $defs:
   AuditEvent:
     type: object
     additionalProperties: false
-    required: [id, occurred_at, request_id, actor_type, actor_id, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code]
+    required: [id, occurred_at, request_id, actor_type, actor_id, actor_display_name, action, resource_type, resource_id, result, ip, user_agent, changes, failure_code]
     properties:
       id: { type: string, minLength: 1 }
       occurred_at: { type: string, format: date-time }
       request_id: { type: string, minLength: 1 }
       actor_type: { type: string, enum: [user, system] }
       actor_id: { type: [string, "null"] }
+      actor_display_name:
+        type: [string, "null"]
+        maxLength: 120
+        description: 用户事件发生时的显示名称快照；系统事件为 null。
       action: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
       resource_type: { type: string, pattern: "^[a-z][a-z0-9_]*$" }
       resource_id: { type: [string, "null"] }

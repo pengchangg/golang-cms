@@ -48,6 +48,11 @@ button, a { touch-action: manipulation; }
 .brand span { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 4px; color: #eff7f2; background: var(--green); font-family: "Songti SC", serif; }
 .app-sider .ant-menu { background: transparent; border: 0; }
 .app-sider .ant-menu-item { border-radius: 4px; }
+.app-sider .ant-menu-item:has(.model-menu-label), .mobile-navigation .ant-menu-item:has(.model-menu-label) { height: 54px; line-height: normal; }
+.model-menu-label { display: grid; min-width: 0; gap: 3px; padding-block: 7px; line-height: 1.15; }
+.model-menu-label strong, .model-menu-label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-menu-label strong { font-weight: 600; }
+.model-menu-label small { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .shell-phase { position: absolute; bottom: 28px; left: 26px; color: var(--muted); font-size: 12px; }
 .app-shell > .ant-layout { margin-left: 240px; background: var(--canvas); }
 .app-header { display: flex; height: 72px; align-items: center; justify-content: space-between; padding: 0 clamp(24px, 4vw, 56px); border-bottom: 1px solid var(--line); background: rgb(244 243 238 / 96%); }
@@ -90,6 +95,8 @@ button, a { touch-action: manipulation; }
 .floating-action { margin-top: 24px; }
 .field-canvas { display: grid; max-width: 1000px; gap: 12px; }
 .field-card { border-color: var(--line); background: var(--paper); }
+.field-type-option { display: grid; gap: 2px; padding-block: 3px; }
+.field-type-option span { color: var(--muted); font-size: 12px; }
 .field-children { display: grid; gap: 8px; margin: 16px 0 0 20px; padding-left: 16px; border-left: 2px solid rgb(37 107 85 / 20%); }
 .dynamic-form { display: grid; max-width: 900px; gap: 18px; }
 .dynamic-field { display: grid; gap: 8px; padding: 20px; border-top: 1px solid var(--line); background: rgb(255 254 249 / 45%); }
@@ -98,6 +105,9 @@ button, a { touch-action: manipulation; }
 .dynamic-field .dynamic-form { padding: 8px 0 0 16px; border-left: 2px solid rgb(37 107 85 / 20%); }
 .audit-detail { max-width: 900px; margin-top: 32px; }
 .audit-detail pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.audit-primary { display: grid; gap: 3px; }
+.audit-primary code { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.audit-action-filter { min-width: 280px; }
 .content-filter-panel { max-width: 1100px; margin-bottom: 14px; padding: 18px; border-block: 1px solid var(--line); background: rgb(255 254 249 / 55%); }
 .content-filter-panel .ant-select, .content-filter-panel .ant-input { min-width: 150px; }
 .result-count { display: block; margin-bottom: 18px; }

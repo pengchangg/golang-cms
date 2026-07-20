@@ -41,9 +41,13 @@ export default function AppShell() {
 
   const { session } = auth
   const { principal } = session
+  const modelByID = new Map(session.content_models.map((model) => [model.id, model]))
   const contentItems = principal.model_permissions
     .filter((grant) => grant.permissions.includes('content.view'))
-    .map((grant) => ({ key: `content-${grant.model_id}`, label: `内容 · ${grant.model_id}`, path: `/content/${grant.model_id}` }))
+    .flatMap((grant) => {
+      const model = modelByID.get(grant.model_id)
+      return model ? [{ key: `content-${grant.model_id}`, label: <span className="model-menu-label" title={`${model.display_name} · ${model.key}`}><strong>{model.display_name}</strong><small>{model.key}</small></span>, textLabel: model.display_name, path: `/content/${grant.model_id}` }] : []
+    })
   const items = [...visibleNavigation(navigation, principal), ...contentItems]
   const selected = [...items].reverse().find((item) => item.path === '/' ? location.pathname === '/' : location.pathname.startsWith(item.path)) ?? items[0]
 
@@ -89,7 +93,7 @@ export default function AppShell() {
       <Layout>
         <Header className="app-header">
           <Button className="menu-trigger" type="text" icon={<MenuOutlined />} aria-label="打开导航" onClick={() => setDrawerOpen(true)} />
-          <Typography.Text className="section-name">{selected?.label ?? '内容管理系统'}</Typography.Text>
+          <Typography.Text className="section-name">{selected?.textLabel ?? selected?.label ?? '内容管理系统'}</Typography.Text>
           <Dropdown menu={{ items: [{ key: 'logout', label: '退出登录', icon: <LogoutOutlined />, danger: true }], onClick: logout }}>
             <Button className="user-menu" type="text" loading={loggingOut}><Avatar size={30} icon={<UserOutlined />} /><span>{principal.display_name}</span></Button>
           </Dropdown>
@@ -110,7 +114,7 @@ export default function AppShell() {
               <Route path="assets" element={ASSETS_ENABLED ? systemRoute('assets.view', <AssetsPage principal={principal} />) : <Navigate to="/" replace />} />
               <Route path="jobs" element={ASSETS_ENABLED ? systemRoute('transfers.execute', <JobsPage />) : <Navigate to="/" replace />} />
               <Route path="jobs/:jobId" element={ASSETS_ENABLED ? systemRoute('transfers.execute', <JobDetailPage principal={principal} />) : <Navigate to="/" replace />} />
-              <Route path="audit" element={systemRoute('audit.view', <AuditPage />)} />
+              <Route path="audit" element={systemRoute('audit.view', <AuditPage principal={principal} />)} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

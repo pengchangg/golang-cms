@@ -6,6 +6,7 @@ import type { SessionResponse } from './types'
 
 const session: SessionResponse = {
   principal: { user_id: 'usr_test', display_name: '测试用户', email: null, auth_method: 'local', system_permissions: [], model_permissions: [] },
+  content_models: [],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-18T10:00:00Z',
   expires_at: '2026-07-18T20:00:00Z',

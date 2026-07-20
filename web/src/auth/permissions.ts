@@ -1,8 +1,10 @@
 import type { ModelPermission, Principal, SystemPermission } from '../api/types'
+import type { ReactNode } from 'react'
 
 export interface NavigationItem {
   key: string
-  label: string
+  label: ReactNode
+  textLabel?: string
   path: string
   permission?: SystemPermission
 }

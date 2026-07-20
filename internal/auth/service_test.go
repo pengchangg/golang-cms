@@ -23,6 +23,18 @@ func (fakePermissions) Permissions(context.Context, string) ([]string, []identit
 	return []string{"models.view", "models.view"}, []identity.ModelPermissions{{ModelID: "b", Permissions: []string{"content.view"}}, {ModelID: "a", Permissions: []string{"content.update", "content.update"}}}, nil
 }
 
+type fakeModels struct{}
+
+func (fakeModels) ActiveModelSummaries(_ context.Context, ids []string) ([]SessionModelSummary, error) {
+	result := []SessionModelSummary{}
+	for _, id := range ids {
+		if id == "a" {
+			result = append(result, SessionModelSummary{ID: "a", Key: "articles", DisplayName: "文章"})
+		}
+	}
+	return result, nil
+}
+
 type fakeOIDC struct{ nonce, verifier, challenge string }
 
 func (f *fakeOIDC) AuthorizationURL(state, nonce, challenge string) string {
@@ -133,7 +145,7 @@ func (m *memoryStore) UpsertEmergencyAdmin(context.Context, string, string, stri
 
 func testService(t *testing.T, store *memoryStore, oidcClient OIDCClient, clock *fakeClock) *Service {
 	t.Helper()
-	service, err := NewService(store, fakePermissions{}, oidcClient, clock, bytes.NewReader(bytes.Repeat([]byte{7}, 4096)), "01234567890123456789012345678901")
+	service, err := NewService(store, fakePermissions{}, fakeModels{}, oidcClient, clock, bytes.NewReader(bytes.Repeat([]byte{7}, 4096)), "01234567890123456789012345678901")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +171,9 @@ func TestLocalLoginSessionTimeoutAndDisabledUser(t *testing.T) {
 	}
 	if got := result.Response.Principal.SystemPermissions; len(got) != 1 || got[0] != "models.view" {
 		t.Fatalf("权限未规范化: %v", got)
+	}
+	if len(result.Response.ContentModels) != 1 || result.Response.ContentModels[0].DisplayName != "文章" {
+		t.Fatalf("会话模型摘要错误: %v", result.Response.ContentModels)
 	}
 	clock.now = clock.now.Add(10 * time.Minute)
 	response, err := service.CurrentSession(context.Background(), result.Raw)

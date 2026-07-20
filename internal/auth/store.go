@@ -125,6 +125,7 @@ func (s *SQLStore) CompleteOIDCLogin(ctx context.Context, subject OIDCIdentity, 
 			return err
 		}
 		event.ActorID = &result.ID
+		event.ActorDisplayName = &result.DisplayName
 		return s.audit.Append(ctx, q, event)
 	})
 	return result, err

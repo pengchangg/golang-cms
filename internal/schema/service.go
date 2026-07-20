@@ -536,7 +536,8 @@ func (s *Service) appendAudit(ctx context.Context, q database.Querier, principal
 		return err
 	}
 	actorID := principal.UserID
-	return s.audit.Append(ctx, q, audit.Event{ID: eventID, OccurredAt: s.now(), RequestID: meta.RequestID, ActorType: "user", ActorID: &actorID, Action: action, ResourceType: resourceType, ResourceID: &resourceID, Result: "success", IP: meta.IP, UserAgent: meta.UserAgent, Changes: changes})
+	actorName := principal.DisplayName
+	return s.audit.Append(ctx, q, audit.Event{ID: eventID, OccurredAt: s.now(), RequestID: meta.RequestID, ActorType: "user", ActorID: &actorID, ActorDisplayName: &actorName, Action: action, ResourceType: resourceType, ResourceID: &resourceID, Result: "success", IP: meta.IP, UserAgent: meta.UserAgent, Changes: changes})
 }
 func randomID(prefix string) (string, error) {
 	var value [16]byte

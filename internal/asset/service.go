@@ -110,7 +110,7 @@ func (s *Service) CreateUpload(ctx context.Context, principal identity.Principal
 		if err := s.repository.Create(ctx, q, value); err != nil {
 			return err
 		}
-		return s.appendAudit(ctx, q, principal.UserID, meta, "asset_upload_created", id, map[string]any{"filename": filename, "mime_type": mimeType, "size": input.Size})
+		return s.appendAudit(ctx, q, principal, meta, "asset_upload_created", id, map[string]any{"filename": filename, "mime_type": mimeType, "size": input.Size})
 	})
 	if err != nil {
 		return Upload{}, err
@@ -176,7 +176,7 @@ func (s *Service) Confirm(ctx context.Context, principal identity.Principal, met
 		}
 		locked.Status, locked.ETag, locked.ConfirmedAt = StatusAvailable, &metadata.ETag, &confirmedAt
 		value = locked
-		return s.appendAudit(ctx, q, principal.UserID, meta, "asset_upload_confirmed", id, map[string]any{"status": map[string]any{"from": StatusQuarantined, "to": StatusAvailable}, "size": value.Size, "mime_type": value.MimeType, "sha256": value.SHA256, "etag": metadata.ETag})
+		return s.appendAudit(ctx, q, principal, meta, "asset_upload_confirmed", id, map[string]any{"status": map[string]any{"from": StatusQuarantined, "to": StatusAvailable}, "size": value.Size, "mime_type": value.MimeType, "sha256": value.SHA256, "etag": metadata.ETag})
 	})
 	return value, err
 }
@@ -235,7 +235,7 @@ func (s *Service) AdminDownload(ctx context.Context, principal identity.Principa
 		return SignedRequest{}, storeError(err)
 	}
 	err = s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		return s.appendAudit(ctx, q, principal.UserID, meta, "asset_downloaded", id, map[string]any{"status": value.Status})
+		return s.appendAudit(ctx, q, principal, meta, "asset_downloaded", id, map[string]any{"status": value.Status})
 	})
 	if err != nil {
 		return SignedRequest{}, err
@@ -287,7 +287,7 @@ func (s *Service) Archive(ctx context.Context, principal identity.Principal, met
 		if err := s.repository.Archive(ctx, q, id, s.now()); err != nil {
 			return err
 		}
-		return s.appendAudit(ctx, q, principal.UserID, meta, "asset_archived", id, map[string]any{"status": map[string]any{"from": StatusAvailable, "to": StatusArchived}})
+		return s.appendAudit(ctx, q, principal, meta, "asset_archived", id, map[string]any{"status": map[string]any{"from": StatusAvailable, "to": StatusArchived}})
 	})
 }
 
@@ -355,12 +355,13 @@ func (s *Service) identifiers() (string, string, error) {
 	return "ast_" + hex.EncodeToString(id[:]), hex.EncodeToString(suffix[:]), nil
 }
 
-func (s *Service) appendAudit(ctx context.Context, q database.Querier, actorID string, meta RequestMeta, action, id string, changes map[string]any) error {
+func (s *Service) appendAudit(ctx context.Context, q database.Querier, principal identity.Principal, meta RequestMeta, action, id string, changes map[string]any) error {
 	var eventID [16]byte
 	if err := s.random(eventID[:]); err != nil {
 		return err
 	}
-	return s.audit.Append(ctx, q, audit.Event{ID: "evt_" + hex.EncodeToString(eventID[:]), OccurredAt: s.now(), RequestID: meta.RequestID, ActorType: "user", ActorID: &actorID, Action: action, ResourceType: "asset", ResourceID: &id, Result: "success", IP: meta.IP, UserAgent: meta.UserAgent, Changes: changes})
+	actorID, actorName := principal.UserID, principal.DisplayName
+	return s.audit.Append(ctx, q, audit.Event{ID: "evt_" + hex.EncodeToString(eventID[:]), OccurredAt: s.now(), RequestID: meta.RequestID, ActorType: "user", ActorID: &actorID, ActorDisplayName: &actorName, Action: action, ResourceType: "asset", ResourceID: &id, Result: "success", IP: meta.IP, UserAgent: meta.UserAgent, Changes: changes})
 }
 
 func normalizeMime(value string) (string, error) {

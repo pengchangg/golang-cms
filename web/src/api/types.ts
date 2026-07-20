@@ -42,6 +42,7 @@ export interface Principal {
 
 export interface SessionResponse {
   principal: Principal
+  content_models: Array<{ id: string; key: string; display_name: string }>
   csrf_token: string
   idle_expires_at: string
   expires_at: string
@@ -145,7 +146,7 @@ export interface CreateAPIKeyRequest { name: string; model_ids: string[]; expire
 export interface RotateAPIKeyRequest { name?: string; model_ids?: string[]; expires_at?: string | null }
 export interface AuditEvent {
   id: string; occurred_at: string; request_id: string; actor_type: 'user' | 'system'
-  actor_id: string | null; action: string; resource_type: string; resource_id: string | null
+  actor_id: string | null; actor_display_name: string | null; action: string; resource_type: string; resource_id: string | null
   result: 'success' | 'failure'; ip: string; user_agent: string
   changes: Record<string, unknown>; failure_code: string | null
 }

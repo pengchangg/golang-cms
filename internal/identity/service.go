@@ -120,7 +120,8 @@ func (s *UserService) SetStatus(ctx context.Context, principal Principal, meta R
 			return err
 		}
 		actorID, resourceID := principal.UserID, id
-		if err := s.audit.Append(ctx, q, audit.Event{ID: eventID, OccurredAt: s.now(), RequestID: meta.RequestID, ActorType: "user", ActorID: &actorID, Action: "user_status_updated", ResourceType: "user", ResourceID: &resourceID, Result: "success", IP: meta.IP, UserAgent: meta.UserAgent, Changes: map[string]any{"status": map[string]any{"from": user.Status, "to": status}}}); err != nil {
+		actorName := principal.DisplayName
+		if err := s.audit.Append(ctx, q, audit.Event{ID: eventID, OccurredAt: s.now(), RequestID: meta.RequestID, ActorType: "user", ActorID: &actorID, ActorDisplayName: &actorName, Action: "user_status_updated", ResourceType: "user", ResourceID: &resourceID, Result: "success", IP: meta.IP, UserAgent: meta.UserAgent, Changes: map[string]any{"status": map[string]any{"from": user.Status, "to": status}}}); err != nil {
 			return err
 		}
 		result, err = s.repository.Get(ctx, q, id, false)

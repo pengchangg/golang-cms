@@ -8,6 +8,7 @@ import type { SessionResponse } from './api/types'
 
 const session: SessionResponse = {
   principal: { user_id: 'usr_accessible', display_name: '林岚', email: 'linlan@example.com', auth_method: 'oidc', system_permissions: [], model_permissions: [] },
+  content_models: [],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-18T10:00:00Z',
   expires_at: '2026-07-18T20:00:00Z',
@@ -40,6 +41,19 @@ describe('认证界面', () => {
     const trigger = screen.getByRole('button', { name: '打开导航' })
     await userEvent.click(trigger)
     await waitFor(() => expect(screen.getByRole('navigation', { name: '移动端主导航' })).toBeVisible())
+  })
+
+  it('内容导航展示模型名称和稳定标识而不是模型 ID', async () => {
+    const modelSession: SessionResponse = {
+      ...session,
+      principal: { ...session.principal, model_permissions: [{ model_id: 'mdl_articles', permissions: ['content.view'] }] },
+      content_models: [{ id: 'mdl_articles', key: 'articles', display_name: '内部文章' }],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(modelSession)))
+    render(<App />)
+    expect(await screen.findByText('内部文章')).toBeVisible()
+    expect(screen.getByText('articles')).toBeVisible()
+    expect(screen.queryByText(/内容 · mdl_articles/)).not.toBeInTheDocument()
   })
 
   it.each([

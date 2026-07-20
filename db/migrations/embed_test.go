@@ -16,3 +16,16 @@ func TestContentFieldValuesBackfillIsSingleStatement(t *testing.T) {
 		t.Fatal("回填迁移必须且只能包含一个 SQL statement")
 	}
 }
+
+func TestAuditActorDisplayNameMigrationsAreSingleStatements(t *testing.T) {
+	for _, name := range []string{"000034_audit_actor_display_name.up.sql", "000035_audit_actor_display_name_backfill.up.sql"} {
+		contents, err := Files.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sql := strings.TrimSpace(string(contents))
+		if !strings.HasSuffix(sql, ";") || strings.Count(sql, ";") != 1 {
+			t.Fatalf("%s 必须且只能包含一个 SQL statement", name)
+		}
+	}
+}

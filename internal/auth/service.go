@@ -21,6 +21,7 @@ import (
 type Service struct {
 	store       Store
 	permissions identity.PermissionProvider
+	models      ModelSummaryProvider
 	oidc        OIDCClient
 	clock       Clock
 	random      io.Reader
@@ -30,12 +31,15 @@ type Service struct {
 	oidcIP      *rateLimiter
 }
 
-func NewService(store Store, permissions identity.PermissionProvider, oidcClient OIDCClient, clock Clock, random io.Reader, sessionSecret string) (*Service, error) {
+func NewService(store Store, permissions identity.PermissionProvider, models ModelSummaryProvider, oidcClient OIDCClient, clock Clock, random io.Reader, sessionSecret string) (*Service, error) {
 	if store == nil || clock == nil || random == nil || len(sessionSecret) < 32 {
 		return nil, errors.New("认证服务依赖或会话密钥不合法")
 	}
+	if permissions != nil && models == nil {
+		return nil, errors.New("认证服务缺少模型摘要提供者")
+	}
 	return &Service{
-		store: store, permissions: permissions, oidc: oidcClient, clock: clock, random: random, secret: []byte(sessionSecret),
+		store: store, permissions: permissions, models: models, oidc: oidcClient, clock: clock, random: random, secret: []byte(sessionSecret),
 		localIP: newRateLimiter(20, 4096, 5*time.Minute), localUser: newRateLimiter(10, 4096, 5*time.Minute),
 		oidcIP: newRateLimiter(30, 4096, 5*time.Minute),
 	}, nil
@@ -113,7 +117,7 @@ func (s *Service) CompleteOIDC(ctx context.Context, code, state, binding string,
 		return sessionResult{}, "", err
 	}
 	expires := now.Add(AbsoluteExpiry)
-	event, err := s.event("auth_oidc_login_succeeded", "success", nil, &userID, meta)
+	event, err := s.event("auth_oidc_login_succeeded", "success", nil, &userID, &claims.DisplayName, meta)
 	if err != nil {
 		return sessionResult{}, "", err
 	}
@@ -128,11 +132,11 @@ func (s *Service) CompleteOIDC(ctx context.Context, code, state, binding string,
 		}
 		return sessionResult{}, "", fmt.Errorf("完成 OIDC 登录: %w", err)
 	}
-	system, models, err := s.permissionSet(ctx, user.ID)
+	principal, models, err := s.principalWithModels(ctx, user.ID, user.DisplayName, user.Email, identity.AuthMethodOIDC)
 	if err != nil {
 		return sessionResult{}, "", fmt.Errorf("读取当前权限: %w", err)
 	}
-	return sessionResult{Raw: raw, Response: SessionResponse{Principal: identity.NewPrincipal(user.ID, user.DisplayName, user.Email, identity.AuthMethodOIDC, system, models), CSRFToken: s.csrf(raw), IdleExpiresAt: created.IdleExpiresAt, ExpiresAt: expires}}, loginState.ReturnTo, nil
+	return sessionResult{Raw: raw, Response: SessionResponse{Principal: principal, ContentModels: models, CSRFToken: s.csrf(raw), IdleExpiresAt: created.IdleExpiresAt, ExpiresAt: expires}}, loginState.ReturnTo, nil
 }
 
 func (s *Service) RejectOIDCCallback(ctx context.Context, state, binding string, meta RequestMeta) error {
@@ -210,13 +214,12 @@ func (s *Service) CurrentSession(ctx context.Context, raw string) (SessionRespon
 	if err := s.store.TouchSession(ctx, hash, now, idle); err != nil {
 		return SessionResponse{}, sessionInvalid()
 	}
-	system, models, err := s.permissionSet(ctx, session.UserID)
+	principal, models, err := s.principalWithModels(ctx, session.UserID, session.DisplayName, session.Email, session.AuthMethod)
 	if err != nil {
 		return SessionResponse{}, fmt.Errorf("读取当前权限: %w", err)
 	}
 	return SessionResponse{
-		Principal: identity.NewPrincipal(session.UserID, session.DisplayName, session.Email, session.AuthMethod, system, models),
-		CSRFToken: s.csrf(raw), IdleExpiresAt: idle, ExpiresAt: session.ExpiresAt.UTC(),
+		Principal: principal, ContentModels: models, CSRFToken: s.csrf(raw), IdleExpiresAt: idle, ExpiresAt: session.ExpiresAt.UTC(),
 	}, nil
 }
 
@@ -227,7 +230,7 @@ func (s *Service) Logout(ctx context.Context, raw string, meta RequestMeta) erro
 	if err != nil || !session.Enabled || !now.Before(session.IdleExpiresAt) || !now.Before(session.ExpiresAt) {
 		return sessionInvalid()
 	}
-	event, err := s.event("auth_logout_succeeded", "success", nil, &session.UserID, meta)
+	event, err := s.event("auth_logout_succeeded", "success", nil, &session.UserID, &session.DisplayName, meta)
 	if err != nil {
 		return err
 	}
@@ -259,7 +262,7 @@ func (s *Service) ResetEmergencyAdmin(ctx context.Context, userID, username, dis
 			return err
 		}
 	}
-	event, err := s.event("auth_local_password_reset", "success", nil, nil, meta)
+	event, err := s.event("auth_local_password_reset", "success", nil, nil, nil, meta)
 	if err != nil {
 		return err
 	}
@@ -267,7 +270,7 @@ func (s *Service) ResetEmergencyAdmin(ctx context.Context, userID, username, dis
 }
 
 func (s *Service) createSession(ctx context.Context, user User, method identity.AuthMethod, action string, meta RequestMeta) (sessionResult, error) {
-	system, models, err := s.permissionSet(ctx, user.ID)
+	principal, models, err := s.principalWithModels(ctx, user.ID, user.DisplayName, user.Email, method)
 	if err != nil {
 		return sessionResult{}, fmt.Errorf("读取当前权限: %w", err)
 	}
@@ -277,7 +280,7 @@ func (s *Service) createSession(ctx context.Context, user User, method identity.
 	}
 	now := s.clock.Now().UTC()
 	expires := now.Add(AbsoluteExpiry)
-	event, err := s.event(action, "success", nil, &user.ID, meta)
+	event, err := s.event(action, "success", nil, &user.ID, &user.DisplayName, meta)
 	if err != nil {
 		return sessionResult{}, err
 	}
@@ -285,7 +288,30 @@ func (s *Service) createSession(ctx context.Context, user User, method identity.
 	if err := s.store.CreateSession(ctx, created, event); err != nil {
 		return sessionResult{}, fmt.Errorf("创建认证会话: %w", err)
 	}
-	return sessionResult{Raw: raw, Response: SessionResponse{Principal: identity.NewPrincipal(user.ID, user.DisplayName, user.Email, method, system, models), CSRFToken: s.csrf(raw), IdleExpiresAt: created.IdleExpiresAt, ExpiresAt: expires}}, nil
+	return sessionResult{Raw: raw, Response: SessionResponse{Principal: principal, ContentModels: models, CSRFToken: s.csrf(raw), IdleExpiresAt: created.IdleExpiresAt, ExpiresAt: expires}}, nil
+}
+
+func (s *Service) principalWithModels(ctx context.Context, userID, displayName string, email *string, method identity.AuthMethod) (identity.Principal, []SessionModelSummary, error) {
+	system, grants, err := s.permissionSet(ctx, userID)
+	if err != nil {
+		return identity.Principal{}, nil, err
+	}
+	principal := identity.NewPrincipal(userID, displayName, email, method, system, grants)
+	ids := make([]string, len(principal.ModelPermissions))
+	for i, grant := range principal.ModelPermissions {
+		ids[i] = grant.ModelID
+	}
+	if s.models == nil {
+		return principal, []SessionModelSummary{}, nil
+	}
+	models, err := s.models.ActiveModelSummaries(ctx, ids)
+	if err != nil {
+		return identity.Principal{}, nil, err
+	}
+	if models == nil {
+		models = []SessionModelSummary{}
+	}
+	return principal, models, nil
 }
 
 func (s *Service) permissionSet(ctx context.Context, userID string) ([]string, []identity.ModelPermissions, error) {
@@ -296,7 +322,7 @@ func (s *Service) permissionSet(ctx context.Context, userID string) ([]string, [
 }
 
 func (s *Service) auditFailure(ctx context.Context, action, code string, meta RequestMeta) error {
-	event, err := s.event(action, "failure", &code, nil, meta)
+	event, err := s.event(action, "failure", &code, nil, nil, meta)
 	if err != nil {
 		return fmt.Errorf("创建失败审计事件: %w", err)
 	}
@@ -308,7 +334,7 @@ func (s *Service) auditFailure(ctx context.Context, action, code string, meta Re
 	return nil
 }
 
-func (s *Service) event(action, result string, failure *string, actorID *string, meta RequestMeta) (audit.Event, error) {
+func (s *Service) event(action, result string, failure, actorID, actorDisplayName *string, meta RequestMeta) (audit.Event, error) {
 	id, err := s.identifier("evt", 18)
 	if err != nil {
 		return audit.Event{}, err
@@ -317,7 +343,7 @@ func (s *Service) event(action, result string, failure *string, actorID *string,
 	if actorID != nil {
 		actorType = "user"
 	}
-	return audit.Event{ID: id, OccurredAt: s.clock.Now().UTC(), RequestID: meta.RequestID, ActorType: actorType, ActorID: actorID, Action: action, ResourceType: "authentication", Result: result, IP: meta.IP, UserAgent: meta.UserAgent, Changes: map[string]any{}, FailureCode: failure}, nil
+	return audit.Event{ID: id, OccurredAt: s.clock.Now().UTC(), RequestID: meta.RequestID, ActorType: actorType, ActorID: actorID, ActorDisplayName: actorDisplayName, Action: action, ResourceType: "authentication", Result: result, IP: meta.IP, UserAgent: meta.UserAgent, Changes: map[string]any{}, FailureCode: failure}, nil
 }
 
 func (s *Service) token(size int) (string, error) {

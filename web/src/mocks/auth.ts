@@ -7,6 +7,7 @@ const mockSession = {
     system_permissions: ['users.view', 'users.manage', 'roles.view', 'roles.manage', 'models.view', 'models.create', 'models.update', 'api_keys.view', 'api_keys.create', 'api_keys.revoke', 'audit.view'],
     model_permissions: [{ model_id: 'mdl_articles', permissions: ['content.view', 'content.create', 'content.update', 'content.submit', 'content.review', 'content.publish', 'content.unpublish'] }],
   },
+  content_models: [{ id: 'mdl_articles', key: 'articles', display_name: '内部文章' }],
   csrf_token: 'dev-only-csrf-token-0000000000000000',
   idle_expires_at: '2099-01-01T00:00:00Z',
   expires_at: '2099-01-01T12:00:00Z',
