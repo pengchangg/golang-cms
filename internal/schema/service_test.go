@@ -153,6 +153,42 @@ func TestRelationLockInfrastructureErrorIsNotConflict(t *testing.T) {
 	}
 }
 
+func TestCreateFieldRejectsSelfRelation(t *testing.T) {
+	target := "mdl_1"
+	_, err := testService(seededRepository(), &transactionState{}).CreateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", fieldInput(FieldTypeSingleRelation, `null`, FieldConstraints{TargetModelID: &target}))
+	assertErrorCode(t, err, "target_model_self_relation")
+}
+
+func TestUpdateFieldCanPreserveExistingSelfRelation(t *testing.T) {
+	repository := seededRepository()
+	target := "mdl_1"
+	field := repository.fields["fld_1"]
+	field.Type = FieldTypeSingleRelation
+	field.Constraints.TargetModelID = &target
+	repository.fields[field.ID] = field
+	displayName := "保留的历史自关联"
+	result, err := testService(repository, &transactionState{}).UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", field.ID, ContentFieldPatch{DisplayName: &displayName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DisplayName != displayName {
+		t.Fatalf("display name = %q", result.DisplayName)
+	}
+}
+
+func TestUpdateFieldCanPreserveExistingSelfRelationWithConstraintsPatch(t *testing.T) {
+	repository := seededRepository()
+	target := "mdl_1"
+	field := repository.fields["fld_1"]
+	field.Type = FieldTypeSingleRelation
+	field.Constraints.TargetModelID = &target
+	repository.fields[field.ID] = field
+	constraints := field.Constraints
+	if _, err := testService(repository, &transactionState{}).UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", field.ID, ContentFieldPatch{Constraints: &constraints}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUpdateFieldResponseIncludesArchivedChildren(t *testing.T) {
 	repository := seededRepository()
 	parent := repository.fields["fld_1"]

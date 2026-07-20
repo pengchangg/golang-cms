@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { authStore } from '../auth/store'
-import { ApiError, api, oidcStartUrl, safeReturnTo } from './client'
+import { ApiError, api, oidcStartUrl, safeReturnTo, uploadAssetFile } from './client'
 import type { SessionResponse } from './types'
 
 const session: SessionResponse = {
@@ -28,6 +28,33 @@ describe('API Client', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/admin/v1/auth/logout', expect.objectContaining({ credentials: 'same-origin', method: 'POST' }))
     const headers = fetchMock.mock.calls[0][1].headers as Headers
     expect(headers.get('X-CSRF-Token')).toBe(session.csrf_token)
+  })
+
+  it('素材上传仅在 OSS PUT 成功后确认并返回可用素材', async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], 'cover.png', { type: 'image/png' })
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1, 2, 3]).buffer })
+    const asset = { id: 'ast_1', filename: file.name, mime_type: file.type, size: file.size, sha256: 'a'.repeat(64), etag: 'etag', status: 'available' as const, created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: '2026-07-20T08:00:00Z', archived_at: null }
+    const create = vi.spyOn(api, 'createAssetUpload').mockResolvedValue({ asset: { ...asset, status: 'quarantined', etag: null, confirmed_at: null }, upload: { method: 'PUT', url: 'https://bucket.example.com/upload', headers: { 'Content-Type': file.type }, expires_at: '2026-07-20T08:15:00Z' } })
+    const confirm = vi.spyOn(api, 'confirmAssetUpload').mockResolvedValue(asset)
+    const put = vi.fn().mockResolvedValue(new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', put)
+
+    await expect(uploadAssetFile(file)).resolves.toEqual(asset)
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ filename: file.name, mime_type: file.type, size: file.size, sha256: expect.stringMatching(/^[a-f0-9]{64}$/) }))
+    expect(put).toHaveBeenCalledWith('https://bucket.example.com/upload', expect.objectContaining({ method: 'PUT', body: file }))
+    expect(confirm).toHaveBeenCalledWith('ast_1')
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(put.mock.invocationCallOrder[0])
+    expect(put.mock.invocationCallOrder[0]).toBeLessThan(confirm.mock.invocationCallOrder[0])
+  })
+
+  it('素材确认未进入可用状态时不返回可选择素材', async () => {
+    const file = new File([new Uint8Array([1])], 'cover.png', { type: 'image/png' })
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1]).buffer })
+    const quarantined = { id: 'ast_1', filename: file.name, mime_type: file.type, size: file.size, sha256: 'a'.repeat(64), etag: null, status: 'quarantined' as const, created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: null, archived_at: null }
+    vi.spyOn(api, 'createAssetUpload').mockResolvedValue({ asset: quarantined, upload: { method: 'PUT', url: 'https://bucket.example.com/upload', headers: {}, expires_at: '2026-07-20T08:15:00Z' } })
+    vi.spyOn(api, 'confirmAssetUpload').mockResolvedValue(quarantined)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))
+    await expect(uploadAssetFile(file)).rejects.toThrow('确认后仍不可用')
   })
 
   it('会话失效时清空认证状态并保留 request_id', async () => {

@@ -167,6 +167,15 @@ export async function putSignedUpload(upload: { method: 'PUT'; url: string; head
   if (!response.ok) throw new Error(`对象存储上传失败（${response.status}）`)
 }
 
+export async function uploadAssetFile(file: File) {
+  const sha256 = await hashUploadFile(file)
+  const signed = await api.createAssetUpload({ filename: file.name, mime_type: file.type, size: file.size, sha256 })
+  await putSignedUpload(signed.upload, file)
+  const asset = await api.confirmAssetUpload(signed.asset.id)
+  if (asset.status !== 'available') throw new Error('素材确认后仍不可用')
+  return asset
+}
+
 export async function hashUploadFile(file: File) {
   if (file.size > ASSET_MAX_BYTES) {
     throw new Error(`文件“${file.name}”超过 ${ASSET_MAX_LABEL} 上限，已拒绝读取。浏览器 SHA-256 不支持流式计算，请选择更小的文件。`)

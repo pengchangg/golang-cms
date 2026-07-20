@@ -2,14 +2,14 @@
 
 ## 结构与入口
 
-- `cmd/cms/main.go` 是唯一后端组合根，提供 `serve`、`migrate`、`version` 和 `admin reset-password`；管理 API 位于 `/api/admin/v1`，客户端内容 API 位于 `/api/content/v1`，其余 GET/HEAD 路径由同一进程回退到 React SPA。
+- `cmd/cms/main.go` 是唯一后端组合根，提供 `serve`、`migrate`、`version`、`admin ensure` 和 `admin reset-password`；管理 API 位于 `/api/admin/v1`，客户端内容 API 位于 `/api/content/v1`，其余 GET/HEAD 路径由同一进程回退到 React SPA。
 - `internal/{auth,identity,permission,schema,content,client,asset,transfer}` 是业务模块；跨模块适配集中在 `internal/integration`，通用基础设施在 `internal/platform`。新增业务路由时要在模块、组合根及 OpenAPI 中同步。
 - `web/` 有自己的 `go.mod`，用于阻止根模块的 `go test ./...` 遍历 Node 工程；前端命令必须在 `web/` 运行。
 - 前端只通过 `web/src/api/client.ts` 调用同源 `/api/admin/v1`，非安全方法由该客户端自动附加会话中的 `X-CSRF-Token`，不要在页面中另写请求逻辑。
 
 ## 验证命令
 
-- 本地快速启动使用 `make dev`：它通过 Podman 在 `127.0.0.1:13306` 创建持久化 MySQL 8.0，关闭 OIDC/OSS，构建前端、迁移、重置本地管理员后在 `http://localhost:18080` 启动；数据库 `DEV_DB_*` 变量只在首次创建容器时生效，修改前须运行 `make dev-clean`。`make dev-clean` 会删除本地数据库卷。
+- 本地快速启动使用 `make dev`：它通过 Podman 在 `127.0.0.1:13306` 创建持久化 MySQL 8.0，关闭 OIDC，默认从被 Git 忽略的 `.env.assets.local` 启用 OSS，构建前端、迁移、仅在缺失时初始化本地管理员后在 `http://localhost:18080` 启动；无 OSS 时显式使用 `make dev DEV_ASSETS_ENABLED=false`。显式 `make dev-reset-admin` 会重置密码并撤销该管理员现有会话。数据库 `DEV_DB_*` 变量只在首次创建容器时生效，修改前须运行 `make dev-clean`。`make dev-clean` 会删除本地数据库卷。
 - 后端全量门禁：`go test -count=1 -timeout 300s ./...`，`go test -race -count=1 -timeout 360s ./...`，`go vet ./...`。
 - 聚焦 Go 包或测试：`go test ./internal/content`；`go test ./internal/content -run '^TestName$'`。
 - 前端首次安装使用 `cd web && npm ci`；验证顺序为 `npm run lint`、`npm run typecheck`、`npm run test`、`npm run build`。`npm run lint` 同时 lint TypeScript 和 `api/openapi/{admin,content}.yaml`。

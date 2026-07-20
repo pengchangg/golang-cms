@@ -16,11 +16,16 @@ DEV_SESSION_SECRET ?= local-development-session-secret-32-bytes
 DEV_APP_PORT ?= 18080
 DEV_BASE_URL ?= http://localhost:$(DEV_APP_PORT)
 DEV_MYSQL_DSN = $(DEV_DB_USER):$(DEV_DB_PASSWORD)@tcp(127.0.0.1:$(DEV_DB_PORT))/$(DEV_DB_NAME)
+DEV_ASSETS_ENABLED ?= true
+DEV_ASSETS_ENV_FILE ?= $(CURDIR)/.env.assets.local
 
-.PHONY: dev dev-db dev-web dev-migrate dev-reset-admin dev-stop dev-clean
+.PHONY: dev dev-db dev-web dev-migrate dev-ensure-admin dev-reset-admin dev-stop dev-clean
 
-dev: dev-web dev-reset-admin
-	@APP_ASSETS_ENABLED=false APP_OIDC_ENABLED=false APP_LOCAL_LOGIN_ENABLED=true \
+dev: dev-web dev-ensure-admin
+	@test '$(DEV_ASSETS_ENABLED)' = 'false' || test -r '$(DEV_ASSETS_ENV_FILE)' || { printf '缺少 OSS 本地配置：%s\n请从 .env.assets.local.example 复制并填写，或使用 DEV_ASSETS_ENABLED=false。\n' '$(DEV_ASSETS_ENV_FILE)'; exit 1; }
+	@test '$(DEV_ASSETS_ENABLED)' = 'false' || case "$$(stat -c '%a' '$(DEV_ASSETS_ENV_FILE)')" in *00) ;; *) printf 'OSS 本地配置必须禁止 group/other 访问，请执行：chmod 600 %s\n' '$(DEV_ASSETS_ENV_FILE)'; exit 1;; esac
+	@set -a; test '$(DEV_ASSETS_ENABLED)' = 'false' || . '$(DEV_ASSETS_ENV_FILE)'; set +a; \
+		APP_ASSETS_ENABLED='$(DEV_ASSETS_ENABLED)' APP_OIDC_ENABLED=false APP_LOCAL_LOGIN_ENABLED=true \
 		APP_LISTEN_ADDR='127.0.0.1:$(DEV_APP_PORT)' APP_BASE_URL='$(DEV_BASE_URL)' APP_SESSION_SECRET='$(DEV_SESSION_SECRET)' \
 		MYSQL_DSN='$(DEV_MYSQL_DSN)' go run ./cmd/cms serve
 
@@ -50,10 +55,16 @@ dev-db:
 
 dev-web:
 	@test -d web/node_modules || { cd web && npm ci; }
-	@cd web && VITE_ASSETS_ENABLED=false npm run build
+	@test '$(DEV_ASSETS_ENABLED)' = 'true' || test '$(DEV_ASSETS_ENABLED)' = 'false' || { printf '%s\n' 'DEV_ASSETS_ENABLED 只能是 true 或 false'; exit 1; }
+	@cd web && VITE_ASSETS_ENABLED='$(DEV_ASSETS_ENABLED)' npm run build
 
 dev-migrate: dev-db
 	@MYSQL_DSN='$(DEV_MYSQL_DSN)' go run ./cmd/cms migrate
+
+dev-ensure-admin: dev-migrate
+	@CMS_ADMIN_PASSWORD='$(DEV_ADMIN_PASSWORD)' MYSQL_DSN='$(DEV_MYSQL_DSN)' \
+		APP_SESSION_SECRET='$(DEV_SESSION_SECRET)' \
+		go run ./cmd/cms admin ensure '$(DEV_ADMIN_USERNAME)' '$(DEV_ADMIN_DISPLAY_NAME)'
 
 dev-reset-admin: dev-migrate
 	@CMS_ADMIN_PASSWORD='$(DEV_ADMIN_PASSWORD)' MYSQL_DSN='$(DEV_MYSQL_DSN)' \

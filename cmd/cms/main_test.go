@@ -20,6 +20,13 @@ func TestExecuteRejectsUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestExecuteRejectsUnknownAdminCommand(t *testing.T) {
+	code, err := execute([]string{"admin", "unknown", "admin", "管理员"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if code != 2 || err == nil || !strings.Contains(err.Error(), "admin <ensure|reset-password>") {
+		t.Fatalf("execute() = (%d, %v)", code, err)
+	}
+}
+
 func TestRunParallelCancelsPeerOnFatalError(t *testing.T) {
 	fatal := errors.New("fatal")
 	peerStopped := make(chan struct{})

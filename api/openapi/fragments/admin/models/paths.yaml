@@ -119,7 +119,12 @@
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound
-      "409": *conflict
+      "409":
+        description: 标识冲突、资源已归档、关联目标无效，或关联目标为当前模型（error.code 为 target_model_self_relation）。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
   delete:
     operationId: archiveAdminContentModel
     summary: 归档动态内容模型
@@ -215,7 +220,7 @@
       "403": *forbidden
       "404": *notFound
       "409":
-        description: 字段类型已锁定、标识冲突或资源已归档。
+        description: 字段类型已锁定、标识冲突、资源已归档、关联目标无效，或关联目标为当前模型（error.code 为 target_model_self_relation）。
         content:
           application/json:
             schema:

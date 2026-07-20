@@ -49,7 +49,7 @@ func main() {
 
 func execute(args []string, logger *slog.Logger) (int, error) {
 	if len(args) == 0 {
-		return 2, errors.New("用法: cms <serve|migrate|version|admin reset-password>")
+		return 2, errors.New("用法: cms <serve|migrate|version|admin ensure|admin reset-password>")
 	}
 	command := args[0]
 	if command == "version" && len(args) == 1 {
@@ -57,16 +57,16 @@ func execute(args []string, logger *slog.Logger) (int, error) {
 		return 0, nil
 	}
 	if command == "admin" {
-		if len(args) != 4 || args[1] != "reset-password" {
-			return 2, errors.New("用法: cms admin reset-password <username> <display-name>")
+		if len(args) != 4 || args[1] != "ensure" && args[1] != "reset-password" {
+			return 2, errors.New("用法: cms admin <ensure|reset-password> <username> <display-name>")
 		}
-		if err := runAdmin(args[2], args[3], logger); err != nil {
+		if err := runAdmin(args[2], args[3], args[1] == "ensure", logger); err != nil {
 			return 1, err
 		}
 		return 0, nil
 	}
 	if len(args) != 1 || command != "serve" && command != "migrate" {
-		return 2, fmt.Errorf("未知命令；用法: cms <serve|migrate|version|admin reset-password>")
+		return 2, fmt.Errorf("未知命令；用法: cms <serve|migrate|version|admin ensure|admin reset-password>")
 	}
 	err := run(command, logger)
 	if err != nil {
@@ -352,10 +352,30 @@ func auditPrincipalFromRequest(r *http.Request) (audit.Principal, error) {
 	return audit.Principal{SystemPermissions: principal.SystemPermissions}, nil
 }
 
-func runAdmin(username, displayName string, logger *slog.Logger) error {
+func runAdmin(username, displayName string, ensure bool, logger *slog.Logger) error {
 	cfg, err := config.Load("admin")
 	if err != nil {
 		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg.MySQLDSN, false, cfg.AllowInsecureMySQL)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := migrate.Check(ctx, db, mustMigrations()); err != nil {
+		return err
+	}
+	if ensure {
+		var exists bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM local_credentials lc JOIN users u ON u.id = lc.user_id WHERE lc.username = ? AND lc.emergency_admin = TRUE AND u.enabled = TRUE)`, username).Scan(&exists); err != nil {
+			return fmt.Errorf("检查应急管理员: %w", err)
+		}
+		if exists {
+			logger.Info("应急管理员已存在，跳过初始化", "username", username)
+			return nil
+		}
 	}
 	password := os.Getenv("CMS_ADMIN_PASSWORD")
 	if password == "" {
@@ -378,16 +398,6 @@ func runAdmin(username, displayName string, logger *slog.Logger) error {
 	}
 	if len(password) < 12 {
 		return errors.New("应急管理员密码长度不能少于 12 个字符")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	db, err := database.Open(ctx, cfg.MySQLDSN, false, cfg.AllowInsecureMySQL)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	if _, err := migrate.Check(ctx, db, mustMigrations()); err != nil {
-		return err
 	}
 	service, err := auth.NewService(auth.NewSQLStore(db, audit.SQLWriter{}), nil, nil, nil, auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
 	if err != nil {

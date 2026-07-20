@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+!.env.assets.local.example
 coverage.out
 /cms
 web/dist/

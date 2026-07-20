@@ -181,7 +181,7 @@ func (s *Service) CreateField(ctx context.Context, principal identity.Principal,
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, permission.ModelsCreate); err != nil {
 			return err
 		}
-		models, err := s.lockRelationModels(ctx, q, modelID, input)
+		models, err := s.lockRelationModels(ctx, q, modelID, input, nil)
 		if err != nil {
 			return err
 		}
@@ -267,7 +267,7 @@ func (s *Service) UpdateField(ctx context.Context, principal identity.Principal,
 			if err := validateFieldAtDepth(&input, field.Depth); err != nil {
 				return err
 			}
-			models, err := s.lockRelationModels(ctx, q, modelID, input)
+			models, err := s.lockRelationModels(ctx, q, modelID, input, selfRelationPaths(fieldToInputSnapshot, modelID))
 			if err != nil {
 				return err
 			}
@@ -458,18 +458,30 @@ func normalizeFields(fields []ContentField) []ContentField {
 	return fields
 }
 
-func (s *Service) lockRelationModels(ctx context.Context, q database.Querier, modelID string, input ContentFieldInput) (map[string]ContentModelSummary, error) {
+func (s *Service) lockRelationModels(ctx context.Context, q database.Querier, modelID string, input ContentFieldInput, existingSelfRelations map[string]bool) (map[string]ContentModelSummary, error) {
 	ids := map[string]bool{modelID: true}
-	var collect func(ContentFieldInput)
-	collect = func(field ContentFieldInput) {
+	var relationErr error
+	var collect func(ContentFieldInput, string)
+	collect = func(field ContentFieldInput, parentPath string) {
+		path := parentPath + "/" + field.Key
 		if field.Type == FieldTypeSingleRelation || field.Type == FieldTypeMultiRelation {
+			if *field.Constraints.TargetModelID == modelID && !existingSelfRelations[path] {
+				relationErr = conflict("target_model_self_relation", "关联目标不能是当前模型")
+				return
+			}
 			ids[*field.Constraints.TargetModelID] = true
 		}
 		for _, child := range field.Children {
-			collect(child)
+			if relationErr != nil {
+				return
+			}
+			collect(child, path)
 		}
 	}
-	collect(input)
+	collect(input, "")
+	if relationErr != nil {
+		return nil, relationErr
+	}
 	ordered := make([]string, 0, len(ids))
 	for id := range ids {
 		ordered = append(ordered, id)
@@ -492,6 +504,22 @@ func (s *Service) lockRelationModels(ctx context.Context, q database.Querier, mo
 		}
 	}
 	return models, nil
+}
+
+func selfRelationPaths(input ContentFieldInput, modelID string) map[string]bool {
+	paths := map[string]bool{}
+	var collect func(ContentFieldInput, string)
+	collect = func(field ContentFieldInput, parentPath string) {
+		path := parentPath + "/" + field.Key
+		if (field.Type == FieldTypeSingleRelation || field.Type == FieldTypeMultiRelation) && *field.Constraints.TargetModelID == modelID {
+			paths[path] = true
+		}
+		for _, child := range field.Children {
+			collect(child, path)
+		}
+	}
+	collect(input, "")
+	return paths
 }
 func validateFieldAtDepth(input *ContentFieldInput, depth int) error {
 	var failures validationErrors
