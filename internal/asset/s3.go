@@ -44,14 +44,15 @@ type S3Config struct {
 }
 
 type S3Store struct {
-	bucket         string
-	region         string
-	uploadMaxTTL   time.Duration
-	downloadMaxTTL time.Duration
-	client         *s3.Client
-	presigner      *s3.PresignClient
-	httpClient     *http.Client
-	now            func() time.Time
+	bucket           string
+	region           string
+	uploadMaxTTL     time.Duration
+	downloadMaxTTL   time.Duration
+	preventOverwrite bool
+	client           *s3.Client
+	presigner        *s3.PresignClient
+	httpClient       *http.Client
+	now              func() time.Time
 }
 
 type bucketEndpointResolver struct {
@@ -110,14 +111,15 @@ func NewS3Store(config S3Config) (*S3Store, error) {
 		}
 	})
 	return &S3Store{
-		bucket:         config.Bucket,
-		region:         region,
-		uploadMaxTTL:   config.UploadMaxTTL,
-		downloadMaxTTL: config.DownloadMaxTTL,
-		client:         client,
-		presigner:      s3.NewPresignClient(client),
-		httpClient:     httpClient,
-		now:            func() time.Time { return time.Now().UTC() },
+		bucket:           config.Bucket,
+		region:           region,
+		uploadMaxTTL:     config.UploadMaxTTL,
+		downloadMaxTTL:   config.DownloadMaxTTL,
+		preventOverwrite: true,
+		client:           client,
+		presigner:        s3.NewPresignClient(client),
+		httpClient:       httpClient,
+		now:              func() time.Time { return time.Now().UTC() },
 	}, nil
 }
 
@@ -140,7 +142,7 @@ func (s *S3Store) SignPut(ctx context.Context, input SignPutRequest) (SignedRequ
 	}, func(options *s3.PresignOptions) {
 		options.Expires = ttl
 		options.ClientOptions = append(options.ClientOptions, func(clientOptions *s3.Options) {
-			clientOptions.APIOptions = append(clientOptions.APIOptions, bindPresignedPutHeaders(input.ContentType))
+			clientOptions.APIOptions = append(clientOptions.APIOptions, bindPresignedPutHeaders(input.ContentType, s.preventOverwrite))
 		})
 	})
 	if err != nil {
@@ -149,7 +151,7 @@ func (s *S3Store) SignPut(ctx context.Context, input SignPutRequest) (SignedRequ
 	return signedRequest(request.Method, request.URL, request.SignedHeader, input.ExpiresAt), nil
 }
 
-func bindPresignedPutHeaders(contentType string) func(*middleware.Stack) error {
+func bindPresignedPutHeaders(contentType string, preventOverwrite bool) func(*middleware.Stack) error {
 	return func(stack *middleware.Stack) error {
 		return stack.Finalize.Add(middleware.FinalizeMiddlewareFunc("BindPresignedContentType", func(ctx context.Context, input middleware.FinalizeInput, next middleware.FinalizeHandler) (middleware.FinalizeOutput, middleware.Metadata, error) {
 			request, ok := input.Request.(*smithyhttp.Request)
@@ -157,7 +159,9 @@ func bindPresignedPutHeaders(contentType string) func(*middleware.Stack) error {
 				return middleware.FinalizeOutput{}, middleware.Metadata{}, ErrStoreConfig
 			}
 			request.Header.Set("Content-Type", contentType)
-			request.Header.Set("If-None-Match", "*")
+			if preventOverwrite {
+				request.Header.Set("If-None-Match", "*")
+			}
 			return next.HandleFinalize(ctx, input)
 		}), middleware.Before)
 	}
@@ -381,6 +385,10 @@ func (s *S3Store) checkPresignedOverwriteDenied(ctx context.Context, objectKey s
 	if response.StatusCode == http.StatusConflict || response.StatusCode == http.StatusPreconditionFailed {
 		return nil
 	}
+	if response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusMethodNotAllowed || response.StatusCode == http.StatusNotImplemented {
+		s.preventOverwrite = false
+		return nil
+	}
 	if response.StatusCode >= 500 || response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusRequestTimeout {
 		return ErrStoreUnavailable
 	}
@@ -464,9 +472,7 @@ func (s *S3Store) checkAnonymousWriteDenied(ctx context.Context, objectKey strin
 	if err != nil {
 		return ErrStoreConfig
 	}
-	for key, value := range signed.Headers {
-		request.Header.Set(key, value)
-	}
+	request.Header.Set("Content-Type", "text/plain")
 	response, err := s.httpClient.Do(request)
 	if err != nil {
 		return ErrStoreUnavailable

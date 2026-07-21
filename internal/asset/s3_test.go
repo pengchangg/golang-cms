@@ -246,6 +246,47 @@ func TestS3StoreCheckPrivateBucketRejectsPublicACL(t *testing.T) {
 	}
 }
 
+func TestS3StoreAnonymousWriteProbeUsesMinimalHeaders(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPut || req.URL.RawQuery != "" {
+			t.Fatalf("匿名写探针请求错误: %s %s", req.Method, req.URL)
+		}
+		if req.Header.Get("Content-Type") != "text/plain" || req.Header.Get("If-None-Match") != "" || req.Header.Get("X-Amz-Meta-Sha256") != "" {
+			t.Fatalf("匿名写探针携带了预签名 Header: %#v", req.Header)
+		}
+		return response(req, http.StatusForbidden, "", nil), nil
+	})}
+	store := newTestS3Store(t, "https://storage.example.com", true, client)
+	if err := store.checkAnonymousWriteDenied(context.Background(), "assets/healthchecks/anonymous"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestS3StoreDisablesUnsupportedConditionalWrites(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPut || req.Header.Get("If-None-Match") != "*" {
+			t.Fatalf("条件写探针错误: %s %#v", req.Method, req.Header)
+		}
+		return response(req, http.StatusBadRequest, "", nil), nil
+	})}
+	store := newTestS3Store(t, "https://storage.example.com", true, client)
+	if err := store.checkPresignedOverwriteDenied(context.Background(), "assets/healthchecks/existing"); err != nil {
+		t.Fatal(err)
+	}
+	if store.preventOverwrite {
+		t.Fatal("不支持条件写时应关闭不可覆盖 Header")
+	}
+	now := time.Now().UTC()
+	store.now = func() time.Time { return now }
+	signed, err := store.SignPut(context.Background(), SignPutRequest{ObjectKey: "assets/new", ContentType: "text/plain", Size: 1, SHA256: strings.Repeat("a", 64), ExpiresAt: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signed.Headers["If-None-Match"] != "" {
+		t.Fatalf("降级后不应继续返回条件写 Header: %#v", signed.Headers)
+	}
+}
+
 func TestS3StoreRejectsInvalidConfiguration(t *testing.T) {
 	for _, endpoint := range []string{"http://s3.example.com", "https://user@s3.example.com", "https://s3.example.com/path", "https://s3.example.com?token=secret"} {
 		config := testS3Config(endpoint, false, nil)
