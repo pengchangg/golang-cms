@@ -93,11 +93,28 @@ button, a { touch-action: manipulation; }
 .model-grant { display: grid; gap: 12px; margin-bottom: 20px; padding: 16px 0; border-bottom: 1px solid var(--line); }
 .model-grant .ant-checkbox-group { margin: 0; }
 .floating-action { margin-top: 24px; }
-.field-canvas { display: grid; max-width: 1000px; gap: 12px; }
-.field-card { border-color: var(--line); background: var(--paper); }
+.field-canvas { display: grid; max-width: 1000px; gap: 10px; }
+.field-node { border: 1px solid var(--line); background: var(--paper); transition: border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease; }
+.field-node.is-dragging { z-index: 1; border-color: var(--green); box-shadow: 0 10px 28px rgb(32 36 31 / 14%); opacity: .76; }
+.field-node.is-archived { background: rgb(232 232 223 / 55%); opacity: .72; }
+.field-row { display: grid; min-height: 68px; align-items: center; grid-template-columns: 40px minmax(0, 1fr) auto; padding: 9px 10px 9px 6px; }
+.drag-handle { color: var(--muted); cursor: grab; touch-action: none; }
+.drag-handle:active { cursor: grabbing; }
+.field-summary { display: grid; min-width: 0; gap: 4px; }
+.field-summary code { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.field-actions { justify-content: flex-end; }
 .field-type-option { display: grid; gap: 2px; padding-block: 3px; }
 .field-type-option span { color: var(--muted); font-size: 12px; }
-.field-children { display: grid; gap: 8px; margin: 16px 0 0 20px; padding-left: 16px; border-left: 2px solid rgb(37 107 85 / 20%); }
+.field-children { display: grid; gap: 8px; margin: 0 12px 12px 28px; padding-left: 14px; border-left: 2px solid rgb(37 107 85 / 20%); }
+.field-key-notice { display: block; margin: -16px 0 20px; }
+.constraint-row { width: 100%; }
+.constraint-row > .ant-space-item { flex: 1; }
+.constraint-row .ant-input-number { width: 100%; }
+.enum-editor, .projection-options, .default-editor, .initial-children { display: grid; gap: 12px; margin-bottom: 24px; padding: 18px; border-top: 1px solid var(--line); background: rgb(244 243 238 / 55%); }
+.enum-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+.enum-row .ant-form-item, .projection-options .ant-form-item, .default-editor .ant-form-item { margin-bottom: 0; }
+.initial-child { padding: 18px; border: 1px solid var(--line); background: var(--paper); }
+.initial-child-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .dynamic-form { display: grid; max-width: 900px; gap: 18px; }
 .dynamic-field { display: grid; gap: 8px; padding: 20px; border-top: 1px solid var(--line); background: rgb(255 254 249 / 45%); }
 .dynamic-field > label { display: flex; align-items: center; gap: 8px; }
@@ -157,6 +174,14 @@ button, a { touch-action: manipulation; }
   .permission-matrix { border-top: 1px solid var(--line); border-left: 0; padding-inline: 8px; }
   .permission-matrix .ant-checkbox-group { grid-template-columns: 1fr; }
   .dynamic-field { padding-inline: 12px; }
+  .field-row { grid-template-columns: 36px minmax(0, 1fr); }
+  .field-actions { grid-column: 2; justify-content: flex-start; }
+  .field-actions .ant-btn { min-width: 40px; min-height: 40px; }
+  .field-children { margin-left: 16px; padding-left: 8px; }
+  .field-drawer .ant-drawer-content-wrapper { width: 100% !important; }
+  .constraint-row, .enum-row { display: grid; grid-template-columns: 1fr; }
+  .enum-row .ant-space-item, .constraint-row .ant-space-item { width: 100%; }
+  .enum-row .ant-input { width: 100%; }
   .entry-workspace { grid-template-columns: 1fr; }
   .workflow-history { position: static; padding: 24px 0 0; border-top: 1px solid var(--line); border-left: 0; }
   .workflow-actions { width: 100%; }

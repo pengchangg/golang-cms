@@ -5,7 +5,7 @@
 - 状态：已确认，待实施
 - 目标版本：V1
 - 开发计划：[多 Agent 开发计划](./development-plan.md)
-- 部署形态：单个应用 Docker 镜像，外接 MySQL 8.0 与阿里云 OSS
+- 部署形态：单个应用 Docker 镜像，外接 MySQL 8.0 与私有 S3 兼容对象存储
 - 目标规模：少于 100 名后台用户、百万级内容、内容 API 峰值低于 200 QPS
 
 ## 2. 建设目标
@@ -20,7 +20,7 @@ V1 必须具备：
 - 内容增删改查、版本管理和固定审核流程。
 - 面向客户端的只读 REST API。
 - API Key 签发、限制、过期、撤销和轮换。
-- 阿里云 OSS 素材库。
+- 私有 S3 兼容对象存储素材库。
 - CSV 导入导出。
 - 不可变审计日志。
 - OpenAPI 3.1 接口文档。
@@ -63,7 +63,7 @@ V1 不包含：
 +-----------------+                       +------+--------+-----+
                                                  |        |
                                         +--------v---+ +--v----------+
-                                        | MySQL 8.0  | | 阿里云 OSS  |
+                                        | MySQL 8.0  | | S3 兼容存储 |
                                         +------------+ +-------------+
 ```
 
@@ -81,7 +81,7 @@ V1 不包含：
 | 管理端认证 | OIDC Authorization Code + PKCE、服务端会话 Cookie |
 | 应急认证 | 本地管理员、Argon2id 密码哈希、命令行重置 |
 | 客户端认证 | API Key，数据库仅保存密钥哈希 |
-| 素材存储 | 私有阿里云 OSS Bucket、签名上传和签名下载 |
+| 素材存储 | 私有 S3 兼容对象存储 Bucket、签名上传和签名下载 |
 | 导入导出 | CSV、MySQL 持久化后台任务 |
 | 部署 | 多阶段 Dockerfile，最终镜像包含后端与前端静态资源 |
 | 日志 | JSON 结构化日志、请求 ID、操作者与耗时 |
@@ -100,7 +100,7 @@ V1 不包含：
 | `permission` | 系统权限与模型操作权限校验 |
 | `schema` | 动态模型、字段定义、校验规则与索引声明 |
 | `content` | 内容、版本、关联、查询与工作流 |
-| `asset` | OSS 上传、确认、下载与素材引用 |
+| `asset` | 对象存储上传、确认、下载与素材引用 |
 | `client` | API Key、模型访问范围、撤销与轮换 |
 | `transfer` | CSV 导入导出任务与错误报告 |
 | `audit` | 不可变审计事件 |
@@ -336,25 +336,25 @@ GET /api/content/v1/assets/{id}
 
 1. 管理端向后端申请创建上传任务。
 2. 后端校验权限、文件名、MIME 类型和文件大小。
-3. 后端生成阿里云 OSS 限时上传签名。
+3. 后端生成 S3 兼容对象存储限时上传签名。
 4. 浏览器直接上传到私有 Bucket。
 5. 管理端调用确认接口。
-6. 后端通过 OSS 元数据确认对象存在并保存素材记录。
+6. 后端通过标准 S3 用户元数据确认对象存在并保存素材记录；SHA-256 使用 `Metadata["sha256"]`，HTTP 表示为 `x-amz-meta-sha256`。
 7. 内容字段只保存素材 ID，不保存临时签名 URL。
 
 ### 13.2 下载流程
 
 - 管理端或客户端访问 CMS 素材地址。
 - CMS 校验管理会话或 API Key。
-- CMS 返回短时有效的 OSS 签名地址或 HTTP 重定向。
+- CMS 返回短时有效的对象存储签名地址或 HTTP 重定向。
 
 ### 13.3 安全规则
 
-- OSS Bucket 必须为私有。
+- 对象存储 Bucket 必须为私有。
 - 对象 Key 由服务端生成，不直接使用用户文件名。
 - 限制文件大小和允许的 MIME 类型。
 - 文件扩展名不能代替 MIME 校验。
-- 记录 SHA-256、大小、类型、上传者和 OSS ETag。
+- 记录 SHA-256、大小、类型、上传者和不透明 ETag，不将 ETag 解释为内容摘要。
 - 素材具有隔离、可用和归档状态，为后续病毒扫描预留接口。
 - 病毒扫描不属于 V1 范围。
 
@@ -377,7 +377,7 @@ GET /api/content/v1/assets/{id}
 
 - 按当前模型和筛选条件创建后台任务。
 - 生成带 UTF-8 BOM 的 CSV，便于 Excel 打开。
-- 导出文件保存到 OSS，并设置过期时间。
+- 导出文件保存到对象存储，并设置过期时间。
 - 下载前重新校验用户权限。
 - 导入、导出和下载均记录审计日志。
 
@@ -410,7 +410,7 @@ GET /api/content/v1/assets/{id}
 - 变更摘要。
 - 失败原因。
 
-审计表只允许追加，不向业务应用暴露更新和删除操作。密码、会话、OIDC Token、OSS 凭证、完整 API Key 和其他敏感字段不得写入审计详情。
+审计表只允许追加，不向业务应用暴露更新和删除操作。密码、会话、OIDC Token、对象存储凭证、完整 API Key 和其他敏感字段不得写入审计详情。
 
 ## 16. 核心数据表
 
@@ -495,11 +495,16 @@ OIDC_CLIENT_ID
 OIDC_CLIENT_SECRET
 OIDC_REDIRECT_URL
 
-ALIYUN_OSS_ENDPOINT
-ALIYUN_OSS_REGION
-ALIYUN_OSS_BUCKET
-ALIYUN_OSS_ACCESS_KEY_ID
-ALIYUN_OSS_ACCESS_KEY_SECRET
+S3_ENDPOINT
+S3_REGION
+S3_BUCKET
+S3_ACCESS_KEY_ID
+S3_ACCESS_KEY_SECRET
+S3_SESSION_TOKEN
+S3_USE_PATH_STYLE
+S3_BUCKET_ENDPOINT
+S3_UPLOAD_URL_TTL
+S3_DOWNLOAD_URL_TTL
 ```
 
 生产启动前强制检查：
@@ -508,18 +513,18 @@ ALIYUN_OSS_ACCESS_KEY_SECRET
 - 应用基础地址使用 HTTPS。
 - OIDC 回调地址与配置匹配。
 - MySQL 可连接且版本为 8.0。
-- OSS Bucket 可访问且不存在公开写权限。
+- S3 兼容对象存储 Endpoint、Region 和 Bucket 匹配，Bucket 可访问且不存在公开读写权限，凭证具备所需对象操作权限。
 - 数据库迁移状态有效。
 - 至少存在一个应急管理员。
 
-凭证不得写入镜像、仓库、日志或前端构建产物。
+对象存储 Adapter 使用 AWS SDK for Go v2 的 S3 客户端和 PresignClient，不得手写请求签名。阿里云部署使用官方 S3 兼容 Endpoint 和 virtual-host style，即 `S3_USE_PATH_STYLE=false`。凭证不得写入镜像、仓库、日志或前端构建产物。
 
 ## 19. 性能与容量约束
 
 - 少于 100 名后台用户。
 - 支持百万级内容记录。
 - 内容 API 峰值低于 200 QPS。
-- 常用索引查询服务端 P95 目标低于 300ms，不含外部网络和 OSS 下载。
+- 常用索引查询服务端 P95 目标低于 300ms，不含外部网络和对象存储下载。
 - 单个 CSV 默认限制 100,000 行，超过限制后拆分处理。
 - 内容 API 单页最多 100 条。
 - 通过无状态 Go 实例支持横向扩容。
@@ -547,7 +552,7 @@ ALIYUN_OSS_ACCESS_KEY_SECRET
 
 ### 阶段三：素材与数据交换
 
-- 完成阿里云 OSS 素材库和媒体字段。
+- 完成私有 S3 兼容对象存储素材库和媒体字段。
 - 完成 CSV 模板、导入、错误报告、导出和下载。
 - 补齐素材与后台任务的审计事件。
 
@@ -596,7 +601,7 @@ docker run --rm internal-cms:test version
 - 审核权限按请求时的模型授权判断，不额外限制提交人身份。
 - API Key 正常、过期、撤销和越权访问模型。
 - 过滤、排序、游标分页和非法查询字段。
-- OSS 上传确认、对象不存在、文件超限和归档引用素材。
+- 对象存储上传确认、对象不存在、文件超限和归档引用素材。
 - CSV 正常导入、格式错误、唯一冲突和无效关联。
 - 导出权限和过期文件。
 - 审计记录存在且不包含敏感数据。
@@ -621,7 +626,7 @@ docker run --rm internal-cms:test version
 | --- | --- |
 | MySQL 动态 JSON 查询性能不足 | 使用类型化投影表，避免高频 `JSON_EXTRACT` 全表扫描 |
 | 模型频繁变更导致数据不一致 | 锁定标识和已有字段类型，删除采用归档 |
-| OSS 暂时不可用 | 元数据保持可访问，上传下载返回可重试错误，不破坏数据库状态 |
+| 对象存储暂时不可用 | 元数据保持可访问，上传下载返回可重试错误，不破坏数据库状态 |
 | 多实例重复执行后台任务 | 使用 MySQL 行锁和任务租约，超时后重新领取 |
 | API Key 泄露 | 仅保存哈希，限制模型范围，支持过期、撤销和轮换 |
 | 大 CSV 占用过多内存 | 流式解析和分批校验，不将整个文件载入内存 |
@@ -633,7 +638,7 @@ docker run --rm internal-cms:test version
 
 - 可访问的 MySQL 8.0 实例和数据库凭证。
 - 标准 OIDC 发行方、客户端 ID、客户端密钥和声明映射。
-- 私有阿里云 OSS Bucket、Endpoint、Region 和访问凭证。
+- 私有 S3 兼容对象存储 Bucket、Endpoint、Region 和访问凭证；阿里云使用官方 S3 兼容 Endpoint。
 - 生产域名、HTTPS 证书及反向代理或入口配置。
 
 本设计假设企业身份源支持标准 OIDC。如果现有身份源仅支持 LDAP、CAS 或 SAML，需要重新设计认证适配层，但内容、权限和 API 架构不受影响。

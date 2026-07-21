@@ -22,8 +22,8 @@ DEV_ASSETS_ENV_FILE ?= $(CURDIR)/.env.assets.local
 .PHONY: dev dev-db dev-web dev-migrate dev-ensure-admin dev-reset-admin dev-stop dev-clean
 
 dev: dev-web dev-ensure-admin
-	@test '$(DEV_ASSETS_ENABLED)' = 'false' || test -r '$(DEV_ASSETS_ENV_FILE)' || { printf '缺少 OSS 本地配置：%s\n请从 .env.assets.local.example 复制并填写，或使用 DEV_ASSETS_ENABLED=false。\n' '$(DEV_ASSETS_ENV_FILE)'; exit 1; }
-	@test '$(DEV_ASSETS_ENABLED)' = 'false' || case "$$(stat -c '%a' '$(DEV_ASSETS_ENV_FILE)')" in *00) ;; *) printf 'OSS 本地配置必须禁止 group/other 访问，请执行：chmod 600 %s\n' '$(DEV_ASSETS_ENV_FILE)'; exit 1;; esac
+	@test '$(DEV_ASSETS_ENABLED)' = 'false' || test -r '$(DEV_ASSETS_ENV_FILE)' || { printf '缺少 S3 兼容对象存储本地配置：%s\n请从 .env.assets.local.example 复制并填写，或使用 DEV_ASSETS_ENABLED=false。\n' '$(DEV_ASSETS_ENV_FILE)'; exit 1; }
+	@test '$(DEV_ASSETS_ENABLED)' = 'false' || case "$$(stat -c '%a' '$(DEV_ASSETS_ENV_FILE)')" in *00) ;; *) printf 'S3 兼容对象存储本地配置必须禁止 group/other 访问，请执行：chmod 600 %s\n' '$(DEV_ASSETS_ENV_FILE)'; exit 1;; esac
 	@set -a; test '$(DEV_ASSETS_ENABLED)' = 'false' || . '$(DEV_ASSETS_ENV_FILE)'; set +a; \
 		APP_ASSETS_ENABLED='$(DEV_ASSETS_ENABLED)' APP_OIDC_ENABLED=false APP_LOCAL_LOGIN_ENABLED=true \
 		APP_LISTEN_ADDR='127.0.0.1:$(DEV_APP_PORT)' APP_BASE_URL='$(DEV_BASE_URL)' APP_SESSION_SECRET='$(DEV_SESSION_SECRET)' \

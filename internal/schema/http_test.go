@@ -118,6 +118,53 @@ func TestHTTPStatusFilterValidation(t *testing.T) {
 	assertHTTPError(t, response, http.StatusBadRequest, "validation_failed", response.Header().Get(httpx.RequestIDHeader))
 }
 
+func TestHTTPUpdateFieldOrderContractAndStrictJSON(t *testing.T) {
+	repository := seededRepository()
+	repository.fields["fld_2"] = ContentField{ID: "fld_2", Key: "summary", Status: StatusActive}
+	repository.positions["fld_2"] = 1
+	handler := testHTTPHandler(testService(repository, &transactionState{}), func(*http.Request) (identity.Principal, error) { return testPrincipal(), nil })
+
+	request := httptest.NewRequest(http.MethodPut, "/api/admin/v1/models/mdl_1/fields/order", bytes.NewBufferString(`{"parent_id":null,"base_field_ids":["fld_1","fld_2"],"field_ids":["fld_2","fld_1"]}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || repository.positions["fld_2"] != 0 || repository.positions["fld_1"] != 1 {
+		t.Fatalf("status/body/positions = %d/%s/%#v", response.Code, response.Body.String(), repository.positions)
+	}
+
+	request = httptest.NewRequest(http.MethodPut, "/api/admin/v1/models/mdl_1/fields/order", bytes.NewBufferString(`{"parent_id":null,"base_field_ids":[],"field_ids":[],"unknown":true}`))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertHTTPError(t, response, http.StatusBadRequest, "validation_failed", response.Header().Get(httpx.RequestIDHeader))
+}
+
+func TestHTTPUpdateFieldOrderRequiresAllProperties(t *testing.T) {
+	handler := testHTTPHandler(testService(seededRepository(), &transactionState{}), func(*http.Request) (identity.Principal, error) { return testPrincipal(), nil })
+	request := httptest.NewRequest(http.MethodPut, "/api/admin/v1/models/mdl_1/fields/order", bytes.NewBufferString(`{}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertHTTPError(t, response, http.StatusBadRequest, "validation_failed", response.Header().Get(httpx.RequestIDHeader))
+}
+
+func TestHTTPCreateChildFieldContract(t *testing.T) {
+	repository := seededRepository()
+	parent := repository.fields["fld_1"]
+	parent.Type = FieldTypeObject
+	repository.fields[parent.ID] = parent
+	service := testService(repository, &transactionState{})
+	service.newID = func(string) (string, error) { return "fld_child", nil }
+	handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) { return testPrincipal(), nil })
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/v1/models/mdl_1/fields/fld_1/children", bytes.NewBufferString(`{"key":"summary","display_name":"Summary","type":"single_line_text"}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
+	}
+	var field ContentField
+	if err := json.Unmarshal(response.Body.Bytes(), &field); err != nil || field.ID != "fld_child" || field.Key != "summary" {
+		t.Fatalf("field/error = %#v/%v", field, err)
+	}
+}
+
 func TestRequestMetaNormalizesIPAndTruncatesUserAgentByCharacters(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.RemoteAddr = "[2001:0db8:0:0:0:0:0:1]:1234"

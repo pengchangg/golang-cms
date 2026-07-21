@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// MemoryStore 是不依赖真实 OSS 的并发安全 Adapter，供领域测试使用。
+// MemoryStore 是不依赖真实对象存储的并发安全 Adapter，供领域测试使用。
 type MemoryStore struct {
 	mu             sync.RWMutex
 	objects        map[string]memoryObject
@@ -37,7 +37,7 @@ func (s *MemoryStore) SignPut(_ context.Context, input SignPutRequest) (SignedRe
 	if err := s.validExpiry(input.ExpiresAt, s.UploadMaxTTL); err != nil {
 		return SignedRequest{}, err
 	}
-	return SignedRequest{Method: "PUT", URL: memoryURL(input.ObjectKey, input.ExpiresAt), Headers: map[string]string{"Content-Type": input.ContentType, "x-oss-meta-sha256": input.SHA256, "x-oss-forbid-overwrite": "true"}, ExpiresAt: input.ExpiresAt.UTC()}, nil
+	return SignedRequest{Method: "PUT", URL: memoryURL(input.ObjectKey, input.ExpiresAt), Headers: map[string]string{"Content-Type": input.ContentType, "If-None-Match": "*", "x-amz-meta-sha256": input.SHA256}, ExpiresAt: input.ExpiresAt.UTC()}, nil
 }
 
 func (s *MemoryStore) SignGet(_ context.Context, input SignGetRequest) (SignedRequest, error) {

@@ -1,9 +1,9 @@
 import { authStore } from '../auth/store'
 import type {
-  APIKey, APIKeySecret, APIKeyStatus, Asset, AssetStatus, AssetUpload, AuditEvent, ContentEntry, ContentField, ContentFieldInput,
+  APIKey, APIKeySecret, APIKeyStatus, Asset, AssetStatus, AssetUpload, AuditEvent, ContentEntry, ContentField, ContentFieldInput, ContentFieldPatch,
   ContentModel, ContentModelSummary, CreateAPIKeyRequest, CursorResponse, EntryListQuery,
   EntryListResponse, ErrorResponse, ImportUpload, Job, JobStatus, JobType, ModelPermission, Role, RotateAPIKeyRequest, SessionResponse,
-  SystemPermission, TransferErrorListResponse, User, UserStatus, UserSummary, WorkflowEvent, CreateAssetUploadRequest, CreateExportRequest,
+  SystemPermission, TransferErrorListResponse, UpdateFieldOrderRequest, User, UserStatus, UserSummary, WorkflowEvent, CreateAssetUploadRequest, CreateExportRequest,
 } from './types'
 
 const API_BASE = '/api/admin/v1'
@@ -131,7 +131,13 @@ export const api = {
   listModels: (status?: string) => request<{ items: ContentModelSummary[] }>(`/models${queryString({ status })}`),
   getModel: (id: string) => request<ContentModel>(`/models/${encodeURIComponent(id)}`),
   createModel: (body: { key: string; display_name: string; description?: string }) => request<ContentModel>('/models', json('POST', body)),
+  listFields: (modelId: string) => request<{ items: ContentField[] }>(`/models/${encodeURIComponent(modelId)}/fields`),
+  getField: (modelId: string, fieldId: string) => request<ContentField>(`/models/${encodeURIComponent(modelId)}/fields/${encodeURIComponent(fieldId)}`),
   createField: (modelId: string, body: ContentFieldInput) => request<ContentField>(`/models/${encodeURIComponent(modelId)}/fields`, json('POST', body)),
+  createChildField: (modelId: string, parentId: string, body: ContentFieldInput) => request<ContentField>(`/models/${encodeURIComponent(modelId)}/fields/${encodeURIComponent(parentId)}/children`, json('POST', body)),
+  updateField: (modelId: string, fieldId: string, body: ContentFieldPatch) => request<ContentField>(`/models/${encodeURIComponent(modelId)}/fields/${encodeURIComponent(fieldId)}`, json('PATCH', body)),
+  archiveField: (modelId: string, fieldId: string) => request<void>(`/models/${encodeURIComponent(modelId)}/fields/${encodeURIComponent(fieldId)}`, { method: 'DELETE' }),
+  reorderFields: (modelId: string, body: UpdateFieldOrderRequest) => request<void>(`/models/${encodeURIComponent(modelId)}/fields/order`, json('PUT', body)),
   listEntries: (modelId: string, query: EntryListQuery = {}) => request<EntryListResponse>(`/models/${encodeURIComponent(modelId)}/entries${queryString({ ...query })}`),
   getEntry: (modelId: string, entryId: string) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}`),
   createEntry: (modelId: string, content: Record<string, unknown>) => request<ContentEntry>(`/models/${encodeURIComponent(modelId)}/entries`, json('POST', { content })),

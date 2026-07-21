@@ -25,9 +25,12 @@ type Repository interface {
 	UpdateModel(context.Context, database.Querier, ContentModelSummary) error
 	GetField(context.Context, database.Querier, string, string) (ContentField, error)
 	LockField(context.Context, database.Querier, string, string) (ContentField, error)
+	LockFieldTree(context.Context, database.Querier, string) ([]ContentField, error)
 	CreateFieldTree(context.Context, database.Querier, string, *ContentField, *string, int) error
 	UpdateField(context.Context, database.Querier, string, ContentField) error
+	PrepareFieldOrder(context.Context, database.Querier, string, *string) error
 	UpdateFieldPosition(context.Context, database.Querier, string, string, int) error
+	UpdateFieldOrder(context.Context, database.Querier, string, *string, []string) error
 	ArchiveFieldTree(context.Context, database.Querier, string, string, time.Time) error
 }
 
@@ -139,6 +142,10 @@ func (r SQLRepository) LockField(ctx context.Context, q database.Querier, modelI
 	return r.getField(ctx, q, modelID, fieldID, true)
 }
 
+func (r SQLRepository) LockFieldTree(ctx context.Context, q database.Querier, modelID string) ([]ContentField, error) {
+	return r.loadFields(ctx, q, modelID, true)
+}
+
 func (r SQLRepository) getField(ctx context.Context, q database.Querier, modelID, fieldID string, lock bool) (ContentField, error) {
 	fields, err := r.listFields(ctx, q, modelID, lock)
 	if err != nil {
@@ -163,7 +170,25 @@ func (r SQLRepository) getField(ctx context.Context, q database.Querier, modelID
 }
 
 func (r SQLRepository) listFields(ctx context.Context, q database.Querier, modelID string, lock bool) ([]ContentField, error) {
-	query := `SELECT id, parent_id, field_key, display_name, description, field_type, is_required, default_value, constraints, status, depth, created_at, updated_at FROM content_fields WHERE model_id = ? ORDER BY depth, position, field_key`
+	all, err := r.loadFields(ctx, q, modelID, lock)
+	if err != nil {
+		return nil, err
+	}
+	byParent := map[string][]ContentField{}
+	for i := len(all) - 1; i >= 0; i-- {
+		item := all[i]
+		item.Children = byParent[item.ID]
+		key := ""
+		if item.ParentID != nil {
+			key = *item.ParentID
+		}
+		byParent[key] = append([]ContentField{item}, byParent[key]...)
+	}
+	return byParent[""], nil
+}
+
+func (SQLRepository) loadFields(ctx context.Context, q database.Querier, modelID string, lock bool) ([]ContentField, error) {
+	query := `SELECT id, parent_id, field_key, display_name, description, field_type, is_required, default_value, constraints, status, depth, position, created_at, updated_at FROM content_fields WHERE model_id = ? ORDER BY depth, status, position, field_key, id`
 	if lock {
 		query += ` FOR UPDATE`
 	}
@@ -172,22 +197,23 @@ func (r SQLRepository) listFields(ctx context.Context, q database.Querier, model
 		return nil, fmt.Errorf("查询字段: %w", err)
 	}
 	defer rows.Close()
-	type row struct {
-		field  ContentField
-		parent sql.NullString
-	}
-	all := []row{}
+	all := []ContentField{}
 	for rows.Next() {
-		var item row
+		var item ContentField
+		var parent sql.NullString
 		var defaultValue, constraints []byte
-		if err := rows.Scan(&item.field.ID, &item.parent, &item.field.Key, &item.field.DisplayName, &item.field.Description, &item.field.Type, &item.field.Required, &defaultValue, &constraints, &item.field.Status, &item.field.Depth, &item.field.CreatedAt, &item.field.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &parent, &item.Key, &item.DisplayName, &item.Description, &item.Type, &item.Required, &defaultValue, &constraints, &item.Status, &item.Depth, &item.Position, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("读取字段: %w", err)
 		}
-		item.field.DefaultValue = append(json.RawMessage(nil), defaultValue...)
-		item.field.Children = []ContentField{}
-		item.field.CreatedAt = item.field.CreatedAt.UTC()
-		item.field.UpdatedAt = item.field.UpdatedAt.UTC()
-		if err := json.Unmarshal(constraints, &item.field.Constraints); err != nil {
+		item.DefaultValue = append(json.RawMessage(nil), defaultValue...)
+		item.Children = []ContentField{}
+		item.CreatedAt = item.CreatedAt.UTC()
+		item.UpdatedAt = item.UpdatedAt.UTC()
+		if parent.Valid {
+			parentID := parent.String
+			item.ParentID = &parentID
+		}
+		if err := json.Unmarshal(constraints, &item.Constraints); err != nil {
 			return nil, fmt.Errorf("读取字段约束: %w", err)
 		}
 		all = append(all, item)
@@ -195,17 +221,7 @@ func (r SQLRepository) listFields(ctx context.Context, q database.Querier, model
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	byParent := map[string][]ContentField{}
-	for i := len(all) - 1; i >= 0; i-- {
-		item := all[i]
-		item.field.Children = byParent[item.field.ID]
-		key := ""
-		if item.parent.Valid {
-			key = item.parent.String
-		}
-		byParent[key] = append([]ContentField{item.field}, byParent[key]...)
-	}
-	return byParent[""], nil
+	return all, nil
 }
 
 func (r SQLRepository) CreateFieldTree(ctx context.Context, q database.Querier, modelID string, field *ContentField, parentID *string, position int) error {
@@ -231,6 +247,30 @@ func (SQLRepository) UpdateField(ctx context.Context, q database.Querier, modelI
 func (SQLRepository) UpdateFieldPosition(ctx context.Context, q database.Querier, modelID, fieldID string, position int) error {
 	_, err := q.ExecContext(ctx, `UPDATE content_fields SET position = ? WHERE id = ? AND model_id = ?`, position, fieldID, modelID)
 	return translateWriteError("更新字段顺序", err)
+}
+
+func (SQLRepository) PrepareFieldOrder(ctx context.Context, q database.Querier, modelID string, parentID *string) error {
+	_, err := q.ExecContext(ctx, `UPDATE content_fields SET position = -position - 1 WHERE model_id = ? AND parent_id <=> ? AND status = 'active'`, modelID, parentID)
+	return translateWriteError("准备字段排序", err)
+}
+
+func (r SQLRepository) UpdateFieldOrder(ctx context.Context, q database.Querier, modelID string, parentID *string, fieldIDs []string) error {
+	if err := r.PrepareFieldOrder(ctx, q, modelID, parentID); err != nil {
+		return err
+	}
+	for position, fieldID := range fieldIDs {
+		result, err := q.ExecContext(ctx, `UPDATE content_fields SET position = ? WHERE id = ? AND model_id = ? AND parent_id <=> ? AND status = 'active'`, position, fieldID, modelID, parentID)
+		if err != nil {
+			return translateWriteError("更新字段顺序", err)
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			if err != nil {
+				return fmt.Errorf("读取字段排序更新结果: %w", err)
+			}
+			return conflict("field_order_conflict", "字段顺序已变化")
+		}
+	}
+	return nil
 }
 
 func (SQLRepository) ArchiveFieldTree(ctx context.Context, q database.Querier, modelID, fieldID string, now time.Time) error {

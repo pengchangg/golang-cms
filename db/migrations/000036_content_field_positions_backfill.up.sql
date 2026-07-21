@@ -1,0 +1,1 @@
+WITH ranked AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY model_id, parent_id ORDER BY position, field_key, id) - 1 AS normalized_position FROM content_fields WHERE status = 'active') UPDATE content_fields AS fields JOIN ranked ON ranked.id = fields.id SET fields.position = ranked.normalized_position;

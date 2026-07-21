@@ -13,15 +13,16 @@ export function PageHeader({ eyebrow, title, description, extra }: { eyebrow: st
 export function useApiData<T>(load: () => Promise<T>, dependencies: readonly unknown[] = []) {
   const [state, setState] = useState<{ data?: T; error?: unknown; loading: boolean }>({ loading: true })
   const dataRef = useRef<T | undefined>(undefined)
+  const generationRef = useRef(0)
   const [attempt, setAttempt] = useState({ id: 0, background: false })
   useEffect(() => {
-    let active = true
+    const generation = ++generationRef.current
     load().then((data) => {
-      if (!active) return
+      if (generation !== generationRef.current) return
       dataRef.current = data
       setState({ data, loading: false })
     }, (error) => {
-      if (!active) return
+      if (generation !== generationRef.current) return
       if (attempt.background && dataRef.current !== undefined) {
         setState((current) => ({ ...current, loading: false }))
         return
@@ -29,14 +30,18 @@ export function useApiData<T>(load: () => Promise<T>, dependencies: readonly unk
       dataRef.current = undefined
       setState({ error, loading: false })
     })
-    return () => { active = false }
+    return () => { generationRef.current += 1 }
     // 调用方通过依赖项明确控制重新请求。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...dependencies, attempt])
   return {
     ...state,
-    reload: (background = false) => setAttempt((value) => ({ id: value.id + 1, background })),
+    reload: (background = false) => {
+      generationRef.current += 1
+      setAttempt((value) => ({ id: value.id + 1, background }))
+    },
     setData: (data: T) => {
+      generationRef.current += 1
       dataRef.current = data
       setState({ data, loading: false })
     },

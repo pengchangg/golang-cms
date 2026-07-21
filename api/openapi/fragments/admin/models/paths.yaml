@@ -173,6 +173,69 @@
       "403": *forbidden
       "404": *notFound
       "409": *conflict
+/models/{model_id}/fields/order:
+  parameters: *modelId
+  put:
+    operationId: updateAdminContentModelFieldOrder
+    summary: 更新同级字段顺序
+    description: 仅排序指定父级下的活动字段；base_field_ids 和 field_ids 都必须是该同级活动字段的完整集合。
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateFieldOrderRequest
+    responses:
+      "204": { description: 字段顺序已更新。 }
+      "400": *validationFailed
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409":
+        description: 模型已归档，或顺序基线、同级完整集合、父级归属发生冲突；排序冲突的 error.code 为 field_order_conflict。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/models/{model_id}/fields/{parent_field_id}/children:
+  parameters:
+    - name: model_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    - name: parent_field_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  post:
+    operationId: createAdminContentModelChildField
+    summary: 原子创建子字段
+    description: 仅允许在活动且深度小于 2 的 object 或 repeatable_group 下创建，并追加到该父字段的活动 children 末尾。要求 models.update。
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/ContentFieldInput
+    responses:
+      "201":
+        description: 子字段已创建。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ContentField
+      "400": *validationFailed
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409":
+        description: 模型或父字段已归档、父字段不是可用容器、字段 key 冲突、关联目标无效或关联目标为当前模型。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
 /models/{model_id}/fields/{field_id}:
   parameters:
     - name: model_id

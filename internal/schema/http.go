@@ -32,6 +32,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/admin/v1/models/{model_id}", h.archiveModel)
 	mux.HandleFunc("GET /api/admin/v1/models/{model_id}/fields", h.listFields)
 	mux.HandleFunc("POST /api/admin/v1/models/{model_id}/fields", h.createField)
+	mux.HandleFunc("PUT /api/admin/v1/models/{model_id}/fields/order", h.updateFieldOrder)
+	mux.HandleFunc("POST /api/admin/v1/models/{model_id}/fields/{parent_field_id}/children", h.createChildField)
 	mux.HandleFunc("GET /api/admin/v1/models/{model_id}/fields/{field_id}", h.getField)
 	mux.HandleFunc("PATCH /api/admin/v1/models/{model_id}/fields/{field_id}", h.updateField)
 	mux.HandleFunc("DELETE /api/admin/v1/models/{model_id}/fields/{field_id}", h.archiveField)
@@ -136,6 +138,37 @@ func (h *Handler) createField(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.service.CreateField(r.Context(), principal, requestMeta(r), r.PathValue("model_id"), request)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+func (h *Handler) updateFieldOrder(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var request UpdateFieldOrderRequest
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	if err := h.service.UpdateFieldOrder(r.Context(), principal, requestMeta(r), r.PathValue("model_id"), request); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (h *Handler) createChildField(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var request ContentFieldInput
+	if !decodeRequest(w, r, &request) {
+		return
+	}
+	result, err := h.service.CreateChildField(r.Context(), principal, requestMeta(r), r.PathValue("model_id"), r.PathValue("parent_field_id"), request)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return

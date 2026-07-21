@@ -27,6 +27,10 @@ paths:
     $ref: ./fragments/admin/models/paths.yaml#/~1models~1{model_id}
   /models/{model_id}/fields:
     $ref: ./fragments/admin/models/paths.yaml#/~1models~1{model_id}~1fields
+  /models/{model_id}/fields/order:
+    $ref: ./fragments/admin/models/paths.yaml#/~1models~1{model_id}~1fields~1order
+  /models/{model_id}/fields/{parent_field_id}/children:
+    $ref: ./fragments/admin/models/paths.yaml#/~1models~1{model_id}~1fields~1{parent_field_id}~1children
   /models/{model_id}/fields/{field_id}:
     $ref: ./fragments/admin/models/paths.yaml#/~1models~1{model_id}~1fields~1{field_id}
   /users:

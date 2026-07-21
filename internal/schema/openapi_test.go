@@ -56,3 +56,46 @@ func TestOpenAPIRootsExposeMediaValueConstraints(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIExposesFieldSiblingOrder(t *testing.T) {
+	for _, path := range []string{"../../api/openapi/fragments/admin/models/paths.yaml", "../../api/openapi/admin.yaml"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "/models/{model_id}/fields/order") {
+			t.Fatalf("%s 未聚合字段排序路径", path)
+		}
+	}
+	data, err := os.ReadFile("../../api/openapi/fragments/admin/models/schemas.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := string(data)
+	for _, want := range []string{"UpdateFieldOrderRequest:", "required: [parent_id, base_field_ids, field_ids]", "parent_id:", "base_field_ids:", "field_ids:"} {
+		if !strings.Contains(schema, want) {
+			t.Fatalf("字段排序 schema 缺少 %q", want)
+		}
+	}
+}
+
+func TestOpenAPIExposesAtomicChildFieldCreation(t *testing.T) {
+	for _, path := range []string{"../../api/openapi/fragments/admin/models/paths.yaml", "../../api/openapi/admin.yaml"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "/models/{model_id}/fields/{parent_field_id}/children") {
+			t.Fatalf("%s 未聚合子字段创建路径", path)
+		}
+	}
+	data, err := os.ReadFile("../../api/openapi/fragments/admin/models/paths.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"operationId: createAdminContentModelChildField", "$ref: ./schemas.yaml#/$defs/ContentFieldInput", `"201":`, "$ref: ./schemas.yaml#/$defs/ContentField"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("子字段创建契约缺少 %q", want)
+		}
+	}
+}

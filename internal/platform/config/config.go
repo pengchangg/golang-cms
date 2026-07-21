@@ -25,14 +25,16 @@ type Config struct {
 	LocalLoginEnabled   bool
 	OIDCEnabled         bool
 	AssetsEnabled       bool
-	OSSEndpoint         string
-	OSSRegion           string
-	OSSBucket           string
-	OSSAccessKeyID      string
-	OSSAccessKeySecret  string
-	OSSSecurityToken    string
-	OSSUploadTTL        time.Duration
-	OSSDownloadTTL      time.Duration
+	S3Endpoint          string
+	S3Region            string
+	S3Bucket            string
+	S3AccessKeyID       string
+	S3AccessKeySecret   string
+	S3SessionToken      string
+	S3UsePathStyle      bool
+	S3BucketEndpoint    bool
+	S3UploadTTL         time.Duration
+	S3DownloadTTL       time.Duration
 	AssetMimeTypes      []string
 	AssetMaxSize        int64
 	WorkerOwner         string
@@ -44,27 +46,27 @@ type Config struct {
 
 func Load(command string) (Config, error) {
 	cfg := Config{
-		ListenAddr:         envOrDefault("APP_LISTEN_ADDR", ":8080"),
-		MySQLDSN:           os.Getenv("MYSQL_DSN"),
-		WebDistDir:         envOrDefault("WEB_DIST_DIR", "web/dist"),
-		BaseURL:            os.Getenv("APP_BASE_URL"),
-		SessionSecret:      os.Getenv("APP_SESSION_SECRET"),
-		OIDCIssuerURL:      os.Getenv("OIDC_ISSUER_URL"),
-		OIDCClientID:       os.Getenv("OIDC_CLIENT_ID"),
-		OIDCClientSecret:   os.Getenv("OIDC_CLIENT_SECRET"),
-		OIDCRedirectURL:    os.Getenv("OIDC_REDIRECT_URL"),
-		LocalLoginEnabled:  false,
-		OIDCEnabled:        true,
-		AssetsEnabled:      true,
-		OSSEndpoint:        os.Getenv("ALIYUN_OSS_ENDPOINT"),
-		OSSRegion:          os.Getenv("ALIYUN_OSS_REGION"),
-		OSSBucket:          os.Getenv("ALIYUN_OSS_BUCKET"),
-		OSSAccessKeyID:     os.Getenv("ALIYUN_OSS_ACCESS_KEY_ID"),
-		OSSAccessKeySecret: os.Getenv("ALIYUN_OSS_ACCESS_KEY_SECRET"),
-		OSSSecurityToken:   os.Getenv("ALIYUN_OSS_SECURITY_TOKEN"),
-		OSSUploadTTL:       15 * time.Minute,
-		OSSDownloadTTL:     5 * time.Minute,
-		WorkerOwner:        os.Getenv("APP_WORKER_OWNER"),
+		ListenAddr:        envOrDefault("APP_LISTEN_ADDR", ":8080"),
+		MySQLDSN:          os.Getenv("MYSQL_DSN"),
+		WebDistDir:        envOrDefault("WEB_DIST_DIR", "web/dist"),
+		BaseURL:           os.Getenv("APP_BASE_URL"),
+		SessionSecret:     os.Getenv("APP_SESSION_SECRET"),
+		OIDCIssuerURL:     os.Getenv("OIDC_ISSUER_URL"),
+		OIDCClientID:      os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:  os.Getenv("OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:   os.Getenv("OIDC_REDIRECT_URL"),
+		LocalLoginEnabled: false,
+		OIDCEnabled:       true,
+		AssetsEnabled:     true,
+		S3Endpoint:        os.Getenv("S3_ENDPOINT"),
+		S3Region:          os.Getenv("S3_REGION"),
+		S3Bucket:          os.Getenv("S3_BUCKET"),
+		S3AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
+		S3AccessKeySecret: os.Getenv("S3_ACCESS_KEY_SECRET"),
+		S3SessionToken:    os.Getenv("S3_SESSION_TOKEN"),
+		S3UploadTTL:       15 * time.Minute,
+		S3DownloadTTL:     5 * time.Minute,
+		WorkerOwner:       os.Getenv("APP_WORKER_OWNER"),
 	}
 	if err := parseBoolEnv("APP_ASSETS_ENABLED", &cfg.AssetsEnabled); err != nil {
 		return Config{}, err
@@ -118,9 +120,9 @@ func Load(command string) (Config, error) {
 
 func loadAssetsConfig(cfg *Config) error {
 	required := []struct{ name, value string }{
-		{"ALIYUN_OSS_ENDPOINT", cfg.OSSEndpoint}, {"ALIYUN_OSS_REGION", cfg.OSSRegion},
-		{"ALIYUN_OSS_BUCKET", cfg.OSSBucket}, {"ALIYUN_OSS_ACCESS_KEY_ID", cfg.OSSAccessKeyID},
-		{"ALIYUN_OSS_ACCESS_KEY_SECRET", cfg.OSSAccessKeySecret}, {"ASSET_ALLOWED_MIME_TYPES", os.Getenv("ASSET_ALLOWED_MIME_TYPES")},
+		{"S3_ENDPOINT", cfg.S3Endpoint}, {"S3_REGION", cfg.S3Region},
+		{"S3_BUCKET", cfg.S3Bucket}, {"S3_ACCESS_KEY_ID", cfg.S3AccessKeyID},
+		{"S3_ACCESS_KEY_SECRET", cfg.S3AccessKeySecret}, {"ASSET_ALLOWED_MIME_TYPES", os.Getenv("ASSET_ALLOWED_MIME_TYPES")},
 		{"ASSET_MAX_SIZE_BYTES", os.Getenv("ASSET_MAX_SIZE_BYTES")}, {"APP_WORKER_OWNER", cfg.WorkerOwner},
 		{"APP_WORKER_CONCURRENCY", os.Getenv("APP_WORKER_CONCURRENCY")}, {"APP_WORKER_POLL_INTERVAL", os.Getenv("APP_WORKER_POLL_INTERVAL")},
 		{"APP_WORKER_LEASE_DURATION", os.Getenv("APP_WORKER_LEASE_DURATION")}, {"APP_WORKER_RENEW_INTERVAL", os.Getenv("APP_WORKER_RENEW_INTERVAL")},
@@ -130,17 +132,29 @@ func loadAssetsConfig(cfg *Config) error {
 			return fmt.Errorf("启用素材功能时缺少必需环境变量 %s", item.name)
 		}
 	}
-	if _, err := parseHTTPSURL("ALIYUN_OSS_ENDPOINT", cfg.OSSEndpoint); err != nil {
+	endpoint, err := parseHTTPSURL("S3_ENDPOINT", cfg.S3Endpoint)
+	if err != nil {
 		return err
 	}
-	var err error
-	if os.Getenv("OSS_UPLOAD_URL_TTL") != "" {
-		if cfg.OSSUploadTTL, err = parseDurationRange("OSS_UPLOAD_URL_TTL", time.Minute, 30*time.Minute); err != nil {
+	if endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" || strings.Contains(cfg.S3Endpoint, "#") {
+		return errors.New("S3_ENDPOINT 只能包含 HTTPS origin")
+	}
+	if err := parseBoolEnv("S3_USE_PATH_STYLE", &cfg.S3UsePathStyle); err != nil {
+		return err
+	}
+	if err := parseBoolEnv("S3_BUCKET_ENDPOINT", &cfg.S3BucketEndpoint); err != nil {
+		return err
+	}
+	if cfg.S3UsePathStyle && cfg.S3BucketEndpoint {
+		return errors.New("S3_USE_PATH_STYLE 和 S3_BUCKET_ENDPOINT 不能同时启用")
+	}
+	if os.Getenv("S3_UPLOAD_URL_TTL") != "" {
+		if cfg.S3UploadTTL, err = parseDurationRange("S3_UPLOAD_URL_TTL", time.Minute, 30*time.Minute); err != nil {
 			return err
 		}
 	}
-	if os.Getenv("OSS_DOWNLOAD_URL_TTL") != "" {
-		if cfg.OSSDownloadTTL, err = parseDurationRange("OSS_DOWNLOAD_URL_TTL", time.Minute, 15*time.Minute); err != nil {
+	if os.Getenv("S3_DOWNLOAD_URL_TTL") != "" {
+		if cfg.S3DownloadTTL, err = parseDurationRange("S3_DOWNLOAD_URL_TTL", time.Minute, 15*time.Minute); err != nil {
 			return err
 		}
 	}

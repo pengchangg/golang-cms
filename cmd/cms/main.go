@@ -145,14 +145,14 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	userService := identity.NewUserService(identity.UserDependencies{DB: db, Transactor: transactor, Authorizer: authorizer, Audit: auditWriter})
 	roleService := permission.NewService(permission.Dependencies{DB: db, Transactor: transactor, Authorizer: authorizer, Audit: auditWriter, Users: userService, Models: modelAdapter})
 	var media content.MediaReferenceManager
-	var objectStore *asset.OSSStore
+	var objectStore *asset.S3Store
 	if cfg.AssetsEnabled {
-		objectStore, err = asset.NewOSSStore(asset.OSSConfig{Endpoint: cfg.OSSEndpoint, Region: cfg.OSSRegion, Bucket: cfg.OSSBucket, AccessKeyID: cfg.OSSAccessKeyID, AccessKeySecret: cfg.OSSAccessKeySecret, SecurityToken: cfg.OSSSecurityToken, UploadMaxTTL: cfg.OSSUploadTTL, DownloadMaxTTL: cfg.OSSDownloadTTL})
+		objectStore, err = asset.NewS3Store(asset.S3Config{Endpoint: cfg.S3Endpoint, Region: cfg.S3Region, Bucket: cfg.S3Bucket, AccessKeyID: cfg.S3AccessKeyID, AccessKeySecret: cfg.S3AccessKeySecret, SessionToken: cfg.S3SessionToken, UsePathStyle: cfg.S3UsePathStyle, BucketEndpoint: cfg.S3BucketEndpoint, UploadMaxTTL: cfg.S3UploadTTL, DownloadMaxTTL: cfg.S3DownloadTTL})
 		if err != nil {
-			return fmt.Errorf("初始化 OSS: %w", err)
+			return fmt.Errorf("初始化 S3 兼容对象存储: %w", err)
 		}
 		if err = objectStore.CheckPrivateBucket(ctx); err != nil {
-			return fmt.Errorf("检查私有 OSS Bucket: %w", err)
+			return fmt.Errorf("检查 S3 兼容对象存储 Bucket: %w", err)
 		}
 		media = integration.MediaReferenceManager{Manager: asset.SQLReferenceManager{}}
 	}
@@ -179,7 +179,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	client.NewContentHandler(clientService, publishedReader).RegisterRoutes(contentMux)
 	var runner *task.Runner
 	if cfg.AssetsEnabled {
-		assetService, serviceErr := asset.NewService(asset.Dependencies{DB: db, Transactor: transactor, Repository: asset.SQLRepository{}, Store: objectStore, Audit: auditWriter, Config: asset.Config{AllowedMimeTypes: cfg.AssetMimeTypes, MaxSize: cfg.AssetMaxSize, UploadTTL: cfg.OSSUploadTTL, DownloadTTL: cfg.OSSDownloadTTL}})
+		assetService, serviceErr := asset.NewService(asset.Dependencies{DB: db, Transactor: transactor, Repository: asset.SQLRepository{}, Store: objectStore, Audit: auditWriter, Config: asset.Config{AllowedMimeTypes: cfg.AssetMimeTypes, MaxSize: cfg.AssetMaxSize, UploadTTL: cfg.S3UploadTTL, DownloadTTL: cfg.S3DownloadTTL}})
 		if serviceErr != nil {
 			return fmt.Errorf("初始化素材服务: %w", serviceErr)
 		}
@@ -189,7 +189,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		transferRepository := integration.TransferRepository{SQLRepository: transfer.NewRepository(db)}
 		transferStore := integration.TransferStore{Store: objectStore}
 		modelReader := integration.ModelReader{DB: db, Repository: schemaRepository}
-		transferService := transfer.NewService(transfer.Dependencies{DB: db, Transactor: transactor, Repository: transferRepository, Models: modelReader, Uploads: integration.UploadManager{DB: db, Store: objectStore, MaxSize: cfg.AssetMaxSize}, Store: transferStore, UploadTTL: cfg.OSSUploadTTL, DownloadTTL: cfg.OSSDownloadTTL})
+		transferService := transfer.NewService(transfer.Dependencies{DB: db, Transactor: transactor, Repository: transferRepository, Models: modelReader, Uploads: integration.UploadManager{DB: db, Store: objectStore, MaxSize: cfg.AssetMaxSize}, Store: transferStore, UploadTTL: cfg.S3UploadTTL, DownloadTTL: cfg.S3DownloadTTL})
 		transfer.NewModule(transferService, integration.TransferPrincipalProvider(principalFromRequest)).RegisterRoutes(adminMux)
 		principals := integration.PrincipalSnapshot{DB: db, Permissions: permissionProvider}
 		jobHandler := transfer.NewJobHandler(transfer.JobHandler{Repository: transferRepository, Store: transferStore, Importer: contentService, Validator: integration.DraftValidator{Content: contentService, DB: db}, Exporter: integration.ExportSource{Content: contentService, Principals: principals, Models: modelReader}, Principals: principals})

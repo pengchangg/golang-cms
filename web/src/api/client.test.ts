@@ -30,7 +30,7 @@ describe('API Client', () => {
     expect(headers.get('X-CSRF-Token')).toBe(session.csrf_token)
   })
 
-  it('素材上传仅在 OSS PUT 成功后确认并返回可用素材', async () => {
+  it('素材上传仅在对象存储 PUT 成功后确认并返回可用素材', async () => {
     const file = new File([new Uint8Array([1, 2, 3])], 'cover.png', { type: 'image/png' })
     Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1, 2, 3]).buffer })
     const asset = { id: 'ast_1', filename: file.name, mime_type: file.type, size: file.size, sha256: 'a'.repeat(64), etag: 'etag', status: 'available' as const, created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: '2026-07-20T08:00:00Z', archived_at: null }
@@ -124,6 +124,38 @@ describe('API Client', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ items: [], next_cursor: null })))
     await api.listEntries('mdl_1', { workflow_status: 'pending_review', filter: '{"title":{"eq":"公告"}}', relation_filter: '{"author":{"contains":"ent_1"}}', sort: '-title', include_total: true })
     expect(fetch).toHaveBeenCalledWith('/api/admin/v1/models/mdl_1/entries?workflow_status=pending_review&filter=%7B%22title%22%3A%7B%22eq%22%3A%22%E5%85%AC%E5%91%8A%22%7D%7D&relation_filter=%7B%22author%22%3A%7B%22contains%22%3A%22ent_1%22%7D%7D&sort=-title&include_total=true', expect.any(Object))
+  })
+
+  it('字段查询、创建子字段、修改、归档和排序使用冻结路径与请求体', async () => {
+    authStore.setSession(session)
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ items: [] }))
+      .mockResolvedValueOnce(Response.json({ id: 'fld_1' }))
+      .mockResolvedValueOnce(Response.json({ id: 'fld_1' }))
+      .mockResolvedValueOnce(Response.json({ id: 'fld_child' }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.listFields('mdl/a')
+    await api.getField('mdl/a', 'fld/b')
+    await api.updateField('mdl/a', 'fld/b', { display_name: '新标题' })
+    await api.createChildField('mdl/a', 'fld/root', { key: 'child', display_name: '子字段', type: 'single_line_text' })
+    await api.archiveField('mdl/a', 'fld/b')
+    await api.reorderFields('mdl/a', { parent_id: 'fld/root', base_field_ids: ['fld/b', 'fld/c'], field_ids: ['fld/c', 'fld/b'] })
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/admin/v1/models/mdl%2Fa/fields',
+      '/api/admin/v1/models/mdl%2Fa/fields/fld%2Fb',
+      '/api/admin/v1/models/mdl%2Fa/fields/fld%2Fb',
+      '/api/admin/v1/models/mdl%2Fa/fields/fld%2Froot/children',
+      '/api/admin/v1/models/mdl%2Fa/fields/fld%2Fb',
+      '/api/admin/v1/models/mdl%2Fa/fields/order',
+    ])
+    expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ display_name: '新标题' }) }))
+    expect(fetchMock.mock.calls[3][1]).toEqual(expect.objectContaining({ method: 'POST', body: JSON.stringify({ key: 'child', display_name: '子字段', type: 'single_line_text' }) }))
+    expect(fetchMock.mock.calls[4][1]).toEqual(expect.objectContaining({ method: 'DELETE' }))
+    expect(fetchMock.mock.calls[5][1]).toEqual(expect.objectContaining({ method: 'PUT', body: JSON.stringify({ parent_id: 'fld/root', base_field_ids: ['fld/b', 'fld/c'], field_ids: ['fld/c', 'fld/b'] }) }))
   })
 
   it('创建和轮换 API Key 禁止客户端缓存完整密钥', async () => {

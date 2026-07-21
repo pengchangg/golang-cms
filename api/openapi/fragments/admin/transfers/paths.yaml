@@ -90,7 +90,7 @@ x-integration-status: integrated
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "503": &storeUnavailable
-        description: OSS 临时不可用，error.code 为 object_store_unavailable。
+        description: 对象存储临时不可用，error.code 为 object_store_unavailable。
         content:
           application/json:
             schema:

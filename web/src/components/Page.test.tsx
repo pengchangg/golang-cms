@@ -15,6 +15,11 @@ function PollingHarness({ load }: { load: () => Promise<string> }) {
   return <div>{result.error ? '错误' : result.data ?? '加载中'}</div>
 }
 
+function MutationHarness({ load }: { load: () => Promise<string> }) {
+  const result = useApiData(load)
+  return <><div>{result.data ?? '加载中'}</div><button onClick={() => result.setData('乐观数据')}>更新</button><button onClick={() => result.reload(true)}>刷新</button></>
+}
+
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
@@ -36,5 +41,29 @@ describe('useApiData 背景刷新', () => {
     await act(() => vi.advanceTimersByTimeAsync(1_000))
     expect(screen.getByText('新数据')).toBeInTheDocument()
     expect(load).toHaveBeenCalledTimes(3)
+  })
+
+  it('旧 GET 不会覆盖 setData，reload 只接受最新请求', async () => {
+    let resolveFirst!: (value: string) => void
+    let resolveSecond!: (value: string) => void
+    let resolveThird!: (value: string) => void
+    const load = vi.fn()
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveFirst = resolve }))
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveSecond = resolve }))
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveThird = resolve }))
+    render(<MutationHarness load={load} />)
+
+    screen.getByText('更新').click()
+    await act(async () => resolveFirst('过期数据'))
+    expect(screen.getByText('乐观数据')).toBeInTheDocument()
+
+    screen.getByText('刷新').click()
+    await act(async () => {})
+    screen.getByText('刷新').click()
+    await act(async () => {})
+    await act(async () => resolveSecond('较旧刷新'))
+    expect(screen.getByText('乐观数据')).toBeInTheDocument()
+    await act(async () => resolveThird('最新刷新'))
+    expect(screen.getByText('最新刷新')).toBeInTheDocument()
   })
 })

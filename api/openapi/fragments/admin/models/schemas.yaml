@@ -130,6 +130,25 @@ $defs:
         type: array
         items:
           $ref: "#/$defs/ContentFieldInput"
+  UpdateFieldOrderRequest:
+    type: object
+    additionalProperties: false
+    required: [parent_id, base_field_ids, field_ids]
+    properties:
+      parent_id:
+        type: [string, "null"]
+        minLength: 1
+        description: null 表示根字段，否则为待排序同级字段的直接父字段 ID。
+      base_field_ids:
+        type: array
+        items: { type: string, minLength: 1 }
+        uniqueItems: true
+        description: 当前活动同级字段的完整顺序，用于并发基线校验。
+      field_ids:
+        type: array
+        items: { type: string, minLength: 1 }
+        uniqueItems: true
+        description: 排序后的活动同级字段完整集合，禁止跨父级或包含归档字段。
   ContentField:
     type: object
     additionalProperties: false

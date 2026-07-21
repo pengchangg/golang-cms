@@ -22,7 +22,7 @@ export function enableF3Mock() {
     const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const url = new URL(raw, window.location.origin)
     const method = (init?.method ?? 'GET').toUpperCase()
-    if (url.hostname === 'mock-oss.local' && method === 'PUT') return new Response(null, { status: 200 })
+    if (url.hostname === 'mock-s3.local' && method === 'PUT') return new Response(null, { status: 200 })
     if (!url.pathname.startsWith('/api/admin/v1/')) return nativeFetch(input, init)
     const path = url.pathname.slice('/api/admin/v1'.length)
     if (path === '/assets' && method === 'GET') {
@@ -32,7 +32,7 @@ export function enableF3Mock() {
     if (path === '/assets/uploads' && method === 'POST') {
       const request = body(init); const asset: Asset = { id: `ast_${crypto.randomUUID().slice(0, 8)}`, filename: String(request.filename), mime_type: String(request.mime_type), size: Number(request.size), sha256: String(request.sha256), etag: null, status: 'quarantined', created_by: 'usr_dev_preview', created_at: now, confirmed_at: null, archived_at: null }
       assets = [asset, ...assets]
-      return Response.json({ asset, upload: { method: 'PUT', url: `https://mock-oss.local/${asset.id}`, headers: { 'Content-Type': asset.mime_type, 'x-oss-meta-sha256': asset.sha256 }, expires_at: '2026-07-19T09:00:00Z' } }, { status: 201 })
+      return Response.json({ asset, upload: { method: 'PUT', url: `https://mock-s3.local/${asset.id}`, headers: { 'Content-Type': asset.mime_type, 'If-None-Match': '*', 'x-amz-meta-sha256': asset.sha256 }, expires_at: '2026-07-19T09:00:00Z' } }, { status: 201 })
     }
     const assetMatch = path.match(/^\/assets\/([^/]+)(\/confirm)?$/)
     if (assetMatch?.[2] && method === 'POST') {
@@ -41,7 +41,7 @@ export function enableF3Mock() {
     }
     if (assetMatch && method === 'DELETE') { assets = assets.map((item) => item.id === assetMatch[1] ? { ...item, status: 'archived', archived_at: now } : item); return new Response(null, { status: 204 }) }
     const importUpload = path.match(/^\/models\/([^/]+)\/imports\/uploads$/)
-    if (importUpload && method === 'POST') return Response.json({ upload_id: `upl_${crypto.randomUUID().slice(0, 8)}`, method: 'PUT', url: 'https://mock-oss.local/import.csv', headers: { 'Content-Type': 'text/csv' }, expires_at: '2026-07-19T09:00:00Z' }, { status: 201 })
+    if (importUpload && method === 'POST') return Response.json({ upload_id: `upl_${crypto.randomUUID().slice(0, 8)}`, method: 'PUT', url: 'https://mock-s3.local/import.csv', headers: { 'Content-Type': 'text/csv' }, expires_at: '2026-07-19T09:00:00Z' }, { status: 201 })
     const transfer = path.match(/^\/models\/([^/]+)\/(imports|exports)$/)
     if (transfer && method === 'POST') { const created = job(transfer[2] === 'imports' ? 'csv_import' : 'csv_export', transfer[1]); jobs = [created, ...jobs]; return Response.json(created, { status: 201 }) }
     if (path === '/jobs' && method === 'GET') { const status = url.searchParams.get('status'); const type = url.searchParams.get('type'); return Response.json({ items: jobs.filter((item) => (!status || item.status === status) && (!type || item.type === type)), next_cursor: null }) }

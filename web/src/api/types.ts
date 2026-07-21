@@ -94,6 +94,15 @@ export interface ContentFieldInput {
   key: string; display_name: string; description?: string; type: FieldType; required?: boolean
   default_value?: unknown; constraints?: FieldConstraints; children?: ContentFieldInput[]
 }
+export interface ContentFieldPatch {
+  display_name?: string; description?: string; type?: FieldType; required?: boolean
+  default_value?: unknown; constraints?: FieldConstraints; children?: ContentFieldInput[]
+}
+export interface UpdateFieldOrderRequest {
+  parent_id: string | null
+  base_field_ids: string[]
+  field_ids: string[]
+}
 export interface ContentField extends Omit<ContentFieldInput, 'description' | 'required' | 'constraints' | 'children'> {
   id: string; description: string; required: boolean; default_value: unknown
   constraints: FieldConstraints; children: ContentField[]; status: ResourceStatus

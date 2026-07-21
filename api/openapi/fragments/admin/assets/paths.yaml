@@ -54,7 +54,7 @@ x-integration-status: integrated
   post:
     x-integration-status: integrated
     operationId: createAdminAssetUpload
-    summary: 创建隔离素材和 OSS 签名上传
+    summary: 创建隔离素材和对象存储签名上传
     parameters: &writeHeaders
       - *sessionCookie
       - name: Origin
@@ -91,7 +91,7 @@ x-integration-status: integrated
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "503": &storeUnavailable
-        description: OSS 临时不可用，error.code 为 object_store_unavailable。
+        description: 对象存储临时不可用，error.code 为 object_store_unavailable。
         content:
           application/json:
             schema:
@@ -161,7 +161,7 @@ x-integration-status: integrated
   post:
     x-integration-status: integrated
     operationId: confirmAdminAssetUpload
-    summary: 核对 OSS 元数据并使素材可用
+    summary: 核对 S3 用户 Metadata 并使素材可用
     parameters: *writeHeaders
     requestBody:
       required: true
@@ -182,11 +182,11 @@ x-integration-status: integrated
   get:
     x-integration-status: integrated
     operationId: downloadAdminAsset
-    summary: 为可下载素材签发短时 OSS 地址
+    summary: 为可下载素材签发短时对象存储地址
     parameters: [*sessionCookie]
     responses:
       "302":
-        description: 重定向到短时私有 OSS 下载地址。
+        description: 重定向到短时私有对象存储下载地址。
         headers:
           Location:
             required: true

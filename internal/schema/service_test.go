@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -212,11 +214,146 @@ func TestUpdateFieldResponseIncludesArchivedChildren(t *testing.T) {
 	}
 }
 
+func TestUpdateFieldOrderUsesCompleteSiblingSetAndBaseline(t *testing.T) {
+	repository := seededRepository()
+	repository.fields["fld_2"] = ContentField{ID: "fld_2", Key: "summary", Status: StatusActive}
+	repository.positions["fld_1"] = 0
+	repository.positions["fld_2"] = 1
+	state := &transactionState{}
+	service := testService(repository, state)
+	request := UpdateFieldOrderRequest{ParentID: nil, BaseFieldIDs: []string{"fld_1", "fld_2"}, FieldIDs: []string{"fld_2", "fld_1"}, parentSet: true}
+	if err := service.UpdateFieldOrder(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", request); err != nil {
+		t.Fatal(err)
+	}
+	if repository.positions["fld_2"] != 0 || repository.positions["fld_1"] != 1 || state.commits != 1 || !state.auditInTx {
+		t.Fatalf("positions/state = %#v/%#v", repository.positions, state)
+	}
+
+	request.BaseFieldIDs = []string{"fld_1", "fld_2"}
+	err := service.UpdateFieldOrder(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", request)
+	assertErrorCode(t, err, "field_order_conflict")
+	if repository.positions["fld_2"] != 0 || repository.positions["fld_1"] != 1 {
+		t.Fatalf("conflict changed positions = %#v", repository.positions)
+	}
+}
+
+func TestUpdateFieldOrderRejectsCrossParentAndArchivedFields(t *testing.T) {
+	repository := seededRepository()
+	parentID := "fld_parent"
+	repository.fields[parentID] = ContentField{ID: parentID, Key: "group", Status: StatusActive}
+	repository.fields["fld_child"] = ContentField{ID: "fld_child", Key: "child", Status: StatusActive, Depth: 1}
+	repository.parents["fld_child"] = &parentID
+	repository.fields["fld_archived"] = ContentField{ID: "fld_archived", Key: "old", Status: StatusArchived}
+	service := testService(repository, &transactionState{})
+
+	for _, fieldIDs := range [][]string{{"fld_1", "fld_child"}, {"fld_1", "fld_archived"}} {
+		err := service.UpdateFieldOrder(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", UpdateFieldOrderRequest{BaseFieldIDs: []string{"fld_1"}, FieldIDs: fieldIDs, parentSet: true})
+		assertErrorCode(t, err, "field_order_conflict")
+	}
+}
+
+func TestCreateRootFieldAppendsAfterPositionGap(t *testing.T) {
+	repository := seededRepository()
+	repository.positions["fld_1"] = 3
+	service := testService(repository, &transactionState{})
+	service.newID = func(string) (string, error) { return "fld_new", nil }
+	if _, err := service.CreateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", fieldInput(FieldTypeBoolean, `null`, FieldConstraints{})); err != nil {
+		t.Fatal(err)
+	}
+	if repository.positions["fld_new"] != 4 {
+		t.Fatalf("new field position = %d", repository.positions["fld_new"])
+	}
+}
+
+func TestCreateChildFieldAppendsAndLocksRelationModelsInStableOrder(t *testing.T) {
+	repository := seededRepository()
+	parent := repository.fields["fld_1"]
+	parent.Type = FieldTypeObject
+	repository.fields[parent.ID] = parent
+	repository.models["mdl_a"] = ContentModelSummary{ID: "mdl_a", Status: StatusActive}
+	repository.models["mdl_z"] = ContentModelSummary{ID: "mdl_z", Status: StatusActive}
+	parentID := parent.ID
+	repository.fields["fld_existing"] = ContentField{ID: "fld_existing", Key: "existing", Status: StatusActive, Depth: 1}
+	repository.parents["fld_existing"] = &parentID
+	repository.positions["fld_existing"] = 4
+	targetA, targetZ := "mdl_a", "mdl_z"
+	input := fieldInput(FieldTypeObject, `null`, FieldConstraints{},
+		ContentFieldInput{Key: "relation_z", DisplayName: "Z", Type: FieldTypeSingleRelation, DefaultValue: json.RawMessage(`null`), Constraints: FieldConstraints{TargetModelID: &targetZ}, Children: []ContentFieldInput{}},
+		ContentFieldInput{Key: "relation_a", DisplayName: "A", Type: FieldTypeSingleRelation, DefaultValue: json.RawMessage(`null`), Constraints: FieldConstraints{TargetModelID: &targetA}, Children: []ContentFieldInput{}},
+	)
+	state := &transactionState{}
+	service := testService(repository, state)
+	nextID := 0
+	service.newID = func(string) (string, error) {
+		nextID++
+		return fmt.Sprintf("fld_new_%d", nextID), nil
+	}
+	result, err := service.CreateChildField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", parent.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ID != "fld_new_1" || repository.positions[result.ID] != 5 || repository.parents[result.ID] == nil || *repository.parents[result.ID] != parent.ID {
+		t.Fatalf("result/position/parent = %#v/%d/%#v", result, repository.positions[result.ID], repository.parents[result.ID])
+	}
+	if want := []string{"mdl_1", "mdl_a", "mdl_z"}; !reflect.DeepEqual(repository.lockedIDs, want) {
+		t.Fatalf("locked IDs = %#v, want %#v", repository.lockedIDs, want)
+	}
+	if state.requiredPermission != "models.update" || !state.auditInTx || state.commits != 1 {
+		t.Fatalf("transaction state = %#v", state)
+	}
+}
+
+func TestCreateChildFieldReturnsKeyConflict(t *testing.T) {
+	repository := seededRepository()
+	parent := repository.fields["fld_1"]
+	parent.Type = FieldTypeObject
+	repository.fields[parent.ID] = parent
+	_, err := testService(repository, &transactionState{}).CreateChildField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", parent.ID, ContentFieldInput{Key: parent.Key, DisplayName: "Duplicate", Type: FieldTypeBoolean, DefaultValue: json.RawMessage(`null`), Children: []ContentFieldInput{}})
+	assertErrorCode(t, err, "key_conflict")
+}
+
+func TestCreateChildFieldRejectsInvalidParentAndDepth(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status ResourceStatus
+		type_  FieldType
+		depth  int
+		code   string
+	}{
+		{name: "archived", status: StatusArchived, type_: FieldTypeObject, code: "resource_archived"},
+		{name: "leaf", status: StatusActive, type_: FieldTypeSingleLineText, code: "parent_field_invalid"},
+		{name: "depth", status: StatusActive, type_: FieldTypeObject, depth: 2, code: "parent_field_invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := seededRepository()
+			parent := repository.fields["fld_1"]
+			parent.Status, parent.Type, parent.Depth = test.status, test.type_, test.depth
+			repository.fields[parent.ID] = parent
+			_, err := testService(repository, &transactionState{}).CreateChildField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", parent.ID, fieldInput(FieldTypeBoolean, `null`, FieldConstraints{}))
+			assertErrorCode(t, err, test.code)
+		})
+	}
+}
+
+func TestUpdateFieldOrderRejectsNonContainerOrMaxDepthParent(t *testing.T) {
+	for _, parent := range []ContentField{
+		{ID: "fld_parent", Key: "leaf", Type: FieldTypeSingleLineText, Status: StatusActive},
+		{ID: "fld_parent", Key: "nested", Type: FieldTypeObject, Status: StatusActive, Depth: 2},
+	} {
+		repository := seededRepository()
+		repository.fields[parent.ID] = parent
+		parentID := parent.ID
+		err := testService(repository, &transactionState{}).UpdateFieldOrder(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", UpdateFieldOrderRequest{ParentID: &parentID, BaseFieldIDs: []string{}, FieldIDs: []string{}, parentSet: true})
+		assertErrorCode(t, err, "field_order_conflict")
+	}
+}
+
 type transactionState struct {
 	active, authorizedInTx, auditInTx bool
 	commits, rollbacks                int
 	auditErr                          error
 	authorizeErr                      error
+	requiredPermission                string
 }
 type fakeTransactor struct{ state *transactionState }
 
@@ -240,8 +377,9 @@ func (fakeQuerier) QueryRowContext(context.Context, string, ...any) *sql.Row    
 
 type fakeAuthorizer struct{ state *transactionState }
 
-func (f fakeAuthorizer) RequireSystemPermission(context.Context, identity.Principal, string) error {
+func (f fakeAuthorizer) RequireSystemPermission(_ context.Context, _ identity.Principal, required string) error {
 	f.state.authorizedInTx = f.state.active
+	f.state.requiredPermission = required
 	if f.state.authorizeErr != nil {
 		return f.state.authorizeErr
 	}
@@ -270,6 +408,8 @@ type memoryRepository struct {
 	fields        map[string]ContentField
 	lockedIDs     []string
 	lockModelsErr error
+	parents       map[string]*string
+	positions     map[string]int
 }
 
 func (m *memoryRepository) ensure() {
@@ -278,6 +418,12 @@ func (m *memoryRepository) ensure() {
 	}
 	if m.fields == nil {
 		m.fields = map[string]ContentField{}
+	}
+	if m.parents == nil {
+		m.parents = map[string]*string{}
+	}
+	if m.positions == nil {
+		m.positions = map[string]int{}
 	}
 }
 func (m *memoryRepository) ListModels(context.Context, database.Querier, *ResourceStatus) ([]ContentModelSummary, error) {
@@ -338,9 +484,35 @@ func (m *memoryRepository) GetField(_ context.Context, _ database.Querier, _, fi
 	}
 	return field, nil
 }
-func (m *memoryRepository) CreateFieldTree(_ context.Context, _ database.Querier, _ string, field *ContentField, _ *string, _ int) error {
+func (m *memoryRepository) LockFieldTree(_ context.Context, _ database.Querier, _ string) ([]ContentField, error) {
 	m.ensure()
+	result := make([]ContentField, 0, len(m.fields))
+	for id, field := range m.fields {
+		field.ParentID = m.parents[id]
+		field.Position = int64(m.positions[id])
+		result = append(result, field)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Depth != result[j].Depth {
+			return result[i].Depth < result[j].Depth
+		}
+		if result[i].Position != result[j].Position {
+			return result[i].Position < result[j].Position
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result, nil
+}
+func (m *memoryRepository) CreateFieldTree(_ context.Context, _ database.Querier, _ string, field *ContentField, parentID *string, position int) error {
+	m.ensure()
+	for _, existing := range m.fields {
+		if existing.Key == field.Key {
+			return ErrDuplicateKey
+		}
+	}
 	m.fields[field.ID] = *field
+	m.parents[field.ID] = parentID
+	m.positions[field.ID] = position
 	return nil
 }
 func (m *memoryRepository) UpdateField(_ context.Context, _ database.Querier, _ string, field ContentField) error {
@@ -348,7 +520,25 @@ func (m *memoryRepository) UpdateField(_ context.Context, _ database.Querier, _ 
 	m.fields[field.ID] = field
 	return nil
 }
-func (m *memoryRepository) UpdateFieldPosition(context.Context, database.Querier, string, string, int) error {
+func (m *memoryRepository) PrepareFieldOrder(_ context.Context, _ database.Querier, _ string, parentID *string) error {
+	for id, field := range m.fields {
+		if field.Status == StatusActive && sameParent(m.parents[id], parentID) {
+			m.positions[id] = -m.positions[id] - 1
+		}
+	}
+	return nil
+}
+func (m *memoryRepository) UpdateFieldPosition(_ context.Context, _ database.Querier, _ string, fieldID string, position int) error {
+	m.positions[fieldID] = position
+	return nil
+}
+func (m *memoryRepository) UpdateFieldOrder(ctx context.Context, q database.Querier, modelID string, parentID *string, fieldIDs []string) error {
+	if err := m.PrepareFieldOrder(ctx, q, modelID, parentID); err != nil {
+		return err
+	}
+	for position, id := range fieldIDs {
+		m.positions[id] = position
+	}
 	return nil
 }
 func (m *memoryRepository) ArchiveFieldTree(_ context.Context, _ database.Querier, _, fieldID string, now time.Time) error {

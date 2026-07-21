@@ -267,9 +267,9 @@ curl --silent --show-error \
   "$BASE_URL/api/content/v1/assets/$ASSET_ID"
 ```
 
-成功返回 `302`，`Location` 是短时 OSS 签名 URL，响应使用 `Cache-Control: private, no-store`。
+成功返回 `302`，`Location` 是短时私有 S3 兼容对象存储签名 URL，响应使用 `Cache-Control: private, no-store`。
 
-只有被 API Key 授权模型的当前发布 Revision 引用的素材才可访问。`make dev` 默认从 `.env.assets.local` 启用 OSS；使用 `make dev DEV_ASSETS_ENABLED=false` 时不会注册素材下载端点。
+只有被 API Key 授权模型的当前发布 Revision 引用的素材才可访问。`make dev` 默认从 `.env.assets.local` 启用对象存储；使用 `make dev DEV_ASSETS_ENABLED=false` 时不会注册素材下载端点。
 
 为避免跨主机重定向时意外转发 API Key，推荐先读取 `Location`，再单独请求签名 URL，而不是无条件让 HTTP 客户端携带认证头跟随重定向。
 

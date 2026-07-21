@@ -3,6 +3,7 @@ package schema
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"time"
 )
@@ -204,6 +205,58 @@ type ContentField struct {
 	CreatedAt    time.Time        `json:"created_at"`
 	UpdatedAt    time.Time        `json:"updated_at"`
 	Depth        int              `json:"-"`
+	ParentID     *string          `json:"-"`
+	Position     int64            `json:"-"`
+}
+
+type UpdateFieldOrderRequest struct {
+	ParentID     *string  `json:"parent_id"`
+	BaseFieldIDs []string `json:"base_field_ids"`
+	FieldIDs     []string `json:"field_ids"`
+	parentSet    bool
+}
+
+func (r *UpdateFieldOrderRequest) UnmarshalJSON(data []byte) error {
+	type plain UpdateFieldOrderRequest
+	var value plain
+	if err := decodeStrict(data, &value); err != nil {
+		return err
+	}
+	var properties map[string]json.RawMessage
+	if err := json.Unmarshal(data, &properties); err != nil {
+		return err
+	}
+	*r = UpdateFieldOrderRequest(value)
+	_, r.parentSet = properties["parent_id"]
+	return nil
+}
+
+func (r UpdateFieldOrderRequest) Validate() error {
+	var failures validationErrors
+	if !r.parentSet {
+		failures.add("/parent_id", "required", "parent_id 必须提交")
+	} else if r.ParentID != nil && *r.ParentID == "" {
+		failures.add("/parent_id", "required", "parent_id 不能为空字符串")
+	}
+	validateFieldIDList := func(path string, values []string) {
+		if values == nil {
+			failures.add(path, "required", path[1:]+" 必须提交")
+			return
+		}
+		seen := map[string]bool{}
+		for i, value := range values {
+			itemPath := fmt.Sprintf("%s/%d", path, i)
+			if value == "" {
+				failures.add(itemPath, "required", "字段 ID 不能为空")
+			} else if seen[value] {
+				failures.add(itemPath, "duplicate", "字段 ID 不能重复")
+			}
+			seen[value] = true
+		}
+	}
+	validateFieldIDList("/base_field_ids", r.BaseFieldIDs)
+	validateFieldIDList("/field_ids", r.FieldIDs)
+	return failures.err()
 }
 
 type CreateContentModelRequest struct {

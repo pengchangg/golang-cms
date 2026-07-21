@@ -189,18 +189,138 @@ func (s *Service) CreateField(ctx context.Context, principal identity.Principal,
 		if model.Status == StatusArchived {
 			return conflict("resource_archived", "归档模型不能新增字段")
 		}
+		fields, err := s.repository.LockFieldTree(ctx, q, modelID)
+		if err != nil {
+			return err
+		}
+		position := int64(0)
+		for _, field := range fields {
+			if field.ParentID == nil && field.Status == StatusActive && field.Position >= position {
+				position = field.Position + 1
+			}
+		}
 		now := s.now()
 		result, err = s.buildField(input, 0, now)
 		if err != nil {
 			return err
 		}
-		if err := s.repository.CreateFieldTree(ctx, q, modelID, &result, nil, 0); err != nil {
+		if err := s.repository.CreateFieldTree(ctx, q, modelID, &result, nil, int(position)); err != nil {
 			if errors.Is(err, ErrDuplicateKey) {
 				return conflict("key_conflict", "字段 key 已存在")
 			}
 			return err
 		}
 		return s.appendAudit(ctx, q, principal, meta, "model_field_created", "content_field", result.ID, map[string]any{"model_id": modelID, "key": result.Key})
+	})
+	return result, err
+}
+
+func (s *Service) UpdateFieldOrder(ctx context.Context, principal identity.Principal, meta RequestMeta, modelID string, request UpdateFieldOrderRequest) error {
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	return s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		if err := s.authorizer.RequireSystemPermission(ctx, principal, permission.ModelsUpdate); err != nil {
+			return err
+		}
+		model, err := s.repository.LockModel(ctx, q, modelID)
+		if err != nil {
+			return err
+		}
+		if model.Status == StatusArchived {
+			return conflict("resource_archived", "归档模型不能修改字段顺序")
+		}
+		fields, err := s.repository.LockFieldTree(ctx, q, modelID)
+		if err != nil {
+			return err
+		}
+		if request.ParentID != nil {
+			var parent *ContentField
+			for _, field := range fields {
+				if field.ID == *request.ParentID {
+					item := field
+					parent = &item
+					break
+				}
+			}
+			if parent == nil || parent.Status != StatusActive || !isChildContainer(*parent) {
+				return conflict("field_order_conflict", "父字段必须是活动且可包含子字段的容器")
+			}
+		}
+		current := make([]string, 0)
+		for _, field := range fields {
+			if field.Status == StatusActive && sameParent(field.ParentID, request.ParentID) {
+				current = append(current, field.ID)
+			}
+		}
+		if !reflect.DeepEqual(current, request.BaseFieldIDs) || !sameStringSet(current, request.FieldIDs) {
+			return conflict("field_order_conflict", "字段顺序基线已变化或请求不是同级完整集合")
+		}
+		if err := s.repository.UpdateFieldOrder(ctx, q, modelID, request.ParentID, request.FieldIDs); err != nil {
+			if errors.Is(err, ErrDuplicateKey) {
+				return conflict("field_order_conflict", "字段顺序已变化")
+			}
+			return err
+		}
+		return s.appendAudit(ctx, q, principal, meta, "model_field_order_updated", "content_model", modelID, map[string]any{"parent_id": request.ParentID, "from": request.BaseFieldIDs, "to": request.FieldIDs})
+	})
+}
+
+func (s *Service) CreateChildField(ctx context.Context, principal identity.Principal, meta RequestMeta, modelID, parentFieldID string, input ContentFieldInput) (ContentField, error) {
+	if err := ValidateField(&input); err != nil {
+		return ContentField{}, err
+	}
+	var result ContentField
+	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		if err := s.authorizer.RequireSystemPermission(ctx, principal, permission.ModelsUpdate); err != nil {
+			return err
+		}
+		models, err := s.lockRelationModels(ctx, q, modelID, input, nil)
+		if err != nil {
+			return err
+		}
+		if models[modelID].Status != StatusActive {
+			return conflict("resource_archived", "归档模型不能新增子字段")
+		}
+		fields, err := s.repository.LockFieldTree(ctx, q, modelID)
+		if err != nil {
+			return err
+		}
+		var parent *ContentField
+		position := int64(0)
+		for _, field := range fields {
+			if field.ID == parentFieldID {
+				item := field
+				parent = &item
+			}
+			if field.Status == StatusActive && field.ParentID != nil && *field.ParentID == parentFieldID && field.Position >= position {
+				position = field.Position + 1
+			}
+		}
+		if parent == nil {
+			return notFound("父字段")
+		}
+		if parent.Status != StatusActive {
+			return conflict("resource_archived", "归档父字段不能新增子字段")
+		}
+		if !isChildContainer(*parent) {
+			return conflict("parent_field_invalid", "父字段必须是深度小于 2 的对象或重复组")
+		}
+		if err := validateFieldAtDepth(&input, parent.Depth+1); err != nil {
+			return err
+		}
+		now := s.now()
+		result, err = s.buildField(input, parent.Depth+1, now)
+		if err != nil {
+			return err
+		}
+		if err := s.repository.CreateFieldTree(ctx, q, modelID, &result, &parent.ID, int(position)); err != nil {
+			if errors.Is(err, ErrDuplicateKey) {
+				return conflict("key_conflict", "字段 key 已存在")
+			}
+			return err
+		}
+		return s.appendAudit(ctx, q, principal, meta, "model_field_created", "content_field", result.ID, map[string]any{"model_id": modelID, "parent_field_id": parent.ID, "key": result.Key})
 	})
 	return result, err
 }
@@ -382,6 +502,9 @@ func (s *Service) reconcileChildren(ctx context.Context, q database.Querier, mod
 		existing[child.Key] = child
 	}
 	result := make([]ContentField, 0, len(inputs))
+	if err := s.repository.PrepareFieldOrder(ctx, q, modelID, &parent.ID); err != nil {
+		return nil, err
+	}
 	for i, input := range inputs {
 		if old, ok := existing[input.Key]; ok {
 			if old.Status == StatusArchived {
@@ -456,6 +579,30 @@ func normalizeFields(fields []ContentField) []ContentField {
 		fields[i].Children = normalizeFields(fields[i].Children)
 	}
 	return fields
+}
+
+func sameParent(left, right *string) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func isChildContainer(field ContentField) bool {
+	return (field.Type == FieldTypeObject || field.Type == FieldTypeRepeatableGroup) && field.Depth < 2
+}
+
+func sameStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	values := make(map[string]bool, len(left))
+	for _, value := range left {
+		values[value] = true
+	}
+	for _, value := range right {
+		if !values[value] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) lockRelationModels(ctx context.Context, q database.Querier, modelID string, input ContentFieldInput, existingSelfRelations map[string]bool) (map[string]ContentModelSummary, error) {
