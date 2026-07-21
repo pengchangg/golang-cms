@@ -10,26 +10,38 @@ import (
 
 type Status string
 
+type PreviewKind string
+type ContentDisposition string
+
 const (
-	StatusQuarantined Status = "quarantined"
-	StatusAvailable   Status = "available"
-	StatusArchived    Status = "archived"
+	StatusQuarantined     Status             = "quarantined"
+	StatusAvailable       Status             = "available"
+	StatusArchived        Status             = "archived"
+	PreviewImage          PreviewKind        = "image"
+	PreviewPDF            PreviewKind        = "pdf"
+	PreviewVideo          PreviewKind        = "video"
+	PreviewAudio          PreviewKind        = "audio"
+	PreviewText           PreviewKind        = "text"
+	PreviewNone           PreviewKind        = "none"
+	DispositionInline     ContentDisposition = "inline"
+	DispositionAttachment ContentDisposition = "attachment"
 )
 
 type Asset struct {
-	ID          string     `json:"id"`
-	Filename    string     `json:"filename"`
-	MimeType    string     `json:"mime_type"`
-	Size        int64      `json:"size"`
-	SHA256      string     `json:"sha256"`
-	ETag        *string    `json:"etag"`
-	Status      Status     `json:"status"`
-	CreatedBy   string     `json:"created_by"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ConfirmedAt *time.Time `json:"confirmed_at"`
-	ArchivedAt  *time.Time `json:"archived_at"`
-	ObjectKey   string     `json:"-"`
-	UploadUntil time.Time  `json:"-"`
+	ID          string      `json:"id"`
+	Filename    string      `json:"filename"`
+	MimeType    string      `json:"mime_type"`
+	Size        int64       `json:"size"`
+	SHA256      string      `json:"sha256"`
+	ETag        *string     `json:"etag"`
+	Status      Status      `json:"status"`
+	PreviewKind PreviewKind `json:"preview_kind"`
+	CreatedBy   string      `json:"created_by"`
+	CreatedAt   time.Time   `json:"created_at"`
+	ConfirmedAt *time.Time  `json:"confirmed_at"`
+	ArchivedAt  *time.Time  `json:"archived_at"`
+	ObjectKey   string      `json:"-"`
+	UploadUntil time.Time   `json:"-"`
 }
 
 type SignPutRequest struct {
@@ -43,6 +55,8 @@ type SignPutRequest struct {
 type SignGetRequest struct {
 	ObjectKey        string
 	DownloadFilename string
+	Disposition      ContentDisposition
+	ContentType      string
 	ExpiresAt        time.Time
 }
 

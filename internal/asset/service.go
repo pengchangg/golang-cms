@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,11 +24,21 @@ import (
 )
 
 const (
-	permissionView    = "assets.view"
-	permissionUpload  = "assets.upload"
-	permissionUpdate  = "assets.update"
-	permissionArchive = "assets.archive"
+	permissionView     = "assets.view"
+	permissionUpload   = "assets.upload"
+	permissionUpdate   = "assets.update"
+	permissionArchive  = "assets.archive"
+	maxTextPreviewSize = int64(1 << 20)
 )
+
+type Preview struct {
+	Kind     PreviewKind
+	MimeType string
+	Signed   SignedRequest
+	Body     io.ReadCloser
+	Filename string
+	Size     int64
+}
 
 type TransactionRunner interface {
 	WithinTx(context.Context, *sql.TxOptions, func(database.Querier) error) error
@@ -102,6 +113,7 @@ func (s *Service) CreateUpload(ctx context.Context, principal identity.Principal
 	now := s.now()
 	expiresAt := now.Add(s.config.UploadTTL)
 	value := Asset{ID: id, Filename: filename, MimeType: mimeType, Size: input.Size, SHA256: input.SHA256, Status: StatusQuarantined, CreatedBy: principal.UserID, CreatedAt: now, ObjectKey: "assets/" + id + "/" + suffix, UploadUntil: expiresAt}
+	decorateAsset(&value)
 	signed, err := s.store.SignPut(ctx, SignPutRequest{ObjectKey: value.ObjectKey, ContentType: value.MimeType, Size: value.Size, SHA256: value.SHA256, ExpiresAt: expiresAt})
 	if err != nil {
 		return Upload{}, storeError(err)
@@ -178,6 +190,7 @@ func (s *Service) Confirm(ctx context.Context, principal identity.Principal, met
 		value = locked
 		return s.appendAudit(ctx, q, principal, meta, "asset_upload_confirmed", id, map[string]any{"status": map[string]any{"from": StatusQuarantined, "to": StatusAvailable}, "size": value.Size, "mime_type": value.MimeType, "sha256": value.SHA256, "etag": metadata.ETag})
 	})
+	decorateAsset(&value)
 	return value, err
 }
 
@@ -185,7 +198,9 @@ func (s *Service) Get(ctx context.Context, principal identity.Principal, id stri
 	if err := requirePermission(principal, permissionView); err != nil {
 		return Asset{}, err
 	}
-	return s.repository.Get(ctx, s.db, id)
+	value, err := s.repository.Get(ctx, s.db, id)
+	decorateAsset(&value)
+	return value, err
 }
 
 func (s *Service) List(ctx context.Context, principal identity.Principal, input ListQuery) (List, error) {
@@ -209,6 +224,9 @@ func (s *Service) List(ctx context.Context, principal identity.Principal, input 
 	if err != nil {
 		return List{}, err
 	}
+	for i := range items {
+		decorateAsset(&items[i])
+	}
 	result := List{Items: items}
 	if len(items) > input.Limit {
 		result.Items = items[:input.Limit]
@@ -227,10 +245,10 @@ func (s *Service) AdminDownload(ctx context.Context, principal identity.Principa
 	if err != nil {
 		return SignedRequest{}, err
 	}
-	if value.Status == StatusQuarantined {
+	if value.Status != StatusAvailable && value.Status != StatusArchived {
 		return SignedRequest{}, appError(apperror.KindConflict, "asset_not_available", "素材不可下载")
 	}
-	signed, err := s.store.SignGet(ctx, SignGetRequest{ObjectKey: value.ObjectKey, DownloadFilename: value.Filename, ExpiresAt: s.now().Add(s.config.DownloadTTL)})
+	signed, err := s.store.SignGet(ctx, SignGetRequest{ObjectKey: value.ObjectKey, DownloadFilename: value.Filename, Disposition: DispositionAttachment, ExpiresAt: s.now().Add(s.config.DownloadTTL)})
 	if err != nil {
 		return SignedRequest{}, storeError(err)
 	}
@@ -241,6 +259,98 @@ func (s *Service) AdminDownload(ctx context.Context, principal identity.Principa
 		return SignedRequest{}, err
 	}
 	return signed, nil
+}
+
+func (s *Service) AdminPreview(ctx context.Context, principal identity.Principal, id string) (Preview, error) {
+	if err := requirePermission(principal, permissionView); err != nil {
+		return Preview{}, err
+	}
+	value, err := s.repository.Get(ctx, s.db, id)
+	if err != nil {
+		return Preview{}, err
+	}
+	return s.preview(ctx, value)
+}
+
+func (s *Service) ReferencedPreview(ctx context.Context, principal identity.Principal, modelID, entryID, id string) (Preview, error) {
+	if err := requireModelPermission(principal, modelID); err != nil {
+		return Preview{}, err
+	}
+	value, err := s.currentDraftAsset(ctx, modelID, entryID, id)
+	if err != nil {
+		return Preview{}, err
+	}
+	return s.preview(ctx, value)
+}
+
+func (s *Service) ReferencedDownload(ctx context.Context, principal identity.Principal, meta RequestMeta, modelID, entryID, id string) (SignedRequest, error) {
+	if err := requireModelPermission(principal, modelID); err != nil {
+		return SignedRequest{}, err
+	}
+	value, err := s.currentDraftAsset(ctx, modelID, entryID, id)
+	if err != nil {
+		return SignedRequest{}, err
+	}
+	signed, err := s.store.SignGet(ctx, SignGetRequest{ObjectKey: value.ObjectKey, DownloadFilename: value.Filename, Disposition: DispositionAttachment, ExpiresAt: s.now().Add(s.config.DownloadTTL)})
+	if err != nil {
+		return SignedRequest{}, storeError(err)
+	}
+	if err = s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		return s.appendAudit(ctx, q, principal, meta, "asset_downloaded", id, map[string]any{"status": value.Status, "model_id": modelID, "entry_id": entryID})
+	}); err != nil {
+		return SignedRequest{}, err
+	}
+	return signed, nil
+}
+
+func (s *Service) currentDraftAsset(ctx context.Context, modelID, entryID, id string) (Asset, error) {
+	var value Asset
+	err := s.db.QueryRowContext(ctx, `SELECT a.id,a.object_key,a.filename,a.mime_type,a.size,a.status FROM asset_references ar JOIN content_draft_pointers dp ON dp.revision_id=ar.revision_id AND dp.entry_id=ar.entry_id AND dp.model_id=ar.model_id JOIN assets a ON a.id=ar.asset_id WHERE ar.model_id=? AND ar.entry_id=? AND ar.asset_id=? AND a.status IN ('available','archived') LIMIT 1`, modelID, entryID, id).Scan(&value.ID, &value.ObjectKey, &value.Filename, &value.MimeType, &value.Size, &value.Status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Asset{}, appError(apperror.KindNotFound, "resource_not_found", "素材不存在或未被当前草稿引用")
+	}
+	if err != nil {
+		return Asset{}, fmt.Errorf("检查当前草稿素材引用: %w", err)
+	}
+	decorateAsset(&value)
+	return value, nil
+}
+
+func (s *Service) preview(ctx context.Context, value Asset) (Preview, error) {
+	decorateAsset(&value)
+	if value.Status != StatusAvailable && value.Status != StatusArchived {
+		return Preview{}, appError(apperror.KindConflict, "asset_not_available", "素材不可预览")
+	}
+	if value.PreviewKind == PreviewNone {
+		return Preview{}, appError(apperror.KindConflict, "asset_not_previewable", "素材不支持预览")
+	}
+	result := Preview{Kind: value.PreviewKind, MimeType: value.MimeType, Filename: value.Filename, Size: value.Size}
+	if value.PreviewKind == PreviewText && value.Size > maxTextPreviewSize {
+		return Preview{}, appError(apperror.KindInvalidArgument, "asset_preview_too_large", "文本素材超过预览大小上限")
+	}
+	body, metadata, err := s.store.Get(ctx, value.ObjectKey)
+	if err != nil {
+		return Preview{}, storeError(err)
+	}
+	if value.PreviewKind != PreviewText {
+		if metadata.Size != value.Size || metadata.ContentType != value.MimeType {
+			_ = body.Close()
+			return Preview{}, metadataMismatch()
+		}
+		result.Body = body
+		return result, nil
+	}
+	data, readErr := io.ReadAll(io.LimitReader(body, maxTextPreviewSize+1))
+	closeErr := body.Close()
+	if readErr != nil || closeErr != nil {
+		return Preview{}, storeError(ErrStoreUnavailable)
+	}
+	if metadata.Size > maxTextPreviewSize || int64(len(data)) > maxTextPreviewSize {
+		return Preview{}, appError(apperror.KindInvalidArgument, "asset_preview_too_large", "文本素材超过预览大小上限")
+	}
+	result.Size = int64(len(data))
+	result.Body = io.NopCloser(bytes.NewReader(data))
+	return result, nil
 }
 
 func (s *Service) Rename(ctx context.Context, principal identity.Principal, id, filename string) (Asset, error) {
@@ -266,6 +376,7 @@ func (s *Service) Rename(ctx context.Context, principal identity.Principal, id, 
 		value.Filename = validated
 		return nil
 	})
+	decorateAsset(&value)
 	return value, err
 }
 
@@ -307,7 +418,7 @@ func (s *Service) PublishedDownload(ctx context.Context, scope PublishedDownload
 	} else if err != nil {
 		return SignedRequest{}, fmt.Errorf("检查已发布素材授权: %w", err)
 	}
-	signed, err := s.store.SignGet(ctx, SignGetRequest{ObjectKey: objectKey, DownloadFilename: filename, ExpiresAt: s.now().Add(s.config.DownloadTTL)})
+	signed, err := s.store.SignGet(ctx, SignGetRequest{ObjectKey: objectKey, DownloadFilename: filename, Disposition: DispositionAttachment, ExpiresAt: s.now().Add(s.config.DownloadTTL)})
 	if err != nil {
 		return SignedRequest{}, storeError(err)
 	}
@@ -370,6 +481,41 @@ func normalizeMime(value string) (string, error) {
 		return "", errors.New("无效 MIME")
 	}
 	return strings.ToLower(mediaType), nil
+}
+
+func decorateAsset(value *Asset) {
+	value.PreviewKind = PreviewKindFor(value.MimeType)
+}
+
+func PreviewKindFor(mimeType string) PreviewKind {
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/svg+xml":
+		return PreviewImage
+	case "application/pdf":
+		return PreviewPDF
+	case "video/mp4", "video/webm":
+		return PreviewVideo
+	case "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm":
+		return PreviewAudio
+	case "text/plain", "text/csv", "application/json":
+		return PreviewText
+	default:
+		return PreviewNone
+	}
+}
+
+func requireModelPermission(principal identity.Principal, modelID string) error {
+	for _, grant := range principal.ModelPermissions {
+		if grant.ModelID != modelID {
+			continue
+		}
+		for _, permission := range grant.Permissions {
+			if permission == "content.view" {
+				return nil
+			}
+		}
+	}
+	return appError(apperror.KindPermissionDenied, "permission_denied", "权限不足")
 }
 func validStatus(value Status) bool {
 	return value == StatusQuarantined || value == StatusAvailable || value == StatusArchived

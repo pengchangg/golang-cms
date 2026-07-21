@@ -111,7 +111,7 @@ func TestServiceUploadConfirmDownloadArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if upload.Asset.Status != StatusQuarantined || strings.Contains(upload.Asset.ObjectKey, "用户文件") || upload.Upload.Method != "PUT" {
+	if upload.Asset.Status != StatusQuarantined || upload.Asset.PreviewKind != PreviewImage || strings.Contains(upload.Asset.ObjectKey, "用户文件") || upload.Upload.Method != "PUT" {
 		t.Fatalf("上传申请不正确: %+v", upload)
 	}
 	if _, err := store.Put(context.Background(), PutObjectRequest{ObjectKey: upload.Asset.ObjectKey, ContentType: upload.Asset.MimeType, Size: upload.Asset.Size, SHA256: upload.Asset.SHA256}, strings.NewReader(body)); err != nil {
@@ -145,6 +145,44 @@ func TestServiceUploadConfirmDownloadArchive(t *testing.T) {
 			t.Fatal("审计泄露签名 URL")
 		}
 	}
+}
+
+func TestPreviewKindUsesFixedSafeMimeMapping(t *testing.T) {
+	tests := map[string]PreviewKind{
+		"image/svg+xml": PreviewImage, "application/pdf": PreviewPDF, "video/webm": PreviewVideo,
+		"audio/ogg": PreviewAudio, "application/json": PreviewText, "text/html": PreviewNone,
+	}
+	for mimeType, expected := range tests {
+		if actual := PreviewKindFor(mimeType); actual != expected {
+			t.Fatalf("PreviewKindFor(%q) = %q, want %q", mimeType, actual, expected)
+		}
+	}
+}
+
+func TestServiceTextPreviewIsSameOriginAndNotAudited(t *testing.T) {
+	now := time.Now().UTC()
+	body := "preview"
+	key := "assets/ast_text/key"
+	store := NewMemoryStore(15*time.Minute, 5*time.Minute)
+	store.Now = func() time.Time { return now }
+	store.objects[key] = memoryObject{data: []byte(body), metadata: ObjectMetadata{ObjectKey: key, Size: int64(len(body)), ContentType: "text/plain"}}
+	repository := &memoryAssetRepository{values: map[string]Asset{"ast_text": {ID: "ast_text", ObjectKey: key, Filename: "a.txt", MimeType: "text/plain", Size: int64(len(body)), Status: StatusAvailable}}}
+	auditor := &memoryAudit{}
+	service, _ := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: repository, Store: store, Audit: auditor, Config: Config{AllowedMimeTypes: []string{"text/plain"}, MaxSize: 2 << 20, UploadTTL: 15 * time.Minute, DownloadTTL: 5 * time.Minute}})
+	service.now = func() time.Time { return now }
+	preview, err := service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text")
+	if err != nil || preview.Body == nil || preview.Signed.URL != "" || len(auditor.events) != 0 {
+		t.Fatalf("文本预览结果错误: %+v, events=%d, err=%v", preview, len(auditor.events), err)
+	}
+	_ = preview.Body.Close()
+	repository.values["ast_text"] = Asset{ID: "ast_text", MimeType: "text/plain", Size: maxTextPreviewSize + 1, Status: StatusAvailable}
+	_, err = service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text")
+	assertCode(t, err, "asset_preview_too_large")
+	oversized := make([]byte, maxTextPreviewSize+1)
+	store.objects[key] = memoryObject{data: oversized, metadata: ObjectMetadata{ObjectKey: key, Size: int64(len(oversized)), ContentType: "text/plain"}}
+	repository.values["ast_text"] = Asset{ID: "ast_text", ObjectKey: key, Filename: "a.txt", MimeType: "text/plain", Size: 7, Status: StatusAvailable}
+	_, err = service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text")
+	assertCode(t, err, "asset_preview_too_large")
 }
 
 func TestServiceArchiveAllowsCurrentPublishedReferencePerF3(t *testing.T) {

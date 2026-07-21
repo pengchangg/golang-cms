@@ -47,7 +47,13 @@ func (s *MemoryStore) SignGet(_ context.Context, input SignGetRequest) (SignedRe
 	if err := s.validExpiry(input.ExpiresAt, s.DownloadMaxTTL); err != nil {
 		return SignedRequest{}, err
 	}
-	return SignedRequest{Method: "GET", URL: memoryURL(input.ObjectKey, input.ExpiresAt), Headers: map[string]string{}, ExpiresAt: input.ExpiresAt.UTC()}, nil
+	u, _ := url.Parse(memoryURL(input.ObjectKey, input.ExpiresAt))
+	query := u.Query()
+	if input.DownloadFilename != "" && (input.Disposition == "" || input.Disposition == DispositionAttachment) {
+		query.Set("response-content-disposition", contentDisposition(input.DownloadFilename))
+	}
+	u.RawQuery = query.Encode()
+	return SignedRequest{Method: "GET", URL: u.String(), Headers: map[string]string{}, ExpiresAt: input.ExpiresAt.UTC()}, nil
 }
 
 func (s *MemoryStore) Head(_ context.Context, key string) (ObjectMetadata, error) {

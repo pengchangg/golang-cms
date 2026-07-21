@@ -281,6 +281,16 @@ type memoryModels struct {
 	lockedModelIDs *[]string
 }
 
+type memoryAssetResolver struct {
+	calls int
+	items map[string]map[string]ReferencedAsset
+}
+
+func (r *memoryAssetResolver) ResolveReferencedAssets(_ context.Context, _ []string) (map[string]map[string]ReferencedAsset, error) {
+	r.calls++
+	return r.items, nil
+}
+
 func (m memoryModels) GetModel(_ context.Context, _ database.Querier, id string) (schema.ContentModel, error) {
 	if m.models != nil {
 		model, ok := m.models[id]
@@ -704,9 +714,12 @@ func TestListEntriesReturnsDraftContentAndActiveRootFieldDefinitions(t *testing.
 	models := service.models.(memoryModels)
 	models.model.Fields = append(models.model.Fields,
 		schema.ContentField{ID: "fld_kind", Key: "kind", DisplayName: "类型", Type: schema.FieldTypeSingleSelect, Constraints: schema.FieldConstraints{EnumOptions: []schema.EnumOption{{Value: "news", Label: "新闻"}}, Filterable: true, Sortable: true}, Status: schema.StatusActive},
+		schema.ContentField{ID: "fld_group", Key: "group", DisplayName: "分组", Type: schema.FieldTypeObject, Status: schema.StatusActive, Children: []schema.ContentField{{ID: "fld_child", Key: "child", DisplayName: "子字段", Type: schema.FieldTypeSingleLineText, Status: schema.StatusActive}, {ID: "fld_old_child", Key: "old_child", Status: schema.StatusArchived}}},
 		schema.ContentField{ID: "fld_old", Key: "old", DisplayName: "旧字段", Type: schema.FieldTypeSingleLineText, Status: schema.StatusArchived},
 	)
 	service.models = models
+	resolver := &memoryAssetResolver{items: map[string]map[string]ReferencedAsset{created.CurrentDraftRevisionID: {"ast_1": {ID: "ast_1", Filename: "a.png", MimeType: "image/png", Size: 10, Status: "available", PreviewKind: "image"}}}}
+	service.assets = resolver
 
 	result, err := service.ListEntries(context.Background(), contentPrincipal(permissionView), "mdl_1", AdminEntryQuery{Status: StatusDraft, Limit: 20})
 	if err != nil {
@@ -715,8 +728,11 @@ func TestListEntriesReturnsDraftContentAndActiveRootFieldDefinitions(t *testing.
 	if len(result.Items) != 1 || result.Items[0].ID != created.ID || string(result.Items[0].CurrentDraftContent) != `{"title":"列表标题"}` {
 		t.Fatalf("列表未返回当前草稿内容: %#v", result.Items)
 	}
-	if len(result.Fields) != 2 || result.Fields[0].Key != "title" || result.Fields[1].Key != "kind" || len(result.Fields[1].Constraints.EnumOptions) != 1 || !result.Fields[1].Constraints.Filterable || !result.Fields[1].Constraints.Sortable {
+	if len(result.Fields) != 3 || result.Fields[0].Key != "title" || result.Fields[1].Key != "kind" || len(result.Fields[1].Constraints.EnumOptions) != 1 || !result.Fields[1].Constraints.Filterable || !result.Fields[1].Constraints.Sortable || len(result.Fields[2].Children) != 1 || result.Fields[2].Children[0].Key != "child" {
 		t.Fatalf("列表字段定义未按活动根字段裁剪: %#v", result.Fields)
+	}
+	if resolver.calls != 1 || result.Items[0].ReferencedAssets["ast_1"].PreviewKind != "image" {
+		t.Fatalf("列表素材引用未一次批量解析: calls=%d items=%#v", resolver.calls, result.Items[0].ReferencedAssets)
 	}
 }
 

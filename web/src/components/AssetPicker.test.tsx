@@ -6,7 +6,7 @@ import { api } from '../api/client'
 import type { Asset } from '../api/types'
 import { AssetPicker } from './AssetPicker'
 
-const uploaded: Asset = { id: 'ast_new', filename: '新封面.png', mime_type: 'image/png', size: 1024, sha256: 'a'.repeat(64), etag: 'etag', status: 'available', created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: '2026-07-20T08:00:00Z', archived_at: null }
+const uploaded: Asset = { id: 'ast_new', filename: '新封面.png', mime_type: 'image/png', preview_kind: 'image', size: 1024, sha256: 'a'.repeat(64), etag: 'etag', status: 'available', created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: '2026-07-20T08:00:00Z', archived_at: null }
 
 vi.mock('./AssetUploadModal', () => ({
   AssetUploadModal: ({ open, onUploaded }: { open: boolean; onUploaded: (asset: Asset) => void }) => open ? <button onClick={() => onUploaded(uploaded)}>模拟确认上传</button> : null,

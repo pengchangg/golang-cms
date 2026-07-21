@@ -5,10 +5,13 @@ $defs:
   AssetStatus:
     type: string
     enum: [quarantined, available, archived]
+  AssetPreviewKind:
+    type: string
+    enum: [image, pdf, video, audio, text, none]
   Asset:
     type: object
     additionalProperties: false
-    required: [id, filename, mime_type, size, sha256, etag, status, created_by, created_at, confirmed_at, archived_at]
+    required: [id, filename, mime_type, size, sha256, etag, status, preview_kind, created_by, created_at, confirmed_at, archived_at]
     properties:
       id: { type: string, minLength: 1 }
       filename: { type: string, minLength: 1, maxLength: 255 }
@@ -18,6 +21,8 @@ $defs:
       etag: { type: [string, "null"], minLength: 1 }
       status:
         $ref: "#/$defs/AssetStatus"
+      preview_kind:
+        $ref: "#/$defs/AssetPreviewKind"
       created_by: { type: string, minLength: 1 }
       created_at: { type: string, format: date-time }
       confirmed_at: { type: [string, "null"], format: date-time }

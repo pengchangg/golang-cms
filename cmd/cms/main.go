@@ -144,6 +144,8 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	userService := identity.NewUserService(identity.UserDependencies{DB: db, Transactor: transactor, Authorizer: authorizer, Audit: auditWriter})
 	roleService := permission.NewService(permission.Dependencies{DB: db, Transactor: transactor, Authorizer: authorizer, Audit: auditWriter, Users: userService, Models: modelAdapter})
 	var media content.MediaReferenceManager
+	var assetResolver content.ReferencedAssetResolver
+	var assetService *asset.Service
 	var objectStore *asset.S3Store
 	if cfg.AssetsEnabled {
 		objectStore, err = asset.NewS3Store(asset.S3Config{Endpoint: cfg.S3Endpoint, Region: cfg.S3Region, Bucket: cfg.S3Bucket, AccessKeyID: cfg.S3AccessKeyID, AccessKeySecret: cfg.S3AccessKeySecret, SessionToken: cfg.S3SessionToken, UsePathStyle: cfg.S3UsePathStyle, BucketEndpoint: cfg.S3BucketEndpoint, UploadMaxTTL: cfg.S3UploadTTL, DownloadMaxTTL: cfg.S3DownloadTTL})
@@ -154,10 +156,15 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 			return fmt.Errorf("检查 S3 兼容对象存储 Bucket: %w", err)
 		}
 		media = integration.MediaReferenceManager{Manager: asset.SQLReferenceManager{}}
+		assetResolver = integration.ReferencedAssetResolver{DB: db}
+		assetService, err = asset.NewService(asset.Dependencies{DB: db, Transactor: transactor, Repository: asset.SQLRepository{}, Store: objectStore, Audit: auditWriter, Config: asset.Config{AllowedMimeTypes: cfg.AssetMimeTypes, MaxSize: cfg.AssetMaxSize, UploadTTL: cfg.S3UploadTTL, DownloadTTL: cfg.S3DownloadTTL}})
+		if err != nil {
+			return fmt.Errorf("初始化素材服务: %w", err)
+		}
 	}
 	contentService := content.NewService(content.Dependencies{
 		DB: db, Transactor: transactor, Repository: content.NewRepository(), ModelRepository: schemaRepository, Audit: auditWriter,
-		Media: media,
+		Media: media, Assets: assetResolver,
 	})
 	publishedReader := content.NewPublishedContentReader(db, schemaRepository)
 	clientService := client.NewService(client.Dependencies{
@@ -177,10 +184,6 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	contentMux := http.NewServeMux()
 	client.NewContentHandler(clientService, publishedReader).RegisterRoutes(contentMux)
 	if cfg.AssetsEnabled {
-		assetService, serviceErr := asset.NewService(asset.Dependencies{DB: db, Transactor: transactor, Repository: asset.SQLRepository{}, Store: objectStore, Audit: auditWriter, Config: asset.Config{AllowedMimeTypes: cfg.AssetMimeTypes, MaxSize: cfg.AssetMaxSize, UploadTTL: cfg.S3UploadTTL, DownloadTTL: cfg.S3DownloadTTL}})
-		if serviceErr != nil {
-			return fmt.Errorf("初始化素材服务: %w", serviceErr)
-		}
 		asset.NewHandler(assetService, principalFromRequest).RegisterRoutes(adminMux)
 		integration.ClientAssetHandler{DB: db, Client: clientService, Assets: assetService}.RegisterRoutes(contentMux)
 	}

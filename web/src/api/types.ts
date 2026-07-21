@@ -123,6 +123,7 @@ export interface ContentEntrySummary {
   current_draft_content: Record<string, unknown>
   workflow_status: WorkflowStatus; current_published_revision_id: string | null
   expanded?: Record<string, ContentEntrySummary | ContentEntrySummary[]>
+  referenced_assets: Record<string, ReferencedAsset>
   created_by: string; created_at: string; updated_at: string
 }
 export interface ContentEntry extends ContentEntrySummary {
@@ -139,11 +140,13 @@ export interface EntryListQuery {
   status?: EntryStatus; workflow_status?: WorkflowStatus; cursor?: string; limit?: number
   filter?: string; relation_filter?: string; sort?: string; expand?: string; include_total?: boolean
 }
+export interface EntryListField {
+  key: string; display_name: string; type: FieldType
+  constraints: Pick<FieldConstraints, 'enum_options' | 'filterable' | 'sortable'>
+  children: EntryListField[]
+}
 export interface EntryListResponse extends CursorResponse<ContentEntrySummary> {
-  fields: Array<{
-    key: string; display_name: string; type: FieldType
-    constraints: Pick<FieldConstraints, 'enum_options' | 'filterable' | 'sortable'>
-  }>
+  fields: EntryListField[]
   total?: number; total_is_estimate?: boolean
 }
 export type APIKeyStatus = 'active' | 'expired' | 'revoked'
@@ -164,9 +167,15 @@ export interface AuditEvent {
 }
 
 export type AssetStatus = 'quarantined' | 'available' | 'archived'
+export type AssetPreviewKind = 'image' | 'pdf' | 'video' | 'audio' | 'text' | 'none'
+export interface ReferencedAsset {
+  id: string; filename: string; mime_type: string; size: number
+  status: AssetStatus; preview_kind: AssetPreviewKind
+}
 export interface Asset {
   id: string; filename: string; mime_type: string; size: number; sha256: string; etag: string | null
-  status: AssetStatus; created_by: string; created_at: string; confirmed_at: string | null; archived_at: string | null
+  status: AssetStatus; preview_kind: AssetPreviewKind
+  created_by: string; created_at: string; confirmed_at: string | null; archived_at: string | null
 }
 export interface SignedUpload { method: 'PUT'; url: string; headers: Record<string, string>; expires_at: string }
 export interface AssetUpload { asset: Asset; upload: SignedUpload }

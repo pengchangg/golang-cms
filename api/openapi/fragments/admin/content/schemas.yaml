@@ -142,7 +142,7 @@ $defs:
   ContentEntrySummary:
     type: object
     additionalProperties: false
-    required: [id, model_id, status, current_draft_revision_id, current_draft_content, workflow_status, current_published_revision_id, created_by, created_at, updated_at]
+    required: [id, model_id, status, current_draft_revision_id, current_draft_content, workflow_status, current_published_revision_id, created_by, created_at, updated_at, referenced_assets]
     properties:
       id: { type: string, minLength: 1 }
       model_id: { type: string, minLength: 1 }
@@ -157,6 +157,10 @@ $defs:
       workflow_status:
         $ref: ./workflow-schemas.yaml#/$defs/WorkflowStatus
       current_published_revision_id: { type: [string, "null"], minLength: 1 }
+      referenced_assets:
+        type: object
+        additionalProperties:
+          $ref: "#/$defs/ReferencedAsset"
       expanded:
         type: object
         additionalProperties:
@@ -168,7 +172,7 @@ $defs:
   ContentEntry:
     type: object
     additionalProperties: false
-    required: [id, model_id, status, current_draft_revision_id, current_draft_content, current_draft_revision, workflow_status, current_published_revision_id, current_published_revision, created_by, created_at, updated_at]
+    required: [id, model_id, status, current_draft_revision_id, current_draft_content, current_draft_revision, workflow_status, current_published_revision_id, current_published_revision, created_by, created_at, updated_at, referenced_assets]
     properties:
       id: { type: string, minLength: 1 }
       model_id: { type: string, minLength: 1 }
@@ -189,6 +193,23 @@ $defs:
         oneOf:
           - $ref: "#/$defs/ContentRevision"
           - type: "null"
+      referenced_assets:
+        type: object
+        additionalProperties:
+          $ref: "#/$defs/ReferencedAsset"
+  ReferencedAsset:
+    type: object
+    additionalProperties: false
+    required: [id, filename, mime_type, size, status, preview_kind]
+    properties:
+      id: { type: string, minLength: 1 }
+      filename: { type: string, minLength: 1, maxLength: 255 }
+      mime_type: { type: string, minLength: 1, maxLength: 255 }
+      size: { type: integer, minimum: 1, maximum: 5368709120 }
+      status:
+        $ref: ../assets/schemas.yaml#/$defs/AssetStatus
+      preview_kind:
+        $ref: ../assets/schemas.yaml#/$defs/AssetPreviewKind
   CreateContentEntryRequest:
     type: object
     additionalProperties: false
@@ -223,7 +244,7 @@ $defs:
   EntryListField:
     type: object
     additionalProperties: false
-    required: [key, display_name, type, constraints]
+    required: [key, display_name, type, constraints, children]
     properties:
       key:
         $ref: ../models/schemas.yaml#/$defs/ModelKey
@@ -241,6 +262,10 @@ $defs:
               $ref: ../models/schemas.yaml#/$defs/EnumOption
           filterable: { type: boolean }
           sortable: { type: boolean }
+      children:
+        type: array
+        items:
+          $ref: "#/$defs/EntryListField"
   ContentRevisionListResponse:
     type: object
     additionalProperties: false

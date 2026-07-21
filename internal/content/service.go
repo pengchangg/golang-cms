@@ -49,6 +49,7 @@ type Dependencies struct {
 	ModelRepository ModelRepository
 	Audit           audit.Writer
 	Media           MediaReferenceManager
+	Assets          ReferencedAssetResolver
 }
 
 type Service struct {
@@ -58,6 +59,7 @@ type Service struct {
 	models     ModelRepository
 	audit      audit.Writer
 	media      MediaReferenceManager
+	assets     ReferencedAssetResolver
 	now        func() time.Time
 	newID      func(string) (string, error)
 }
@@ -67,7 +69,7 @@ var _ schema.ContentExistenceChecker = (*Service)(nil)
 type RequestMeta struct{ RequestID, IP, UserAgent string }
 
 func NewService(dependencies Dependencies) *Service {
-	return &Service{db: dependencies.DB, tx: dependencies.Transactor, repository: dependencies.Repository, models: dependencies.ModelRepository, audit: dependencies.Audit, media: dependencies.Media, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, newID: randomID}
+	return &Service{db: dependencies.DB, tx: dependencies.Transactor, repository: dependencies.Repository, models: dependencies.ModelRepository, audit: dependencies.Audit, media: dependencies.Media, assets: dependencies.Assets, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, newID: randomID}
 }
 
 func (s *Service) HasAnyContent(ctx context.Context, modelID string) (bool, error) {
@@ -113,10 +115,7 @@ func (s *Service) ListEntries(ctx context.Context, principal identity.Principal,
 		if field.Status != schema.StatusActive {
 			continue
 		}
-		result.Fields = append(result.Fields, EntryListField{
-			Key: field.Key, DisplayName: field.DisplayName, Type: field.Type,
-			Constraints: EntryListFieldConstraints{EnumOptions: field.Constraints.EnumOptions, Filterable: field.Constraints.Filterable, Sortable: field.Constraints.Sortable},
-		})
+		result.Fields = append(result.Fields, entryListField(field))
 	}
 	if len(items) > query.Limit {
 		result.Items = items[:query.Limit]
@@ -131,6 +130,19 @@ func (s *Service) ListEntries(ctx context.Context, principal identity.Principal,
 	if err = s.repository.ExpandEntries(ctx, s.db, result.Items, model.Fields, query.Expand); err != nil {
 		return EntryList{}, err
 	}
+	revisionIDs := []string{}
+	for i := range result.Items {
+		revisionIDs = appendEntryRevisionIDs(revisionIDs, &result.Items[i])
+	}
+	if s.assets != nil && len(revisionIDs) > 0 {
+		resolved, err := s.assets.ResolveReferencedAssets(ctx, revisionIDs)
+		if err != nil {
+			return EntryList{}, err
+		}
+		for i := range result.Items {
+			applyResolvedAssets(&result.Items[i], resolved)
+		}
+	}
 	if query.IncludeTotal {
 		total, estimate, err := s.repository.CountEntries(ctx, s.db, modelID, query, fields)
 		if err != nil {
@@ -140,6 +152,73 @@ func (s *Service) ListEntries(ctx context.Context, principal identity.Principal,
 		result.TotalIsEstimate = &estimate
 	}
 	return result, nil
+}
+
+func entryListField(field schema.ContentField) EntryListField {
+	result := EntryListField{Key: field.Key, DisplayName: field.DisplayName, Type: field.Type, Constraints: EntryListFieldConstraints{EnumOptions: field.Constraints.EnumOptions, Filterable: field.Constraints.Filterable, Sortable: field.Constraints.Sortable}, Children: []EntryListField{}}
+	for _, child := range field.Children {
+		if child.Status == schema.StatusActive {
+			result.Children = append(result.Children, entryListField(child))
+		}
+	}
+	return result
+}
+
+func ensureReferencedAssets(entry *EntrySummary) {
+	if entry.ReferencedAssets == nil {
+		entry.ReferencedAssets = map[string]ReferencedAsset{}
+	}
+}
+
+func appendEntryRevisionIDs(ids []string, entry *EntrySummary) []string {
+	ensureReferencedAssets(entry)
+	ids = append(ids, entry.CurrentDraftRevisionID)
+	for key, expanded := range entry.Expanded {
+		switch value := expanded.(type) {
+		case EntrySummary:
+			ids = appendEntryRevisionIDs(ids, &value)
+			entry.Expanded[key] = value
+		case []EntrySummary:
+			for i := range value {
+				ids = appendEntryRevisionIDs(ids, &value[i])
+			}
+			entry.Expanded[key] = value
+		}
+	}
+	return ids
+}
+
+func applyResolvedAssets(entry *EntrySummary, resolved map[string]map[string]ReferencedAsset) {
+	if values := resolved[entry.CurrentDraftRevisionID]; values != nil {
+		entry.ReferencedAssets = values
+	}
+	for key, expanded := range entry.Expanded {
+		switch value := expanded.(type) {
+		case EntrySummary:
+			applyResolvedAssets(&value, resolved)
+			entry.Expanded[key] = value
+		case []EntrySummary:
+			for i := range value {
+				applyResolvedAssets(&value[i], resolved)
+			}
+			entry.Expanded[key] = value
+		}
+	}
+}
+
+func (s *Service) resolveEntryAssets(ctx context.Context, entry *EntrySummary) error {
+	ensureReferencedAssets(entry)
+	if s.assets == nil || entry.CurrentDraftRevisionID == "" {
+		return nil
+	}
+	resolved, err := s.assets.ResolveReferencedAssets(ctx, []string{entry.CurrentDraftRevisionID})
+	if err != nil {
+		return err
+	}
+	if values := resolved[entry.CurrentDraftRevisionID]; values != nil {
+		entry.ReferencedAssets = values
+	}
+	return nil
 }
 
 func validateAdminEntryQuery(fields []schema.ContentField, query AdminEntryQuery) (map[string]schema.ContentField, error) {
@@ -210,7 +289,11 @@ func (s *Service) GetEntry(ctx context.Context, principal identity.Principal, mo
 	if err := requireModelPermission(principal, modelID, permissionView); err != nil {
 		return Entry{}, err
 	}
-	return s.repository.GetEntry(ctx, s.db, modelID, entryID)
+	result, err := s.repository.GetEntry(ctx, s.db, modelID, entryID)
+	if err == nil {
+		err = s.resolveEntryAssets(ctx, &result.EntrySummary)
+	}
+	return result, err
 }
 
 func (s *Service) CreateEntry(ctx context.Context, principal identity.Principal, meta RequestMeta, modelID string, request CreateEntryRequest) (Entry, error) {
@@ -228,6 +311,11 @@ func (s *Service) CreateEntry(ctx context.Context, principal identity.Principal,
 		result, writeErr = s.createDraftInTx(ctx, q, principal, meta, modelID, entryID, revisionID, request.Content)
 		return writeErr
 	})
+	if err == nil {
+		err = s.resolveEntryAssets(ctx, &result.EntrySummary)
+	} else {
+		ensureReferencedAssets(&result.EntrySummary)
+	}
 	return result, err
 }
 
@@ -480,6 +568,11 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 		result = Entry{EntrySummary: entry, CurrentDraftRevision: revision}
 		return nil
 	})
+	if err == nil {
+		err = s.resolveEntryAssets(ctx, &result.EntrySummary)
+	} else {
+		ensureReferencedAssets(&result.EntrySummary)
+	}
 	return result, err
 }
 
@@ -917,6 +1010,11 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 		result, err = f2.GetWorkflowEntry(ctx, q, modelID, entryID)
 		return err
 	})
+	if err == nil {
+		err = s.resolveEntryAssets(ctx, &result.EntrySummary)
+	} else {
+		ensureReferencedAssets(&result.EntrySummary)
+	}
 	return result, err
 }
 

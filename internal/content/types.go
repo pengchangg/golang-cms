@@ -59,17 +59,31 @@ type WorkflowEventList struct {
 }
 
 type EntrySummary struct {
-	ID                         string          `json:"id"`
-	ModelID                    string          `json:"model_id"`
-	Status                     EntryStatus     `json:"status"`
-	CurrentDraftRevisionID     string          `json:"current_draft_revision_id"`
-	CurrentDraftContent        json.RawMessage `json:"current_draft_content"`
-	WorkflowStatus             WorkflowStatus  `json:"workflow_status"`
-	CurrentPublishedRevisionID *string         `json:"current_published_revision_id"`
-	CreatedBy                  string          `json:"created_by"`
-	CreatedAt                  time.Time       `json:"created_at"`
-	UpdatedAt                  time.Time       `json:"updated_at"`
-	Expanded                   map[string]any  `json:"expanded,omitempty"`
+	ID                         string                     `json:"id"`
+	ModelID                    string                     `json:"model_id"`
+	Status                     EntryStatus                `json:"status"`
+	CurrentDraftRevisionID     string                     `json:"current_draft_revision_id"`
+	CurrentDraftContent        json.RawMessage            `json:"current_draft_content"`
+	WorkflowStatus             WorkflowStatus             `json:"workflow_status"`
+	CurrentPublishedRevisionID *string                    `json:"current_published_revision_id"`
+	CreatedBy                  string                     `json:"created_by"`
+	CreatedAt                  time.Time                  `json:"created_at"`
+	UpdatedAt                  time.Time                  `json:"updated_at"`
+	Expanded                   map[string]any             `json:"expanded,omitempty"`
+	ReferencedAssets           map[string]ReferencedAsset `json:"referenced_assets"`
+}
+
+type ReferencedAsset struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	MimeType    string `json:"mime_type"`
+	Size        int64  `json:"size"`
+	Status      string `json:"status"`
+	PreviewKind string `json:"preview_kind"`
+}
+
+type ReferencedAssetResolver interface {
+	ResolveReferencedAssets(context.Context, []string) (map[string]map[string]ReferencedAsset, error)
 }
 
 type Entry struct {
@@ -248,6 +262,7 @@ type EntryListField struct {
 	DisplayName string                    `json:"display_name"`
 	Type        schema.FieldType          `json:"type"`
 	Constraints EntryListFieldConstraints `json:"constraints"`
+	Children    []EntryListField          `json:"children"`
 }
 
 type AdminEntryQuery struct {

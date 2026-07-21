@@ -8,9 +8,11 @@ const fields = [
 let entry: {
   id: string; model_id: string; status: 'draft'; workflow_status: WorkflowStatus
   current_draft_revision_id: string; current_published_revision_id: string | null
+  current_draft_content: Record<string, unknown>; referenced_assets: Record<string, ReferencedAsset>
   created_by: string; created_at: string; updated_at: string
 } = {
   id: 'ent_review', model_id: model.id, status: 'draft', workflow_status: 'pending_review', current_draft_revision_id: 'rev_2', current_published_revision_id: null,
+  current_draft_content: { title: '阶段二审核说明', related: ['ent_welcome'], cover: null }, referenced_assets: {},
   created_by: 'usr_editor', created_at: now, updated_at: now,
 }
 const revision: WorkflowRevision = { id: 'rev_2', entry_id: entry.id, model_id: model.id, number: 2, content: { title: '阶段二审核说明', related: ['ent_welcome'], cover: null }, created_by: 'usr_editor', created_at: now, workflow_status: 'pending_review', submitted_by: 'usr_editor', submitted_at: now }
@@ -40,7 +42,7 @@ export function enableF2Mock() {
     if (path === `/models/${model.id}/entries` && method === 'GET') {
       const status = url.searchParams.get('workflow_status')
       const items = status && status !== entry.workflow_status ? [] : [entry]
-      return Response.json({ items, next_cursor: null, total: items.length, total_is_estimate: false })
+      return Response.json({ items, fields: fields.map(({ key, display_name, type, constraints, children }) => ({ key, display_name, type, constraints: { filterable: 'filterable' in constraints && constraints.filterable === true, sortable: 'sortable' in constraints && constraints.sortable === true }, children })), next_cursor: null, total: items.length, total_is_estimate: false })
     }
     if (path === `/models/${model.id}/entries/${entry.id}` && method === 'GET') return Response.json({ ...entry, current_draft_revision: { ...revision, workflow_status: entry.workflow_status }, current_published_revision: null })
     if (path === `/models/${model.id}/entries/${entry.id}/workflow-events` && method === 'GET') return Response.json({ items: events, next_cursor: null })
@@ -77,4 +79,4 @@ export function enableF2Mock() {
     return nativeFetch(input, init)
   }
 }
-import type { APIKey, APIKeySecret, WorkflowEvent, WorkflowRevision, WorkflowStatus } from '../api/types'
+import type { APIKey, APIKeySecret, ReferencedAsset, WorkflowEvent, WorkflowRevision, WorkflowStatus } from '../api/types'

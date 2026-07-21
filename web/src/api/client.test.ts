@@ -64,7 +64,7 @@ describe('API Client', () => {
   it('素材上传仅在对象存储 PUT 成功后确认并返回可用素材', async () => {
     const file = new File([new Uint8Array([1, 2, 3])], 'cover.png', { type: 'image/png' })
     Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1, 2, 3]).buffer })
-    const asset = { id: 'ast_1', filename: file.name, mime_type: file.type, size: file.size, sha256: 'a'.repeat(64), etag: 'etag', status: 'available' as const, created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: '2026-07-20T08:00:00Z', archived_at: null }
+    const asset = { id: 'ast_1', filename: file.name, mime_type: file.type, preview_kind: 'image' as const, size: file.size, sha256: 'a'.repeat(64), etag: 'etag', status: 'available' as const, created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: '2026-07-20T08:00:00Z', archived_at: null }
     const create = vi.spyOn(api, 'createAssetUpload').mockResolvedValue({ asset: { ...asset, status: 'quarantined', etag: null, confirmed_at: null }, upload: { method: 'PUT', url: 'https://bucket.example.com/upload', headers: { 'Content-Type': file.type }, expires_at: '2026-07-20T08:15:00Z' } })
     const confirm = vi.spyOn(api, 'confirmAssetUpload').mockResolvedValue(asset)
     const put = vi.fn().mockResolvedValue(new Response(null, { status: 200 }))
@@ -81,7 +81,7 @@ describe('API Client', () => {
   it('素材确认未进入可用状态时不返回可选择素材', async () => {
     const file = new File([new Uint8Array([1])], 'cover.png', { type: 'image/png' })
     Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1]).buffer })
-    const quarantined = { id: 'ast_1', filename: file.name, mime_type: file.type, size: file.size, sha256: 'a'.repeat(64), etag: null, status: 'quarantined' as const, created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: null, archived_at: null }
+    const quarantined = { id: 'ast_1', filename: file.name, mime_type: file.type, preview_kind: 'image' as const, size: file.size, sha256: 'a'.repeat(64), etag: null, status: 'quarantined' as const, created_by: 'usr_1', created_at: '2026-07-20T08:00:00Z', confirmed_at: null, archived_at: null }
     vi.spyOn(api, 'createAssetUpload').mockResolvedValue({ asset: quarantined, upload: { method: 'PUT', url: 'https://bucket.example.com/upload', headers: {}, expires_at: '2026-07-20T08:15:00Z' } })
     vi.spyOn(api, 'confirmAssetUpload').mockResolvedValue(quarantined)
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))

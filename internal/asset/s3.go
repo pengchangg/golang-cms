@@ -176,7 +176,7 @@ func (s *S3Store) SignGet(ctx context.Context, input SignGetRequest) (SignedRequ
 		return SignedRequest{}, err
 	}
 	requestInput := &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(input.ObjectKey)}
-	if input.DownloadFilename != "" {
+	if input.DownloadFilename != "" && (input.Disposition == "" || input.Disposition == DispositionAttachment) {
 		requestInput.ResponseContentDisposition = aws.String(contentDisposition(input.DownloadFilename))
 	}
 	request, err := s.presigner.PresignGetObject(ctx, requestInput, func(options *s3.PresignOptions) { options.Expires = ttl })

@@ -64,6 +64,14 @@ func TestS3StorePresignBindsStandardHeaders(t *testing.T) {
 	if get.Method != http.MethodGet || strings.ContainsAny(disposition, "\r\n") || !strings.Contains(disposition, "filename*=UTF-8''") {
 		t.Fatalf("下载文件名未安全处理: %s", get.URL)
 	}
+	preview, err := store.SignGet(context.Background(), SignGetRequest{ObjectKey: key, Disposition: "inline", ContentType: "image/png", ExpiresAt: now.Add(4 * time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ = url.Parse(preview.URL)
+	if parsed.Query().Get("response-content-disposition") != "" || parsed.Query().Get("response-content-type") != "" {
+		t.Fatalf("预览签名不应包含不兼容的响应头覆盖参数: %s", preview.URL)
+	}
 }
 
 func TestS3StoreUsesPathStyle(t *testing.T) {

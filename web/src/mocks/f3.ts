@@ -2,8 +2,8 @@ import type { Asset } from '../api/types'
 
 const now = '2026-07-19T08:00:00Z'
 let assets: Asset[] = [
-  { id: 'ast_cover_01', filename: '夏季刊封面.png', mime_type: 'image/png', size: 248320, sha256: 'a'.repeat(64), etag: 'mock-etag-1', status: 'available', created_by: 'usr_dev_preview', created_at: now, confirmed_at: now, archived_at: null },
-  { id: 'ast_manual_02', filename: '产品手册.pdf', mime_type: 'application/pdf', size: 840120, sha256: 'b'.repeat(64), etag: 'mock-etag-2', status: 'available', created_by: 'usr_dev_preview', created_at: now, confirmed_at: now, archived_at: null },
+  { id: 'ast_cover_01', filename: '夏季刊封面.png', mime_type: 'image/png', preview_kind: 'image', size: 248320, sha256: 'a'.repeat(64), etag: 'mock-etag-1', status: 'available', created_by: 'usr_dev_preview', created_at: now, confirmed_at: now, archived_at: null },
+  { id: 'ast_manual_02', filename: '产品手册.pdf', mime_type: 'application/pdf', preview_kind: 'pdf', size: 840120, sha256: 'b'.repeat(64), etag: 'mock-etag-2', status: 'available', created_by: 'usr_dev_preview', created_at: now, confirmed_at: now, archived_at: null },
 ]
 function body(init?: RequestInit) { return JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> }
 
@@ -21,7 +21,7 @@ export function enableF3Mock() {
       return Response.json({ items: assets.filter((asset) => (!status || asset.status === status) && (!mime || asset.mime_type === mime)), next_cursor: null })
     }
     if (path === '/assets/uploads' && method === 'POST') {
-      const request = body(init); const asset: Asset = { id: `ast_${crypto.randomUUID().slice(0, 8)}`, filename: String(request.filename), mime_type: String(request.mime_type), size: Number(request.size), sha256: String(request.sha256), etag: null, status: 'quarantined', created_by: 'usr_dev_preview', created_at: now, confirmed_at: null, archived_at: null }
+      const request = body(init); const mimeType = String(request.mime_type); const asset: Asset = { id: `ast_${crypto.randomUUID().slice(0, 8)}`, filename: String(request.filename), mime_type: mimeType, preview_kind: mimeType.startsWith('image/') ? 'image' : 'none', size: Number(request.size), sha256: String(request.sha256), etag: null, status: 'quarantined', created_by: 'usr_dev_preview', created_at: now, confirmed_at: null, archived_at: null }
       assets = [asset, ...assets]
       return Response.json({ asset, upload: { method: 'PUT', url: `https://mock-s3.local/${asset.id}`, headers: { 'Content-Type': asset.mime_type, 'If-None-Match': '*', 'x-amz-meta-sha256': asset.sha256 }, expires_at: '2026-07-19T09:00:00Z' } }, { status: 201 })
     }

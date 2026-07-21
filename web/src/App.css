@@ -149,6 +149,36 @@ button, a { touch-action: manipulation; }
 .job-errors { margin-top: 28px; }
 .job-errors h2 { font-family: "Songti SC", "Noto Serif SC", serif; }
 .transfer-actions { justify-content: flex-end; }
+.asset-preview { display: grid; min-width: 0; align-items: center; gap: 10px; grid-template-columns: 48px minmax(0, 1fr) auto; }
+.asset-preview.is-compact { grid-template-columns: 34px minmax(0, 1fr) auto; gap: 7px; }
+.asset-preview-icon { display: grid; width: 48px; height: 48px; place-items: center; border: 1px solid var(--line); border-radius: 4px; color: var(--green); background: rgb(244 243 238 / 70%); font-size: 22px; }
+.asset-preview.is-compact .asset-preview-icon { width: 34px; height: 34px; font-size: 18px; }
+.asset-preview-thumbnail { display: block; object-fit: cover; border: 1px solid var(--line); border-radius: 4px; background: var(--canvas); }
+.asset-preview .ant-image { width: 48px; height: 48px; }
+.asset-preview-meta { display: grid; min-width: 0; gap: 3px; }
+.asset-preview-name { min-width: 0; padding: 0; overflow: hidden; border: 0; color: var(--ink); background: none; font: inherit; font-weight: 600; line-height: 1.35; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.asset-preview-name.is-disabled { color: var(--muted); cursor: not-allowed; }
+.asset-preview-detail { display: flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.asset-preview-detail .ant-tag { margin: 0; font-size: 11px; line-height: 18px; }
+.asset-preview-actions { display: flex; }
+.asset-preview-actions .ant-btn { min-width: 40px; min-height: 40px; }
+.asset-preview.is-compact .asset-preview-actions .ant-btn { min-width: 34px; min-height: 34px; }
+.asset-preview-stage { display: grid; min-height: 240px; place-items: center; background: var(--canvas); }
+.asset-preview-stage iframe { width: 100%; height: min(72vh, 760px); border: 0; background: white; }
+.asset-preview-fallback { width: 100%; margin: 0; padding: 9px 12px; color: var(--muted); font-size: 12px; text-align: center; }
+.asset-preview-stage video { width: 100%; max-height: 68vh; background: #171916; }
+.asset-preview-stage audio { width: min(100%, 560px); }
+.asset-preview-stage pre { width: 100%; max-height: 68vh; margin: 0; padding: 20px; overflow: auto; color: var(--ink); background: var(--paper); font: 13px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.asset-preview-loading { display: block; height: 32px; }
+.entry-media-collection, .entry-media-modal-list { display: grid; min-width: 250px; gap: 7px; }
+.entry-media-more { justify-self: start; min-height: 40px; padding-inline: 4px; }
+.asset-preview-unavailable { display: flex; min-height: 34px; align-items: center; padding: 6px 9px; border: 1px dashed var(--line); color: var(--muted); background: rgb(244 243 238 / 60%); font-size: 12px; }
+.entry-structured-cell { max-height: 220px; overflow: auto; overscroll-behavior: contain; }
+.entry-structured-value { display: grid; min-width: 270px; gap: 8px; }
+.entry-structured-row { display: grid; gap: 5px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+.entry-structured-row > strong { color: var(--muted); font-size: 11px; font-weight: 500; }
+.entry-repeatable-item { display: grid; gap: 8px; padding: 9px; border-left: 2px solid rgb(37 107 85 / 22%); background: rgb(255 254 249 / 58%); }
+.entry-repeatable-item > small { color: var(--green); }
 
 @media (max-width: 991px) {
   .app-sider { display: none; }
@@ -192,6 +222,9 @@ button, a { touch-action: manipulation; }
   .job-sheet, .job-errors { padding-inline: 12px; }
   .job-state { grid-template-columns: 1fr; }
   .job-actions, .job-actions .ant-btn, .job-actions a { width: 100%; }
+  .asset-preview-modal .ant-modal-body { padding-inline: 0; }
+  .asset-preview-stage iframe { height: 65vh; }
+  .entry-structured-cell { max-height: 190px; }
   .ant-modal { max-width: calc(100vw - 24px); }
 }
 @media (hover: hover) {

@@ -60,3 +60,17 @@ func TestMemoryStoreRejectsMismatchExpiryAndFailure(t *testing.T) {
 		t.Fatalf("期望临时故障，得到 %v", err)
 	}
 }
+
+func TestMemoryStoreSignGetPreservesDispositionSemantics(t *testing.T) {
+	now := time.Now().UTC()
+	store := NewMemoryStore(15*time.Minute, 5*time.Minute)
+	store.Now = func() time.Time { return now }
+	attachment, err := store.SignGet(context.Background(), SignGetRequest{ObjectKey: "key", DownloadFilename: "报告.txt", Disposition: "attachment", ExpiresAt: now.Add(time.Minute)})
+	if err != nil || !strings.Contains(attachment.URL, "response-content-disposition=attachment") {
+		t.Fatalf("attachment 签名错误: %+v %v", attachment, err)
+	}
+	inline, err := store.SignGet(context.Background(), SignGetRequest{ObjectKey: "key", Disposition: "inline", ContentType: "text/plain", ExpiresAt: now.Add(time.Minute)})
+	if err != nil || strings.Contains(inline.URL, "response-content-disposition") || strings.Contains(inline.URL, "response-content-type") {
+		t.Fatalf("inline 签名错误: %+v %v", inline, err)
+	}
+}

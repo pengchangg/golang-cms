@@ -199,3 +199,95 @@ x-integration-status: integrated
       "404": *notFound
       "409": *assetConflict
       "503": *storeUnavailable
+/assets/{asset_id}/preview:
+  parameters: *assetId
+  get:
+    x-integration-status: integrated
+    operationId: previewAdminAsset
+    summary: 预览可用或已归档素材
+    parameters: [*sessionCookie]
+    responses:
+      "200": &inlinePreview
+        description: 可预览素材由应用同源流式返回；文本类最大 1 MiB。
+        headers:
+          Content-Disposition:
+            schema: { const: inline }
+          X-Content-Type-Options:
+            schema: { const: nosniff }
+        content:
+          text/plain: { schema: { type: string } }
+          text/csv: { schema: { type: string } }
+          application/json: { schema: {} }
+          image/jpeg: { schema: { type: string, contentEncoding: binary } }
+          image/png: { schema: { type: string, contentEncoding: binary } }
+          image/webp: { schema: { type: string, contentEncoding: binary } }
+          image/gif: { schema: { type: string, contentEncoding: binary } }
+          image/avif: { schema: { type: string, contentEncoding: binary } }
+          image/svg+xml: { schema: { type: string, contentEncoding: binary } }
+          application/pdf: { schema: { type: string, contentEncoding: binary } }
+          video/mp4: { schema: { type: string, contentEncoding: binary } }
+          video/webm: { schema: { type: string, contentEncoding: binary } }
+          audio/mpeg: { schema: { type: string, contentEncoding: binary } }
+          audio/mp4: { schema: { type: string, contentEncoding: binary } }
+          audio/ogg: { schema: { type: string, contentEncoding: binary } }
+          audio/wav: { schema: { type: string, contentEncoding: binary } }
+          audio/webm: { schema: { type: string, contentEncoding: binary } }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *assetConflict
+      "413": &previewTooLarge
+        description: 文本素材超过 1 MiB，error.code 为 asset_preview_too_large。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "503": *storeUnavailable
+/models/{model_id}/entries/{entry_id}/assets/{asset_id}/preview:
+  parameters: &referencedAssetId
+    - name: model_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    - name: entry_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+    - name: asset_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  get:
+    x-integration-status: integrated
+    operationId: previewAdminReferencedAsset
+    summary: 预览当前草稿引用的素材
+    parameters: [*sessionCookie]
+    responses:
+      "200": *inlinePreview
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *assetConflict
+      "413": *previewTooLarge
+      "503": *storeUnavailable
+/models/{model_id}/entries/{entry_id}/assets/{asset_id}/download:
+  parameters: *referencedAssetId
+  get:
+    x-integration-status: integrated
+    operationId: downloadAdminReferencedAsset
+    summary: 下载当前草稿引用的素材
+    parameters: [*sessionCookie]
+    responses:
+      "302":
+        description: 重定向到带安全 attachment 文件名的短时下载地址。
+        headers:
+          Location:
+            required: true
+            schema: { type: string, format: uri }
+          Cache-Control:
+            required: true
+            schema: { const: "private, no-store" }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "503": *storeUnavailable

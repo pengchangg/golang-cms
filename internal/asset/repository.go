@@ -136,6 +136,7 @@ func (SQLRepository) List(ctx context.Context, q database.Querier, input ListQue
 }
 
 func normalizeAsset(value *Asset, etag sql.NullString, confirmed, archived sql.NullTime) {
+	decorateAsset(value)
 	value.CreatedAt, value.UploadUntil = value.CreatedAt.UTC(), value.UploadUntil.UTC()
 	if etag.Valid {
 		value.ETag = &etag.String

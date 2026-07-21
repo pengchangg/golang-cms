@@ -15,6 +15,7 @@ const model: ContentModel = { id: 'mdl_1', key: 'articles', display_name: '文�
 const entry: ContentEntry = {
   id: 'ent_1', model_id: model.id, status: 'draft', current_draft_revision_id: 'rev_1', workflow_status: 'draft', current_published_revision_id: null,
   current_draft_content: { title: '旧标题' },
+  referenced_assets: {},
   created_by: 'usr_1', created_at: now, updated_at: now,
   current_draft_revision: { id: 'rev_1', entry_id: 'ent_1', model_id: model.id, number: 1, content: { title: '旧标题' }, created_by: 'usr_1', created_at: now, workflow_status: 'draft', submitted_by: null, submitted_at: null },
   current_published_revision: null,
@@ -71,9 +72,9 @@ describe('工作流页面行为', () => {
     const getModel = vi.spyOn(api, 'getModel')
     const details = { body: 'x'.repeat(100) }
     const fields = [
-      { key: 'title', display_name: '标题', type: 'single_line_text' as const, constraints: { filterable: true, sortable: true } },
-      { key: 'kind', display_name: '类型', type: 'single_select' as const, constraints: { enum_options: [{ value: 'news', label: '新闻' }], filterable: true, sortable: false } },
-      { key: 'details', display_name: '详情', type: 'json' as const, constraints: { filterable: false, sortable: false } },
+      { key: 'title', display_name: '标题', type: 'single_line_text' as const, constraints: { filterable: true, sortable: true }, children: [] },
+      { key: 'kind', display_name: '类型', type: 'single_select' as const, constraints: { enum_options: [{ value: 'news', label: '新闻' }], filterable: true, sortable: false }, children: [] },
+      { key: 'details', display_name: '详情', type: 'json' as const, constraints: { filterable: false, sortable: false }, children: [] },
     ]
     const listedEntry = { ...entry, current_draft_content: { title: '旧标题', kind: 'news', details } }
     const listEntries = vi.spyOn(api, 'listEntries')
@@ -93,6 +94,40 @@ describe('工作流页面行为', () => {
     expect(getModel).not.toHaveBeenCalled()
     await userEvent.click(await screen.findByRole('button', { name: '下一页' }))
     await waitFor(() => expect(listEntries).toHaveBeenLastCalledWith('mdl_1', expect.objectContaining({ cursor: 'entries_2' })))
+  })
+
+  it('内容列表递归展示根媒体和 object/repeatable 嵌套素材且不请求素材详情', async () => {
+    const media = (id: string, filename: string) => ({ id, filename, mime_type: 'image/png', size: 100, status: 'available' as const, preview_kind: 'image' as const })
+    const mediaField = (key: string, display_name: string) => ({ key, display_name, type: 'single_media' as const, constraints: { filterable: false, sortable: false }, children: [] })
+    const fields = [
+      { ...mediaField('cover', '封面') },
+      { ...mediaField('gallery', '图集'), type: 'multi_media' as const },
+      { key: 'details', display_name: '详情', type: 'object' as const, constraints: { filterable: false, sortable: false }, children: [{ ...mediaField('poster', '海报'), type: 'multi_media' as const }] },
+      { key: 'sections', display_name: '章节', type: 'repeatable_group' as const, constraints: { filterable: false, sortable: false }, children: [mediaField('illustration', '插图')] },
+    ]
+    const referenced_assets = Object.fromEntries(['cover', 'one', 'two', 'three', 'four', 'poster', 'nested'].map((id) => [id, media(id, `${id}.png`)]))
+    vi.spyOn(api, 'listEntries').mockResolvedValue({ items: [{ ...entry, current_draft_content: { cover: 'cover', gallery: ['one', 'two', 'three', 'four'], details: { poster: ['one', 'two', 'three', 'four'] }, sections: [{ illustration: 'nested' }] }, referenced_assets }], fields, next_cursor: null })
+    const getAsset = vi.spyOn(api, 'getAsset')
+    render(<MemoryRouter initialEntries={['/content/mdl_1']}><Routes><Route path="/content/:modelId" element={<EntriesPage principal={principal([], ['content.view'])} />} /></Routes></MemoryRouter>)
+
+    expect(await screen.findByText('cover.png')).toBeVisible()
+    expect(screen.getAllByText('one.png').length).toBeGreaterThan(0)
+    expect(screen.getByText('nested.png')).toBeVisible()
+    const more = screen.getAllByText('+1 查看全部')
+    expect(more).toHaveLength(2)
+    expect(screen.getByText('cover.png')).toHaveAttribute('title', '预览 cover.png')
+    expect(document.querySelector('img[src="/api/admin/v1/models/mdl_1/entries/ent_1/assets/cover/preview"]')).toBeInTheDocument()
+    expect(getAsset).not.toHaveBeenCalled()
+
+    await userEvent.click(more[0])
+    expect(screen.getAllByText('four.png').length).toBeGreaterThan(0)
+  })
+
+  it('引用素材元数据缺失时显示不可用占位', async () => {
+    const fields = [{ key: 'cover', display_name: '封面', type: 'single_media' as const, constraints: { filterable: false, sortable: false }, children: [] }]
+    vi.spyOn(api, 'listEntries').mockResolvedValue({ items: [{ ...entry, current_draft_content: { cover: 'ast_missing' }, referenced_assets: {} }], fields, next_cursor: null })
+    render(<MemoryRouter initialEntries={['/content/mdl_1']}><Routes><Route path="/content/:modelId" element={<EntriesPage principal={principal([], ['content.view'])} />} /></Routes></MemoryRouter>)
+    expect(await screen.findByText('素材不可用')).toBeVisible()
   })
 
   it('API Key 列表使用 next_cursor 请求下一页', async () => {

@@ -38,6 +38,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/admin/v1/assets/{asset_id}", h.archive)
 	mux.HandleFunc("POST /api/admin/v1/assets/{asset_id}/confirm", h.confirm)
 	mux.HandleFunc("GET /api/admin/v1/assets/{asset_id}/download", h.adminDownload)
+	mux.HandleFunc("GET /api/admin/v1/assets/{asset_id}/preview", h.adminPreview)
+	mux.HandleFunc("GET /api/admin/v1/models/{model_id}/entries/{entry_id}/assets/{asset_id}/preview", h.referencedPreview)
+	mux.HandleFunc("GET /api/admin/v1/models/{model_id}/entries/{entry_id}/assets/{asset_id}/download", h.referencedDownload)
 }
 
 func (h *Handler) createUpload(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +144,33 @@ func (h *Handler) adminDownload(w http.ResponseWriter, r *http.Request) {
 	redirect(w, r, result, err)
 }
 
+func (h *Handler) adminPreview(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.AdminPreview(r.Context(), principal, r.PathValue("asset_id"))
+	writePreview(w, r, result, err)
+}
+
+func (h *Handler) referencedPreview(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.ReferencedPreview(r.Context(), principal, r.PathValue("model_id"), r.PathValue("entry_id"), r.PathValue("asset_id"))
+	writePreview(w, r, result, err)
+}
+
+func (h *Handler) referencedDownload(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.ReferencedDownload(r.Context(), principal, requestMeta(r), r.PathValue("model_id"), r.PathValue("entry_id"), r.PathValue("asset_id"))
+	redirect(w, r, result, err)
+}
+
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (identity.Principal, bool) {
 	if h.principal == nil {
 		httpx.WriteError(w, r, appError(apperror.KindInternal, "internal_error", "管理认证未装配"))
@@ -197,6 +227,33 @@ func redirect(w http.ResponseWriter, r *http.Request, value SignedRequest, err e
 	w.Header().Set("Location", value.URL)
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.WriteHeader(http.StatusFound)
+}
+
+func writePreview(w http.ResponseWriter, r *http.Request, value Preview, err error) {
+	if err != nil {
+		var app *apperror.Error
+		if errors.As(err, &app) && app.Code == "asset_preview_too_large" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": app.Code, "message": app.Message, "request_id": httpx.RequestIDFromContext(r.Context()), "details": []map[string]any{}}})
+			return
+		}
+		httpx.WriteError(w, r, err)
+		return
+	}
+	defer value.Body.Close()
+	w.Header().Set("Content-Type", value.MimeType)
+	w.Header().Set("Content-Disposition", "inline")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
+	if value.Kind == PreviewImage && value.MimeType == "image/svg+xml" {
+		w.Header().Set("Content-Security-Policy", "sandbox")
+	}
+	if value.Size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(value.Size, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, value.Body)
 }
 
 func requestMeta(r *http.Request) RequestMeta {

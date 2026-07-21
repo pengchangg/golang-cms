@@ -1,8 +1,10 @@
 package asset
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +21,9 @@ func TestHandlerRegistersOnlyAdminRoutes(t *testing.T) {
 		{http.MethodGet, "/api/admin/v1/assets/ast_1"},
 		{http.MethodPost, "/api/admin/v1/assets/ast_1/confirm"},
 		{http.MethodGet, "/api/admin/v1/assets/ast_1/download"},
+		{http.MethodGet, "/api/admin/v1/assets/ast_1/preview"},
+		{http.MethodGet, "/api/admin/v1/models/mdl_1/entries/ent_1/assets/ast_1/preview"},
+		{http.MethodGet, "/api/admin/v1/models/mdl_1/entries/ent_1/assets/ast_1/download"},
 	} {
 		request := httptest.NewRequest(route.method, route.path, nil)
 		_, pattern := mux.Handler(request)
@@ -31,5 +36,26 @@ func TestHandlerRegistersOnlyAdminRoutes(t *testing.T) {
 	_, pattern := mux.Handler(request)
 	if pattern != "" {
 		t.Fatalf("素材管理 Handler 不应注册客户端路由: %s", pattern)
+	}
+}
+
+func TestWritePreviewStreamsTextWithSafeHeaders(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/assets/ast_1/preview", nil)
+	response := httptest.NewRecorder()
+	writePreview(response, request, Preview{Kind: PreviewText, MimeType: "application/json", Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil)
+	if response.Code != http.StatusOK || response.Body.String() != `{"ok":true}` {
+		t.Fatalf("文本预览响应错误: code=%d body=%q", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Content-Type") != "application/json" || response.Header().Get("Content-Disposition") != "inline" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("文本预览安全响应头错误: %#v", response.Header())
+	}
+}
+
+func TestWritePreviewStreamsImageInline(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/assets/ast_1/preview", nil)
+	response := httptest.NewRecorder()
+	writePreview(response, request, Preview{Kind: PreviewImage, MimeType: "image/png", Size: 3, Body: io.NopCloser(strings.NewReader("png"))}, nil)
+	if response.Code != http.StatusOK || response.Body.String() != "png" || response.Header().Get("Content-Type") != "image/png" || response.Header().Get("Content-Disposition") != "inline" || response.Header().Get("Content-Length") != "3" {
+		t.Fatalf("图片预览响应错误: code=%d headers=%#v body=%q", response.Code, response.Header(), response.Body.String())
 	}
 }

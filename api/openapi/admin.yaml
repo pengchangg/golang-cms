@@ -85,6 +85,12 @@ paths:
     $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}~1confirm
   /assets/{asset_id}/download:
     $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}~1download
+  /assets/{asset_id}/preview:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}~1preview
+  /models/{model_id}/entries/{entry_id}/assets/{asset_id}/preview:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1assets~1{asset_id}~1preview
+  /models/{model_id}/entries/{entry_id}/assets/{asset_id}/download:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1models~1{model_id}~1entries~1{entry_id}~1assets~1{asset_id}~1download
   /models/{model_id}/transfers/template:
     $ref: ./fragments/admin/transfers/paths.yaml#/~1models~1{model_id}~1transfers~1template
   /models/{model_id}/imports:
