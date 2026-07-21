@@ -1,11 +1,13 @@
 package asset
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,7 +19,24 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/logging"
 )
+
+func TestSmithyLoggerUsesApplicationJSONFormat(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	config := testS3Config("https://storage.example.com", true, nil)
+	config.Logger = logger
+	store, err := NewS3Store(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.client.Options().Logger.Logf(logging.Warn, "checksum %s", "missing")
+	line := output.String()
+	if !strings.Contains(line, `"level":"WARN"`) || !strings.Contains(line, `"msg":"checksum missing"`) || !strings.Contains(line, `"component":"aws_sdk"`) {
+		t.Fatalf("SDK 日志未使用统一 JSON 格式: %s", line)
+	}
+}
 
 func TestS3StorePresignBindsStandardHeaders(t *testing.T) {
 	store := newTestS3Store(t, "https://s3.example.com", false, nil)

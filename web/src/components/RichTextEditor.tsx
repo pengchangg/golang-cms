@@ -4,6 +4,7 @@ import { Button, Select, Space } from 'antd'
 import { useEffect, useEffectEvent, useRef } from 'react'
 
 import { normalizeRichText, richTextFromEditor, richTextToEditor } from './richText'
+import { richTextToolbarState } from './richTextToolbar'
 
 const extensions = [
   StarterKit.configure({ horizontalRule: false, link: false }),
@@ -42,20 +43,7 @@ export function RichTextEditor({ value, onChange, disabled, label }: { value: un
 
   const state = useEditorState({
     editor,
-    selector: ({ editor: current }) => ({
-      heading: current?.isActive('heading') ? current.getAttributes('heading').level as number : 0,
-      bold: current?.isActive('bold') ?? false,
-      italic: current?.isActive('italic') ?? false,
-      underline: current?.isActive('underline') ?? false,
-      strike: current?.isActive('strike') ?? false,
-      code: current?.isActive('code') ?? false,
-      bulletList: current?.isActive('bulletList') ?? false,
-      orderedList: current?.isActive('orderedList') ?? false,
-      blockquote: current?.isActive('blockquote') ?? false,
-      codeBlock: current?.isActive('codeBlock') ?? false,
-      canUndo: current?.can().undo() ?? false,
-      canRedo: current?.can().redo() ?? false,
-    }),
+    selector: ({ editor: current }) => richTextToolbarState(current),
   })
 
   if (!editor) return null

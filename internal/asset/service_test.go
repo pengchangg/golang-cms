@@ -166,22 +166,27 @@ func TestServiceTextPreviewIsSameOriginAndNotAudited(t *testing.T) {
 	store := NewMemoryStore(15*time.Minute, 5*time.Minute)
 	store.Now = func() time.Time { return now }
 	store.objects[key] = memoryObject{data: []byte(body), metadata: ObjectMetadata{ObjectKey: key, Size: int64(len(body)), ContentType: "text/plain"}}
-	repository := &memoryAssetRepository{values: map[string]Asset{"ast_text": {ID: "ast_text", ObjectKey: key, Filename: "a.txt", MimeType: "text/plain", Size: int64(len(body)), Status: StatusAvailable}}}
+	digest := sha256Text(body)
+	repository := &memoryAssetRepository{values: map[string]Asset{"ast_text": {ID: "ast_text", ObjectKey: key, Filename: "a.txt", MimeType: "text/plain", Size: int64(len(body)), SHA256: digest, Status: StatusAvailable}}}
 	auditor := &memoryAudit{}
 	service, _ := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: repository, Store: store, Audit: auditor, Config: Config{AllowedMimeTypes: []string{"text/plain"}, MaxSize: 2 << 20, UploadTTL: 15 * time.Minute, DownloadTTL: 5 * time.Minute}})
 	service.now = func() time.Time { return now }
-	preview, err := service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text")
+	preview, err := service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text", "")
 	if err != nil || preview.Body == nil || preview.Signed.URL != "" || len(auditor.events) != 0 {
 		t.Fatalf("文本预览结果错误: %+v, events=%d, err=%v", preview, len(auditor.events), err)
 	}
 	_ = preview.Body.Close()
+	cached, err := service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text", `W/"`+digest+`"`)
+	if err != nil || !cached.NotModified || cached.Body != nil || cached.ETag != `"`+digest+`"` || store.GetCalls.Load() != 1 {
+		t.Fatalf("条件预览未短路对象存储下载: preview=%+v calls=%d err=%v", cached, store.GetCalls.Load(), err)
+	}
 	repository.values["ast_text"] = Asset{ID: "ast_text", MimeType: "text/plain", Size: maxTextPreviewSize + 1, Status: StatusAvailable}
-	_, err = service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text")
+	_, err = service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text", "")
 	assertCode(t, err, "asset_preview_too_large")
 	oversized := make([]byte, maxTextPreviewSize+1)
 	store.objects[key] = memoryObject{data: oversized, metadata: ObjectMetadata{ObjectKey: key, Size: int64(len(oversized)), ContentType: "text/plain"}}
 	repository.values["ast_text"] = Asset{ID: "ast_text", ObjectKey: key, Filename: "a.txt", MimeType: "text/plain", Size: 7, Status: StatusAvailable}
-	_, err = service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text")
+	_, err = service.AdminPreview(context.Background(), identity.Principal{SystemPermissions: []string{permissionView}}, "ast_text", "")
 	assertCode(t, err, "asset_preview_too_large")
 }
 

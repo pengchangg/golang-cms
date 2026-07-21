@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyendpoints "github.com/aws/smithy-go/endpoints"
+	"github.com/aws/smithy-go/logging"
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
@@ -41,6 +43,7 @@ type S3Config struct {
 	UploadMaxTTL    time.Duration
 	DownloadMaxTTL  time.Duration
 	HTTPClient      *http.Client
+	Logger          *slog.Logger
 }
 
 type S3Store struct {
@@ -99,6 +102,9 @@ func NewS3Store(config S3Config) (*S3Store, error) {
 		awsconfig.WithHTTPClient(httpClient),
 		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
 	}
+	if config.Logger != nil {
+		loadOptions = append(loadOptions, awsconfig.WithLogger(smithyLogger(config.Logger)))
+	}
 	awsConfig, err := awsconfig.LoadDefaultConfig(context.Background(), loadOptions...)
 	if err != nil {
 		return nil, ErrStoreConfig
@@ -121,6 +127,17 @@ func NewS3Store(config S3Config) (*S3Store, error) {
 		httpClient:       httpClient,
 		now:              func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+func smithyLogger(logger *slog.Logger) logging.Logger {
+	logger = logger.With("component", "aws_sdk")
+	return logging.LoggerFunc(func(classification logging.Classification, format string, values ...any) {
+		level := slog.LevelDebug
+		if classification == logging.Warn {
+			level = slog.LevelWarn
+		}
+		logger.Log(context.Background(), level, fmt.Sprintf(format, values...))
+	})
 }
 
 func (s *S3Store) SignPut(ctx context.Context, input SignPutRequest) (SignedRequest, error) {

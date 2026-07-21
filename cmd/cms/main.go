@@ -39,6 +39,7 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	slog.SetDefault(logger)
 	code, err := execute(os.Args[1:], logger)
 	if err != nil {
 		logger.Error("命令执行失败", "error", err)
@@ -148,7 +149,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	var assetService *asset.Service
 	var objectStore *asset.S3Store
 	if cfg.AssetsEnabled {
-		objectStore, err = asset.NewS3Store(asset.S3Config{Endpoint: cfg.S3Endpoint, Region: cfg.S3Region, Bucket: cfg.S3Bucket, AccessKeyID: cfg.S3AccessKeyID, AccessKeySecret: cfg.S3AccessKeySecret, SessionToken: cfg.S3SessionToken, UsePathStyle: cfg.S3UsePathStyle, BucketEndpoint: cfg.S3BucketEndpoint, UploadMaxTTL: cfg.S3UploadTTL, DownloadMaxTTL: cfg.S3DownloadTTL})
+		objectStore, err = asset.NewS3Store(asset.S3Config{Endpoint: cfg.S3Endpoint, Region: cfg.S3Region, Bucket: cfg.S3Bucket, AccessKeyID: cfg.S3AccessKeyID, AccessKeySecret: cfg.S3AccessKeySecret, SessionToken: cfg.S3SessionToken, UsePathStyle: cfg.S3UsePathStyle, BucketEndpoint: cfg.S3BucketEndpoint, UploadMaxTTL: cfg.S3UploadTTL, DownloadMaxTTL: cfg.S3DownloadTTL, Logger: logger})
 		if err != nil {
 			return fmt.Errorf("初始化 S3 兼容对象存储: %w", err)
 		}
@@ -217,7 +218,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 
 func runParallel(ctx context.Context, shutdown func() error, services ...func(context.Context) error) error {
 	return runParallelWithTimeout(ctx, shutdown, 30*time.Second, func(err error) {
-		fmt.Fprintln(os.Stderr, err)
+		slog.Default().Error("服务硬终止", "error", err)
 		os.Exit(1)
 	}, services...)
 }

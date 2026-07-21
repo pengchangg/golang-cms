@@ -149,7 +149,7 @@ func (h *Handler) adminPreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := h.service.AdminPreview(r.Context(), principal, r.PathValue("asset_id"))
+	result, err := h.service.AdminPreview(r.Context(), principal, r.PathValue("asset_id"), r.Header.Get("If-None-Match"))
 	writePreview(w, r, result, err)
 }
 
@@ -158,7 +158,7 @@ func (h *Handler) referencedPreview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := h.service.ReferencedPreview(r.Context(), principal, r.PathValue("model_id"), r.PathValue("entry_id"), r.PathValue("asset_id"))
+	result, err := h.service.ReferencedPreview(r.Context(), principal, r.PathValue("model_id"), r.PathValue("entry_id"), r.PathValue("asset_id"), r.Header.Get("If-None-Match"))
 	writePreview(w, r, result, err)
 }
 
@@ -241,11 +241,16 @@ func writePreview(w http.ResponseWriter, r *http.Request, value Preview, err err
 		httpx.WriteError(w, r, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", value.ETag)
+	if value.NotModified {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	defer value.Body.Close()
 	w.Header().Set("Content-Type", value.MimeType)
 	w.Header().Set("Content-Disposition", "inline")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "private, no-store")
 	if value.Kind == PreviewImage && value.MimeType == "image/svg+xml" {
 		w.Header().Set("Content-Security-Policy", "sandbox")
 	}

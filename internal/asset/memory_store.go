@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,6 +20,7 @@ type MemoryStore struct {
 	UploadMaxTTL   time.Duration
 	DownloadMaxTTL time.Duration
 	Failure        error
+	GetCalls       atomic.Int64
 }
 
 type memoryObject struct {
@@ -93,6 +95,7 @@ func (s *MemoryStore) Put(_ context.Context, input PutObjectRequest, body io.Rea
 }
 
 func (s *MemoryStore) Get(_ context.Context, key string) (io.ReadCloser, ObjectMetadata, error) {
+	s.GetCalls.Add(1)
 	if s.Failure != nil {
 		return nil, ObjectMetadata{}, s.Failure
 	}

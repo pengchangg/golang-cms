@@ -32,12 +32,14 @@ const (
 )
 
 type Preview struct {
-	Kind     PreviewKind
-	MimeType string
-	Signed   SignedRequest
-	Body     io.ReadCloser
-	Filename string
-	Size     int64
+	Kind        PreviewKind
+	MimeType    string
+	Signed      SignedRequest
+	Body        io.ReadCloser
+	Filename    string
+	Size        int64
+	ETag        string
+	NotModified bool
 }
 
 type TransactionRunner interface {
@@ -261,7 +263,7 @@ func (s *Service) AdminDownload(ctx context.Context, principal identity.Principa
 	return signed, nil
 }
 
-func (s *Service) AdminPreview(ctx context.Context, principal identity.Principal, id string) (Preview, error) {
+func (s *Service) AdminPreview(ctx context.Context, principal identity.Principal, id, ifNoneMatch string) (Preview, error) {
 	if err := requirePermission(principal, permissionView); err != nil {
 		return Preview{}, err
 	}
@@ -269,10 +271,10 @@ func (s *Service) AdminPreview(ctx context.Context, principal identity.Principal
 	if err != nil {
 		return Preview{}, err
 	}
-	return s.preview(ctx, value)
+	return s.preview(ctx, value, ifNoneMatch)
 }
 
-func (s *Service) ReferencedPreview(ctx context.Context, principal identity.Principal, modelID, entryID, id string) (Preview, error) {
+func (s *Service) ReferencedPreview(ctx context.Context, principal identity.Principal, modelID, entryID, id, ifNoneMatch string) (Preview, error) {
 	if err := requireModelPermission(principal, modelID); err != nil {
 		return Preview{}, err
 	}
@@ -280,7 +282,7 @@ func (s *Service) ReferencedPreview(ctx context.Context, principal identity.Prin
 	if err != nil {
 		return Preview{}, err
 	}
-	return s.preview(ctx, value)
+	return s.preview(ctx, value, ifNoneMatch)
 }
 
 func (s *Service) ReferencedDownload(ctx context.Context, principal identity.Principal, meta RequestMeta, modelID, entryID, id string) (SignedRequest, error) {
@@ -305,7 +307,7 @@ func (s *Service) ReferencedDownload(ctx context.Context, principal identity.Pri
 
 func (s *Service) currentDraftAsset(ctx context.Context, modelID, entryID, id string) (Asset, error) {
 	var value Asset
-	err := s.db.QueryRowContext(ctx, `SELECT a.id,a.object_key,a.filename,a.mime_type,a.size,a.status FROM asset_references ar JOIN content_draft_pointers dp ON dp.revision_id=ar.revision_id AND dp.entry_id=ar.entry_id AND dp.model_id=ar.model_id JOIN assets a ON a.id=ar.asset_id WHERE ar.model_id=? AND ar.entry_id=? AND ar.asset_id=? AND a.status IN ('available','archived') LIMIT 1`, modelID, entryID, id).Scan(&value.ID, &value.ObjectKey, &value.Filename, &value.MimeType, &value.Size, &value.Status)
+	err := s.db.QueryRowContext(ctx, `SELECT a.id,a.object_key,a.filename,a.mime_type,a.size,a.sha256,a.status FROM asset_references ar JOIN content_draft_pointers dp ON dp.revision_id=ar.revision_id AND dp.entry_id=ar.entry_id AND dp.model_id=ar.model_id JOIN assets a ON a.id=ar.asset_id WHERE ar.model_id=? AND ar.entry_id=? AND ar.asset_id=? AND a.status IN ('available','archived') LIMIT 1`, modelID, entryID, id).Scan(&value.ID, &value.ObjectKey, &value.Filename, &value.MimeType, &value.Size, &value.SHA256, &value.Status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Asset{}, appError(apperror.KindNotFound, "resource_not_found", "素材不存在或未被当前草稿引用")
 	}
@@ -316,7 +318,7 @@ func (s *Service) currentDraftAsset(ctx context.Context, modelID, entryID, id st
 	return value, nil
 }
 
-func (s *Service) preview(ctx context.Context, value Asset) (Preview, error) {
+func (s *Service) preview(ctx context.Context, value Asset, ifNoneMatch string) (Preview, error) {
 	decorateAsset(&value)
 	if value.Status != StatusAvailable && value.Status != StatusArchived {
 		return Preview{}, appError(apperror.KindConflict, "asset_not_available", "素材不可预览")
@@ -324,7 +326,12 @@ func (s *Service) preview(ctx context.Context, value Asset) (Preview, error) {
 	if value.PreviewKind == PreviewNone {
 		return Preview{}, appError(apperror.KindConflict, "asset_not_previewable", "素材不支持预览")
 	}
-	result := Preview{Kind: value.PreviewKind, MimeType: value.MimeType, Filename: value.Filename, Size: value.Size}
+	etag := `"` + value.SHA256 + `"`
+	result := Preview{Kind: value.PreviewKind, MimeType: value.MimeType, Filename: value.Filename, Size: value.Size, ETag: etag}
+	if matchesPreviewETag(ifNoneMatch, etag) {
+		result.NotModified = true
+		return result, nil
+	}
 	if value.PreviewKind == PreviewText && value.Size > maxTextPreviewSize {
 		return Preview{}, appError(apperror.KindInvalidArgument, "asset_preview_too_large", "文本素材超过预览大小上限")
 	}
@@ -351,6 +358,19 @@ func (s *Service) preview(ctx context.Context, value Asset) (Preview, error) {
 	result.Size = int64(len(data))
 	result.Body = io.NopCloser(bytes.NewReader(data))
 	return result, nil
+}
+
+func matchesPreviewETag(header, etag string) bool {
+	if etag == `""` {
+		return false
+	}
+	for value := range strings.SplitSeq(header, ",") {
+		value = strings.TrimSpace(value)
+		if value == "*" || value == etag || strings.TrimPrefix(value, "W/") == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) Rename(ctx context.Context, principal identity.Principal, id, filename string) (Asset, error) {

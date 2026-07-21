@@ -205,11 +205,22 @@ x-integration-status: integrated
     x-integration-status: integrated
     operationId: previewAdminAsset
     summary: 预览可用或已归档素材
-    parameters: [*sessionCookie]
+    parameters:
+      - *sessionCookie
+      - &ifNoneMatch
+        name: If-None-Match
+        in: header
+        schema: { type: string, minLength: 1 }
     responses:
       "200": &inlinePreview
         description: 可预览素材由应用同源流式返回；文本类最大 1 MiB。
-        headers:
+        headers: &previewCacheHeaders
+          ETag:
+            required: true
+            schema: { type: string, minLength: 1 }
+          Cache-Control:
+            required: true
+            schema: { const: "private, no-cache" }
           Content-Disposition:
             schema: { const: inline }
           X-Content-Type-Options:
@@ -232,6 +243,15 @@ x-integration-status: integrated
           audio/ogg: { schema: { type: string, contentEncoding: binary } }
           audio/wav: { schema: { type: string, contentEncoding: binary } }
           audio/webm: { schema: { type: string, contentEncoding: binary } }
+      "304": &previewNotModified
+        description: 当前会话仍有预览权限且 If-None-Match 与素材 SHA-256 ETag 匹配，无响应体且不读取对象存储正文。
+        headers:
+          ETag:
+            required: true
+            schema: { type: string, minLength: 1 }
+          Cache-Control:
+            required: true
+            schema: { const: "private, no-cache" }
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound
@@ -261,9 +281,10 @@ x-integration-status: integrated
     x-integration-status: integrated
     operationId: previewAdminReferencedAsset
     summary: 预览当前草稿引用的素材
-    parameters: [*sessionCookie]
+    parameters: [*sessionCookie, *ifNoneMatch]
     responses:
       "200": *inlinePreview
+      "304": *previewNotModified
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound
