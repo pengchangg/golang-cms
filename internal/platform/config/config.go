@@ -12,55 +12,63 @@ import (
 )
 
 type Config struct {
-	ListenAddr         string
-	MySQLDSN           string
-	WebDistDir         string
-	AllowInsecureMySQL bool
-	BaseURL            string
-	SessionSecret      string
-	OIDCIssuerURL      string
-	OIDCClientID       string
-	OIDCClientSecret   string
-	OIDCRedirectURL    string
-	LocalLoginEnabled  bool
-	OIDCEnabled        bool
-	AssetsEnabled      bool
-	S3Endpoint         string
-	S3Region           string
-	S3Bucket           string
-	S3AccessKeyID      string
-	S3AccessKeySecret  string
-	S3SessionToken     string
-	S3UsePathStyle     bool
-	S3BucketEndpoint   bool
-	S3UploadTTL        time.Duration
-	S3DownloadTTL      time.Duration
-	AssetMimeTypes     []string
-	AssetMaxSize       int64
+	ListenAddr           string
+	MySQLDSN             string
+	WebDistDir           string
+	AllowInsecureMySQL   bool
+	BaseURL              string
+	SessionSecret        string
+	LocalLoginEnabled    bool
+	Environment          string
+	SMSProvider          string
+	SMSFixedCode         string
+	TencentSecretID      string
+	TencentSecretKey     string
+	TencentSMSRegion     string
+	TencentSMSSDKAppID   string
+	TencentSMSSignName   string
+	TencentSMSTemplateID string
+	AssetsEnabled        bool
+	S3Endpoint           string
+	S3Region             string
+	S3Bucket             string
+	S3AccessKeyID        string
+	S3AccessKeySecret    string
+	S3SessionToken       string
+	S3UsePathStyle       bool
+	S3BucketEndpoint     bool
+	S3UploadTTL          time.Duration
+	S3DownloadTTL        time.Duration
+	AssetMimeTypes       []string
+	AssetMaxSize         int64
 }
 
 func Load(command string) (Config, error) {
 	cfg := Config{
-		ListenAddr:        envOrDefault("APP_LISTEN_ADDR", ":8080"),
-		MySQLDSN:          os.Getenv("MYSQL_DSN"),
-		WebDistDir:        envOrDefault("WEB_DIST_DIR", "web/dist"),
-		BaseURL:           os.Getenv("APP_BASE_URL"),
-		SessionSecret:     os.Getenv("APP_SESSION_SECRET"),
-		OIDCIssuerURL:     os.Getenv("OIDC_ISSUER_URL"),
-		OIDCClientID:      os.Getenv("OIDC_CLIENT_ID"),
-		OIDCClientSecret:  os.Getenv("OIDC_CLIENT_SECRET"),
-		OIDCRedirectURL:   os.Getenv("OIDC_REDIRECT_URL"),
-		LocalLoginEnabled: false,
-		OIDCEnabled:       true,
-		AssetsEnabled:     true,
-		S3Endpoint:        os.Getenv("S3_ENDPOINT"),
-		S3Region:          os.Getenv("S3_REGION"),
-		S3Bucket:          os.Getenv("S3_BUCKET"),
-		S3AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
-		S3AccessKeySecret: os.Getenv("S3_ACCESS_KEY_SECRET"),
-		S3SessionToken:    os.Getenv("S3_SESSION_TOKEN"),
-		S3UploadTTL:       15 * time.Minute,
-		S3DownloadTTL:     5 * time.Minute,
+		ListenAddr:           envOrDefault("APP_LISTEN_ADDR", ":8080"),
+		MySQLDSN:             os.Getenv("MYSQL_DSN"),
+		WebDistDir:           envOrDefault("WEB_DIST_DIR", "web/dist"),
+		BaseURL:              os.Getenv("APP_BASE_URL"),
+		SessionSecret:        os.Getenv("APP_SESSION_SECRET"),
+		LocalLoginEnabled:    false,
+		Environment:          envOrDefault("APP_ENV", "production"),
+		SMSProvider:          envOrDefault("SMS_PROVIDER", "tencent"),
+		SMSFixedCode:         os.Getenv("DEV_SMS_FIXED_CODE"),
+		TencentSecretID:      os.Getenv("TENCENTCLOUD_SECRET_ID"),
+		TencentSecretKey:     os.Getenv("TENCENTCLOUD_SECRET_KEY"),
+		TencentSMSRegion:     os.Getenv("TENCENT_SMS_REGION"),
+		TencentSMSSDKAppID:   os.Getenv("TENCENT_SMS_SDK_APP_ID"),
+		TencentSMSSignName:   os.Getenv("TENCENT_SMS_SIGN_NAME"),
+		TencentSMSTemplateID: os.Getenv("TENCENT_SMS_TEMPLATE_ID"),
+		AssetsEnabled:        true,
+		S3Endpoint:           os.Getenv("S3_ENDPOINT"),
+		S3Region:             os.Getenv("S3_REGION"),
+		S3Bucket:             os.Getenv("S3_BUCKET"),
+		S3AccessKeyID:        os.Getenv("S3_ACCESS_KEY_ID"),
+		S3AccessKeySecret:    os.Getenv("S3_ACCESS_KEY_SECRET"),
+		S3SessionToken:       os.Getenv("S3_SESSION_TOKEN"),
+		S3UploadTTL:          15 * time.Minute,
+		S3DownloadTTL:        5 * time.Minute,
 	}
 	if err := parseBoolEnv("APP_ASSETS_ENABLED", &cfg.AssetsEnabled); err != nil {
 		return Config{}, err
@@ -71,13 +79,6 @@ func Load(command string) (Config, error) {
 			return Config{}, fmt.Errorf("APP_LOCAL_LOGIN_ENABLED 格式不合法: %w", err)
 		}
 		cfg.LocalLoginEnabled = enabled
-	}
-	if value := os.Getenv("APP_OIDC_ENABLED"); value != "" {
-		enabled, err := strconv.ParseBool(value)
-		if err != nil {
-			return Config{}, fmt.Errorf("APP_OIDC_ENABLED 格式不合法: %w", err)
-		}
-		cfg.OIDCEnabled = enabled
 	}
 	if value := os.Getenv("MYSQL_ALLOW_INSECURE"); value != "" {
 		allow, err := strconv.ParseBool(value)
@@ -188,13 +189,27 @@ func validateSecurityConfig(cfg Config) error {
 	required := []struct{ name, value string }{
 		{"APP_BASE_URL", cfg.BaseURL}, {"APP_SESSION_SECRET", cfg.SessionSecret},
 	}
-	if cfg.OIDCEnabled {
+	if cfg.Environment != "production" && cfg.Environment != "development" {
+		return errors.New("APP_ENV 必须是 production 或 development")
+	}
+	if cfg.SMSProvider == "fixed" {
+		if cfg.Environment != "development" {
+			return errors.New("SMS_PROVIDER=fixed 仅允许 APP_ENV=development")
+		}
+		if len(cfg.SMSFixedCode) != 6 || strings.Trim(cfg.SMSFixedCode, "0123456789") != "" {
+			return errors.New("DEV_SMS_FIXED_CODE 必须为 6 位")
+		}
+	} else if cfg.SMSProvider == "tencent" {
 		required = append(required,
-			struct{ name, value string }{"OIDC_ISSUER_URL", cfg.OIDCIssuerURL},
-			struct{ name, value string }{"OIDC_CLIENT_ID", cfg.OIDCClientID},
-			struct{ name, value string }{"OIDC_CLIENT_SECRET", cfg.OIDCClientSecret},
-			struct{ name, value string }{"OIDC_REDIRECT_URL", cfg.OIDCRedirectURL},
+			struct{ name, value string }{"TENCENTCLOUD_SECRET_ID", cfg.TencentSecretID},
+			struct{ name, value string }{"TENCENTCLOUD_SECRET_KEY", cfg.TencentSecretKey},
+			struct{ name, value string }{"TENCENT_SMS_REGION", cfg.TencentSMSRegion},
+			struct{ name, value string }{"TENCENT_SMS_SDK_APP_ID", cfg.TencentSMSSDKAppID},
+			struct{ name, value string }{"TENCENT_SMS_SIGN_NAME", cfg.TencentSMSSignName},
+			struct{ name, value string }{"TENCENT_SMS_TEMPLATE_ID", cfg.TencentSMSTemplateID},
 		)
+	} else {
+		return errors.New("SMS_PROVIDER 必须是 tencent 或 fixed")
 	}
 	for _, item := range required {
 		if item.value == "" {
@@ -213,23 +228,6 @@ func validateSecurityConfig(cfg Config) error {
 	}
 	if base.RawQuery != "" || base.Fragment != "" || (base.Path != "" && base.Path != "/") {
 		return errors.New("APP_BASE_URL 只能包含 origin")
-	}
-	if cfg.OIDCEnabled {
-		issuer, err := parseHTTPSURL("OIDC_ISSUER_URL", cfg.OIDCIssuerURL)
-		if err != nil {
-			return err
-		}
-		if issuer.Fragment != "" {
-			return errors.New("OIDC_ISSUER_URL 不能包含 fragment")
-		}
-		redirect, err := parseHTTPURL("OIDC_REDIRECT_URL", cfg.OIDCRedirectURL)
-		if err != nil {
-			return err
-		}
-		expected := strings.TrimSuffix(cfg.BaseURL, "/") + "/api/admin/v1/auth/oidc/callback"
-		if redirect.String() != expected {
-			return fmt.Errorf("OIDC_REDIRECT_URL 必须为 %s", expected)
-		}
 	}
 	return nil
 }

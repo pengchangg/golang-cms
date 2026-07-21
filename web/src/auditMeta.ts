@@ -3,13 +3,16 @@ import { hasModelPermission, hasSystemPermission } from './auth/permissions'
 import { ASSETS_ENABLED } from './config'
 
 export const auditActionLabels: Record<string, string> = {
-  auth_oidc_login_succeeded: '企业 SSO 登录成功',
-  auth_oidc_login_failed: '企业 SSO 登录失败',
+  auth_sms_challenge_created: '发送短信验证码',
+  auth_sms_login_succeeded: '手机号登录成功',
+  auth_sms_login_failed: '手机号登录失败',
   auth_local_login_succeeded: '本地应急登录成功',
   auth_local_login_failed: '本地应急登录失败',
   auth_logout_succeeded: '退出登录',
   auth_local_password_reset: '重置应急管理员密码',
   user_status_updated: '更新用户状态',
+  user_created: '创建手机号账户',
+  user_phone_updated: '更新用户手机号',
   user_roles_replaced: '调整用户角色',
   role_created: '创建角色',
   role_updated: '更新角色',

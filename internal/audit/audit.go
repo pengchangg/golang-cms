@@ -102,10 +102,13 @@ func containsSensitiveKey(value any) bool {
 	case map[string]any:
 		for key, child := range typed {
 			normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
-			for _, sensitive := range []string{"password", "secret", "token", "session", "pkce", "nonce", "authorization", "credential", "signed_url"} {
+			for _, sensitive := range []string{"password", "secret", "token", "session", "pkce", "nonce", "authorization", "credential", "signed_url", "otp", "captcha", "slider"} {
 				if strings.Contains(normalized, sensitive) {
 					return true
 				}
+			}
+			if strings.Contains(normalized, "phone") && !strings.Contains(normalized, "masked") {
+				return true
 			}
 			if containsSensitiveKey(child) {
 				return true

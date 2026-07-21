@@ -52,10 +52,25 @@ func TestSQLWriterRequiresUserDisplayNameSnapshot(t *testing.T) {
 }
 
 func TestSQLWriterRejectsSensitiveChanges(t *testing.T) {
+	for _, changes := range []map[string]any{
+		{"password_hash": "secret"},
+		{"phone_e164": "+8613800138000"},
+		{"otp_code": "123456"},
+		{"captcha_x": 120},
+	} {
+		q := &captureQuerier{}
+		err := (SQLWriter{}).Append(context.Background(), q, Event{ID: "evt_1", OccurredAt: time.Now(), RequestID: "req", ActorType: "system", Action: "auth_local_login_failed", ResourceType: "authentication", Result: "failure", IP: "127.0.0.1", Changes: changes, FailureCode: pointer("invalid_credentials")})
+		if err == nil {
+			t.Fatalf("敏感审计字段被接受: %v", changes)
+		}
+	}
+}
+
+func TestSQLWriterAllowsMaskedPhone(t *testing.T) {
 	q := &captureQuerier{}
-	err := (SQLWriter{}).Append(context.Background(), q, Event{ID: "evt_1", OccurredAt: time.Now(), RequestID: "req", ActorType: "system", Action: "auth_local_login_failed", ResourceType: "authentication", Result: "failure", IP: "127.0.0.1", Changes: map[string]any{"password_hash": "secret"}, FailureCode: pointer("invalid_credentials")})
-	if err == nil {
-		t.Fatal("敏感审计字段被接受")
+	err := (SQLWriter{}).Append(context.Background(), q, Event{ID: "evt_1", OccurredAt: time.Now(), RequestID: "req", ActorType: "system", Action: "user_created", ResourceType: "user", Result: "success", IP: "127.0.0.1", Changes: map[string]any{"phone_masked": "138****8000"}})
+	if err != nil {
+		t.Fatalf("脱敏手机号被拒绝: %v", err)
 	}
 }
 

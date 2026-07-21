@@ -8,8 +8,8 @@ import (
 type AuthMethod string
 
 const (
-	AuthMethodOIDC  AuthMethod = "oidc"
 	AuthMethodLocal AuthMethod = "local"
+	AuthMethodSMS   AuthMethod = "sms"
 )
 
 type ModelPermissions struct {

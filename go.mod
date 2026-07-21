@@ -8,10 +8,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.2
 	github.com/aws/smithy-go v1.27.3
-	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/go-sql-driver/mysql v1.9.3
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.112
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sms v1.3.93
+	github.com/wenlng/go-captcha/v2 v2.0.5
 	golang.org/x/crypto v0.47.0
-	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.39.0
 )
 
@@ -30,6 +31,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.32.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.37.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.44.1 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
+	golang.org/x/image v0.16.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )

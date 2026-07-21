@@ -131,7 +131,9 @@ func setValidServeEnvironment(t *testing.T) {
 	t.Setenv("MYSQL_DSN", "cms:cms@tcp(localhost:3306)/cms")
 	t.Setenv("APP_BASE_URL", "https://cms.example.com")
 	t.Setenv("APP_SESSION_SECRET", "01234567890123456789012345678901")
-	t.Setenv("APP_OIDC_ENABLED", "false")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("SMS_PROVIDER", "fixed")
+	t.Setenv("DEV_SMS_FIXED_CODE", "123456")
 }
 
 func setValidAssetsEnvironment(t *testing.T) {
@@ -167,10 +169,14 @@ func TestLoadServeValidatesAuthenticationConfiguration(t *testing.T) {
 	t.Setenv("MYSQL_DSN", "cms:cms@tcp(localhost:3306)/cms")
 	t.Setenv("APP_BASE_URL", "https://cms.example.com")
 	t.Setenv("APP_SESSION_SECRET", "01234567890123456789012345678901")
-	t.Setenv("OIDC_ISSUER_URL", "https://id.example.com")
-	t.Setenv("OIDC_CLIENT_ID", "cms")
-	t.Setenv("OIDC_CLIENT_SECRET", "secret")
-	t.Setenv("OIDC_REDIRECT_URL", "https://cms.example.com/api/admin/v1/auth/oidc/callback")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("SMS_PROVIDER", "tencent")
+	t.Setenv("TENCENTCLOUD_SECRET_ID", "id")
+	t.Setenv("TENCENTCLOUD_SECRET_KEY", "secret")
+	t.Setenv("TENCENT_SMS_REGION", "ap-guangzhou")
+	t.Setenv("TENCENT_SMS_SDK_APP_ID", "1400000000")
+	t.Setenv("TENCENT_SMS_SIGN_NAME", "测试签名")
+	t.Setenv("TENCENT_SMS_TEMPLATE_ID", "123456")
 	if _, err := Load("serve"); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -194,15 +200,19 @@ func TestLoadServeRejectsRemoteHTTPBaseURL(t *testing.T) {
 	}
 }
 
-func TestLoadServeRejectsMismatchedOIDCRedirect(t *testing.T) {
+func TestLoadServeRejectsFixedSMSOutsideDevelopment(t *testing.T) {
+	setValidServeEnvironment(t)
 	t.Setenv("APP_ASSETS_ENABLED", "false")
-	t.Setenv("MYSQL_DSN", "cms:cms@tcp(localhost:3306)/cms")
-	t.Setenv("APP_BASE_URL", "https://cms.example.com")
-	t.Setenv("APP_SESSION_SECRET", "01234567890123456789012345678901")
-	t.Setenv("OIDC_ISSUER_URL", "https://id.example.com")
-	t.Setenv("OIDC_CLIENT_ID", "cms")
-	t.Setenv("OIDC_CLIENT_SECRET", "secret")
-	t.Setenv("OIDC_REDIRECT_URL", "https://evil.example.com/callback")
+	t.Setenv("APP_ENV", "production")
+	if _, err := Load("serve"); err == nil {
+		t.Fatal("Load() expected an error")
+	}
+}
+
+func TestLoadServeRejectsUnknownSMSProvider(t *testing.T) {
+	setValidServeEnvironment(t)
+	t.Setenv("APP_ASSETS_ENABLED", "false")
+	t.Setenv("SMS_PROVIDER", "console")
 	if _, err := Load("serve"); err == nil {
 		t.Fatal("Load() expected an error")
 	}

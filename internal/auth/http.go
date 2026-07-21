@@ -76,56 +76,76 @@ func NewModule(service *Service, baseURL string, localLoginEnabled bool) (*Modul
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET "+routePrefix+"/oidc/start", m.startOIDC)
-	mux.HandleFunc("GET "+routePrefix+"/oidc/callback", m.completeOIDC)
+	mux.HandleFunc("POST "+routePrefix+"/captcha/challenges", m.createCaptcha)
+	mux.HandleFunc("POST "+routePrefix+"/sms/challenges", m.createSMSChallenge)
+	mux.HandleFunc("POST "+routePrefix+"/sms/challenges/{challenge_id}/verify", m.verifySMSChallenge)
 	mux.HandleFunc("POST "+routePrefix+"/local/login", m.localLogin)
 	mux.HandleFunc("GET "+routePrefix+"/session", m.session)
 	mux.HandleFunc("POST "+routePrefix+"/logout", m.logout)
 }
 
-func (m *Module) startOIDC(w http.ResponseWriter, r *http.Request) {
-	returnTo := r.URL.Query().Get("return_to")
-	location, binding, err := m.service.StartOIDC(r.Context(), returnTo, requestMeta(r))
+func (m *Module) createCaptcha(w http.ResponseWriter, r *http.Request) {
+	if err := m.checkOrigin(r); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	binding := ""
+	if cookie, err := r.Cookie(CaptchaBindingCookie); err == nil {
+		binding = cookie.Value
+	}
+	response, binding, err := m.service.CreateCaptcha(r.Context(), binding, requestMeta(r))
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
-	m.setOIDCCookie(w, binding)
-	http.Redirect(w, r, location, http.StatusFound)
+	m.setCaptchaBindingCookie(w, binding)
+	writeJSON(w, http.StatusCreated, response)
 }
 
-func (m *Module) completeOIDC(w http.ResponseWriter, r *http.Request) {
-	binding := ""
-	if cookie, err := r.Cookie(OIDCCookieName); err == nil {
-		binding = cookie.Value
-	}
-	m.clearOIDCCookie(w)
-	query := r.URL.Query()
-	for key, values := range query {
-		if key != "code" && key != "state" && key != "error" && key != "error_description" {
-			httpx.WriteError(w, r, appError(apperror.KindInvalidArgument, "invalid_oidc_callback", "OIDC 回调参数无效"))
-			return
-		}
-		if len(values) != 1 {
-			httpx.WriteError(w, r, appError(apperror.KindInvalidArgument, "invalid_oidc_callback", "OIDC 回调参数无效"))
-			return
-		}
-	}
-	if query.Get("error") != "" {
-		httpx.WriteError(w, r, m.service.RejectOIDCCallback(r.Context(), query.Get("state"), binding, requestMeta(r)))
+func (m *Module) createSMSChallenge(w http.ResponseWriter, r *http.Request) {
+	if err := m.checkOrigin(r); err != nil {
+		httpx.WriteError(w, r, err)
 		return
 	}
-	result, returnTo, err := m.service.CompleteOIDC(r.Context(), query.Get("code"), query.Get("state"), binding, requestMeta(r))
+	var body struct {
+		Phone              string `json:"phone"`
+		CaptchaChallengeID string `json:"captcha_challenge_id"`
+		CaptchaX           int    `json:"captcha_x"`
+		CaptchaY           int    `json:"captcha_y"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	binding := captchaBinding(r)
+	response, err := m.service.CreateSMSChallenge(r.Context(), body.Phone, body.CaptchaChallengeID, binding, body.CaptchaX, body.CaptchaY, requestMeta(r))
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, response)
+}
+
+func (m *Module) verifySMSChallenge(w http.ResponseWriter, r *http.Request) {
+	if err := m.checkOrigin(r); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	result, err := m.service.VerifySMSChallenge(r.Context(), r.PathValue("challenge_id"), body.Code, captchaBinding(r), requestMeta(r))
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
 	m.setCookie(w, result.Raw, result.Response.ExpiresAt)
-	if returnTo == "" {
-		returnTo = "/"
-	}
-	w.Header().Set("Location", returnTo)
-	w.WriteHeader(http.StatusSeeOther)
+	m.clearCaptchaBindingCookie(w)
+	writeJSON(w, http.StatusOK, result.Response)
 }
 
 func (m *Module) localLogin(w http.ResponseWriter, r *http.Request) {
@@ -244,12 +264,32 @@ func (m *Module) clearCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: CookieName, Path: "/api/admin/v1", HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0).UTC()})
 }
 
-func (m *Module) setOIDCCookie(w http.ResponseWriter, binding string) {
-	http.SetCookie(w, &http.Cookie{Name: OIDCCookieName, Value: binding, Path: routePrefix + "/oidc/callback", HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+func (m *Module) setCaptchaBindingCookie(w http.ResponseWriter, binding string) {
+	http.SetCookie(w, &http.Cookie{Name: CaptchaBindingCookie, Value: binding, Path: routePrefix, HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteStrictMode, MaxAge: 600})
 }
 
-func (m *Module) clearOIDCCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: OIDCCookieName, Path: routePrefix + "/oidc/callback", HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteLaxMode, MaxAge: -1, Expires: time.Unix(1, 0).UTC()})
+func (m *Module) clearCaptchaBindingCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: CaptchaBindingCookie, Path: routePrefix, HttpOnly: true, Secure: m.secureCookies, SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0).UTC()})
+}
+
+func captchaBinding(r *http.Request) string {
+	cookie, err := r.Cookie(CaptchaBindingCookie)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return &apperror.Error{Kind: apperror.KindInvalidArgument, Code: "validation_failed", Message: "请求数据校验失败"}
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return &apperror.Error{Kind: apperror.KindInvalidArgument, Code: "validation_failed", Message: "请求数据校验失败"}
+	}
+	return nil
 }
 
 func sessionCookie(r *http.Request) (string, error) {

@@ -7,7 +7,7 @@ import { authStore } from './auth/store'
 import type { SessionResponse } from './api/types'
 
 const session: SessionResponse = {
-  principal: { user_id: 'usr_accessible', display_name: '林岚', email: 'linlan@example.com', auth_method: 'oidc', system_permissions: [], model_permissions: [] },
+  principal: { user_id: 'usr_accessible', display_name: '林岚', email: 'linlan@example.com', auth_method: 'sms', system_permissions: [], model_permissions: [] },
   content_models: [],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-18T10:00:00Z',
@@ -23,13 +23,16 @@ afterEach(() => {
 
 describe('认证界面', () => {
   it('未认证时展示可访问的登录表单和明确标签', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ error: { code: 'session_invalid', message: '会话失效', request_id: 'req_login', details: [] } }, { status: 401 })))
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: { code: 'session_invalid', message: '会话失效', request_id: 'req_login', details: [] } }, { status: 401 }))
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'cap_1', background_image: '/captcha-bg', tile_image: '/captcha-piece', tile_x: 80, tile_y: 72, expires_at: '2026-07-18T09:02:00Z' }))
+    vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: '回到内容工作的现场' })).toBeInTheDocument()
-    expect(screen.getByLabelText('管理员账号')).toHaveAttribute('autocomplete', 'username')
-    expect(screen.getByLabelText('密码')).toHaveAttribute('autocomplete', 'current-password')
-    expect(screen.getByRole('link', { name: '使用企业 SSO 登录' })).toBeVisible()
+    expect(screen.getByLabelText('手机号')).toHaveAttribute('autocomplete', 'tel-national')
+    expect(await screen.findByLabelText('拖动滑块，使拼图对齐缺口')).toHaveAttribute('type', 'range')
+    expect(screen.getByText('本地应急登录')).toBeVisible()
   })
 
   it('认证后呈现当前用户、跳转链接和响应式导航按钮', async () => {
@@ -75,33 +78,50 @@ describe('认证界面', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('本地登录后返回完整的 pathname、search 和 hash', async () => {
+  it('短信登录可用键盘调整拼图并返回完整的 pathname、search 和 hash', async () => {
     window.history.replaceState({}, '', '/?tab=drafts#editor')
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ error: { code: 'session_invalid', message: '会话失效', request_id: 'req_login', details: [] } }, { status: 401 }))
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'cap_1', background_image: '/captcha-bg', tile_image: '/captcha-piece', tile_x: 80, tile_y: 72, expires_at: '2026-07-18T09:02:00Z' }))
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'sms_1', phone_masked: '138****8000', expires_at: '2026-07-18T09:05:00Z', retry_after_seconds: 60 }))
       .mockResolvedValueOnce(Response.json(session))
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    await userEvent.type(await screen.findByLabelText('管理员账号'), 'admin')
-    expect(screen.getByRole('link', { name: '使用企业 SSO 登录' })).toHaveAttribute(
-      'href',
-      '/api/admin/v1/auth/oidc/start?return_to=%2F%3Ftab%3Ddrafts%23editor',
-    )
-    await userEvent.type(screen.getByLabelText('密码'), 'secret')
-    await userEvent.click(screen.getByRole('button', { name: '本地应急登录' }))
+    await userEvent.type(await screen.findByLabelText('手机号'), '13800138000')
+    const slider = await screen.findByLabelText('拖动滑块，使拼图对齐缺口')
+    slider.focus()
+    await userEvent.keyboard('{ArrowRight}{ArrowRight}')
+    await userEvent.click(screen.getByRole('button', { name: '发送验证码' }))
+    expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ phone: '13800138000', captcha_challenge_id: 'cap_1', captcha_x: 2, captcha_y: 72 }) }))
+    expect(screen.getByText(/138\*\*\*\*8000/)).toBeVisible()
+    await userEvent.type(await screen.findByLabelText('短信验证码'), '123456')
+    await userEvent.click(screen.getByRole('button', { name: /^登\s*录$/ }))
 
     await waitFor(() => expect(window.location.pathname + window.location.search + window.location.hash).toBe('/?tab=drafts#editor'))
   })
 
-  it('旧 OIDC 回调只解释失败且不展示外部错误描述', async () => {
-    window.history.replaceState({}, '', '/auth/oidc/callback?error=access_denied&error_description=敏感内部信息')
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ error: { code: 'session_invalid', message: '会话失效', request_id: 'req_login', details: [] } }, { status: 401 })))
+  it('短信验证码只接受 6 位数字且重新发送返回新拼图流程', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: { code: 'session_invalid', message: '会话失效', request_id: 'req_login', details: [] } }, { status: 401 }))
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'cap_1', background_image: '/captcha-bg', tile_image: '/captcha-piece', tile_x: 80, tile_y: 72, expires_at: '2026-07-18T09:02:00Z' }))
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'sms_1', phone_masked: '138****8000', expires_at: '2026-07-18T09:05:00Z', retry_after_seconds: 0 }))
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'cap_2', background_image: '/captcha-bg-2', tile_image: '/captcha-piece-2', tile_x: 120, tile_y: 84, expires_at: '2026-07-18T09:04:00Z' }))
+    vi.stubGlobal('fetch', fetchMock)
     render(<App />)
 
-    expect(await screen.findByText('企业身份登录未完成')).toBeInTheDocument()
-    expect(screen.queryByText('敏感内部信息')).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('link', { name: '返回登录' }))
-    expect(await screen.findByText('企业身份登录未完成，请重新尝试或使用本地应急登录。')).toBeInTheDocument()
+    await userEvent.type(await screen.findByLabelText('手机号'), '13800138000')
+    await userEvent.click(screen.getByRole('button', { name: '发送验证码' }))
+    const code = await screen.findByLabelText('短信验证码')
+    expect(code).toHaveAttribute('maxlength', '6')
+    await userEvent.type(code, '12345a')
+    await userEvent.click(screen.getByRole('button', { name: /^登\s*录$/ }))
+    expect(await screen.findByText('请输入 6 位数字验证码')).toBeVisible()
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+
+    await userEvent.click(screen.getByRole('button', { name: '重新发送验证码' }))
+    expect(await screen.findByLabelText('拖动滑块，使拼图对齐缺口')).toBeVisible()
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
+
 })

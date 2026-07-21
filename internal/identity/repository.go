@@ -12,9 +12,12 @@ import (
 
 	"cms/internal/platform/apperror"
 	"cms/internal/platform/database"
+	mysql "github.com/go-sql-driver/mysql"
 )
 
 type Repository struct{}
+
+var errPhoneConflict = errors.New("phone conflict")
 
 type userCursor struct {
 	UpdatedAt time.Time   `json:"updated_at"`
@@ -35,15 +38,19 @@ func (Repository) List(ctx context.Context, q database.Querier, filter UserFilte
 		if *filter.AuthMethod == AuthMethodLocal {
 			where = append(where, "EXISTS (SELECT 1 FROM local_credentials lc2 WHERE lc2.user_id = u.id)")
 		} else {
-			where = append(where, "EXISTS (SELECT 1 FROM oidc_identities oi2 WHERE oi2.user_id = u.id)")
+			where = append(where, "EXISTS (SELECT 1 FROM sms_credentials sc2 WHERE sc2.user_id = u.id)")
 		}
 	}
 	if filter.Query != "" {
-		where = append(where, "(LOWER(u.display_name) LIKE ? ESCAPE '=' OR LOWER(COALESCE(u.email, '')) LIKE ? ESCAPE '=')")
+		where = append(where, "(LOWER(u.display_name) LIKE ? ESCAPE '=' OR LOWER(COALESCE(u.email, '')) LIKE ? ESCAPE '=' OR EXISTS (SELECT 1 FROM sms_credentials sc3 WHERE sc3.user_id=u.id AND sc3.phone_e164 LIKE ? ESCAPE '='))")
 		value := strings.ToLower(filter.Query)
 		value = strings.NewReplacer("=", "==", "%", "=%", "_", "=_").Replace(value)
 		value = "%" + value + "%"
-		args = append(args, value, value)
+		phoneValue := value
+		if normalized, _, err := normalizeMainlandPhone(filter.Query); err == nil {
+			phoneValue = "%" + normalized + "%"
+		}
+		args = append(args, value, value, phoneValue)
 	}
 	if filter.Cursor != "" {
 		cursor, err := decodeUserCursor(filter.Cursor)
@@ -57,7 +64,8 @@ func (Repository) List(ctx context.Context, q database.Querier, filter UserFilte
 	rows, err := q.QueryContext(ctx, `SELECT u.id, u.display_name, u.email, u.enabled, u.created_at, u.updated_at,
 		EXISTS(SELECT 1 FROM local_credentials lc WHERE lc.user_id=u.id),
 		EXISTS(SELECT 1 FROM local_credentials lc WHERE lc.user_id=u.id AND lc.emergency_admin=TRUE),
-		EXISTS(SELECT 1 FROM oidc_identities oi WHERE oi.user_id=u.id)
+		EXISTS(SELECT 1 FROM sms_credentials sc WHERE sc.user_id=u.id),
+		(SELECT sc.phone_masked FROM sms_credentials sc WHERE sc.user_id=u.id)
 		FROM users u WHERE `+strings.Join(where, " AND ")+` ORDER BY u.updated_at DESC, u.id DESC LIMIT ?`, args...)
 	if err != nil {
 		return UserList{}, err
@@ -66,9 +74,13 @@ func (Repository) List(ctx context.Context, q database.Querier, filter UserFilte
 	items := make([]UserSummary, 0, filter.Limit+1)
 	for rows.Next() {
 		var user UserSummary
-		var enabled, local, oidc bool
-		if err := rows.Scan(&user.ID, &user.DisplayName, &user.Email, &enabled, &user.CreatedAt, &user.UpdatedAt, &local, &user.EmergencyAdmin, &oidc); err != nil {
+		var enabled, local, sms bool
+		var phoneMasked sql.NullString
+		if err := rows.Scan(&user.ID, &user.DisplayName, &user.Email, &enabled, &user.CreatedAt, &user.UpdatedAt, &local, &user.EmergencyAdmin, &sms, &phoneMasked); err != nil {
 			return UserList{}, err
+		}
+		if phoneMasked.Valid {
+			user.PhoneMasked = &phoneMasked.String
 		}
 		user.Status = UserDisabled
 		if enabled {
@@ -78,8 +90,8 @@ func (Repository) List(ctx context.Context, q database.Querier, filter UserFilte
 		if local {
 			user.AuthMethods = append(user.AuthMethods, AuthMethodLocal)
 		}
-		if oidc {
-			user.AuthMethods = append(user.AuthMethods, AuthMethodOIDC)
+		if sms {
+			user.AuthMethods = append(user.AuthMethods, AuthMethodSMS)
 		}
 		items = append(items, user)
 	}
@@ -103,13 +115,16 @@ func (r Repository) Get(ctx context.Context, q database.Querier, id string, lock
 	query := `SELECT u.id, u.display_name, u.email, u.enabled, u.created_at, u.updated_at,
 		EXISTS(SELECT 1 FROM local_credentials lc WHERE lc.user_id=u.id),
 		EXISTS(SELECT 1 FROM local_credentials lc WHERE lc.user_id=u.id AND lc.emergency_admin=TRUE),
-		EXISTS(SELECT 1 FROM oidc_identities oi WHERE oi.user_id=u.id) FROM users u WHERE u.id=?`
+		EXISTS(SELECT 1 FROM sms_credentials sc WHERE sc.user_id=u.id),
+		(SELECT sc.phone_e164 FROM sms_credentials sc WHERE sc.user_id=u.id),
+		(SELECT sc.phone_masked FROM sms_credentials sc WHERE sc.user_id=u.id) FROM users u WHERE u.id=?`
 	if lock {
 		query += " FOR UPDATE"
 	}
 	var user User
-	var enabled, local, oidc bool
-	err := q.QueryRowContext(ctx, query, id).Scan(&user.ID, &user.DisplayName, &user.Email, &enabled, &user.CreatedAt, &user.UpdatedAt, &local, &user.EmergencyAdmin, &oidc)
+	var enabled, local, sms bool
+	var phone, phoneMasked sql.NullString
+	err := q.QueryRowContext(ctx, query, id).Scan(&user.ID, &user.DisplayName, &user.Email, &enabled, &user.CreatedAt, &user.UpdatedAt, &local, &user.EmergencyAdmin, &sms, &phone, &phoneMasked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, notFound("用户不存在")
 	}
@@ -120,12 +135,18 @@ func (r Repository) Get(ctx context.Context, q database.Querier, id string, lock
 	if enabled {
 		user.Status = UserEnabled
 	}
+	if phone.Valid {
+		user.Phone = &phone.String
+	}
+	if phoneMasked.Valid {
+		user.PhoneMasked = &phoneMasked.String
+	}
 	user.AuthMethods = []AuthMethod{}
 	if local {
 		user.AuthMethods = append(user.AuthMethods, AuthMethodLocal)
 	}
-	if oidc {
-		user.AuthMethods = append(user.AuthMethods, AuthMethodOIDC)
+	if sms {
+		user.AuthMethods = append(user.AuthMethods, AuthMethodSMS)
 	}
 	rows, err := q.QueryContext(ctx, "SELECT role_id FROM user_roles WHERE user_id=? ORDER BY role_id", id)
 	if err != nil {
@@ -141,6 +162,51 @@ func (r Repository) Get(ctx context.Context, q database.Querier, id string, lock
 		user.RoleIDs = append(user.RoleIDs, roleID)
 	}
 	return user, rows.Err()
+}
+
+func (Repository) LockRoleIDs(ctx context.Context, q database.Querier, ids []string) (int, error) {
+	count := 0
+	for _, id := range ids {
+		var found string
+		err := q.QueryRowContext(ctx, "SELECT id FROM roles WHERE id=? FOR UPDATE", id).Scan(&found)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+func (Repository) CreateSMSUser(ctx context.Context, q database.Querier, user User, phoneE164, phoneMasked string, now time.Time) error {
+	if _, err := q.ExecContext(ctx, "INSERT INTO users (id, display_name, email, enabled, created_at, updated_at) VALUES (?, ?, NULL, TRUE, ?, ?)", user.ID, user.DisplayName, now, now); err != nil {
+		return err
+	}
+	if _, err := q.ExecContext(ctx, "INSERT INTO sms_credentials (user_id, phone_e164, phone_masked, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", user.ID, phoneE164, phoneMasked, now, now); err != nil {
+		if duplicateEntry(err) {
+			return errPhoneConflict
+		}
+		return err
+	}
+	for _, roleID := range user.RoleIDs {
+		if _, err := q.ExecContext(ctx, "INSERT INTO user_roles (user_id, role_id, created_at) VALUES (?, ?, ?)", user.ID, roleID, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (Repository) UpdatePhone(ctx context.Context, q database.Querier, id, phoneE164, phoneMasked string, now time.Time) error {
+	if _, err := q.ExecContext(ctx, "UPDATE sms_credentials SET phone_e164=?, phone_masked=?, updated_at=? WHERE user_id=?", phoneE164, phoneMasked, now, id); err != nil {
+		if duplicateEntry(err) {
+			return errPhoneConflict
+		}
+		return err
+	}
+	_, err := q.ExecContext(ctx, "UPDATE users SET updated_at=? WHERE id=?", now, id)
+	return err
 }
 
 func (Repository) SetStatus(ctx context.Context, q database.Querier, id string, status UserStatus, now time.Time) error {
@@ -196,4 +262,9 @@ func invalidCursor() error {
 }
 func notFound(message string) error {
 	return &apperror.Error{Kind: apperror.KindNotFound, Code: "not_found", Message: message}
+}
+
+func duplicateEntry(err error) bool {
+	var mysqlError *mysql.MySQLError
+	return errors.As(err, &mysqlError) && mysqlError.Number == 1062
 }

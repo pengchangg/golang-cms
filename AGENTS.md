@@ -9,7 +9,7 @@
 
 ## 验证命令
 
-- 本地快速启动使用 `make dev`：它通过 Podman 在 `127.0.0.1:13306` 创建持久化 MySQL 8.0，关闭 OIDC，默认从被 Git 忽略的 `.env.assets.local` 启用 S3 兼容对象存储，构建前端、迁移、仅在缺失时初始化本地管理员后在 `http://localhost:18080` 启动；无对象存储时显式使用 `make dev DEV_ASSETS_ENABLED=false`。显式 `make dev-reset-admin` 会重置密码并撤销该管理员现有会话。数据库 `DEV_DB_*` 变量只在首次创建容器时生效，修改前须运行 `make dev-clean`。`make dev-clean` 会删除本地数据库卷。
+- 本地快速启动使用 `make dev`：它通过 Podman 在 `127.0.0.1:13306` 创建持久化 MySQL 8.0，使用固定短信验证码 `123456`，默认从被 Git 忽略的 `.env.assets.local` 启用 S3 兼容对象存储，构建前端、迁移、仅在缺失时初始化本地管理员后在 `http://localhost:18080` 启动；无对象存储时显式使用 `make dev DEV_ASSETS_ENABLED=false`。显式 `make dev-reset-admin` 会重置密码并撤销该管理员现有会话。数据库 `DEV_DB_*` 变量只在首次创建容器时生效，修改前须运行 `make dev-clean`。`make dev-clean` 会删除本地数据库卷。
 - 后端全量门禁：`go test -count=1 -timeout 300s ./...`，`go test -race -count=1 -timeout 360s ./...`，`go vet ./...`。
 - 聚焦 Go 包或测试：`go test ./internal/content`；`go test ./internal/content -run '^TestName$'`。
 - 前端首次安装使用 `cd web && npm ci`；验证顺序为 `npm run lint`、`npm run typecheck`、`npm run test`、`npm run build`。`npm run lint` 同时 lint TypeScript 和 `api/openapi/{admin,content}.yaml`。
@@ -27,7 +27,7 @@
 ## 运行约束
 
 - `serve` 需要已构建的 `web/dist/index.html`、已完成迁移的 MySQL，以及至少一个启用的应急管理员；本地启动前先构建前端并运行 README 中的 `migrate`、`admin reset-password` 命令。
-- OIDC 默认启用；不接企业 SSO 的本地环境需显式 `APP_OIDC_ENABLED=false`，应急网页登录还需 `APP_LOCAL_LOGIN_ENABLED=true`。完整变量和值域以 `.env.example` 和 `internal/platform/config/config.go` 为准，程序不会自动加载 `.env`。
+- 普通管理账户使用后台预置的大陆手机号短信验证码登录；生产使用腾讯云短信。`SMS_PROVIDER=fixed` 和 `DEV_SMS_FIXED_CODE` 仅允许 `APP_ENV=development`；应急管理员网页登录还需显式 `APP_LOCAL_LOGIN_ENABLED=true`。完整变量和值域以 `.env.example` 和 `internal/platform/config/config.go` 为准，程序不会自动加载 `.env`。
 - 应用不终止 TLS；`APP_BASE_URL` 必须是浏览器实际访问的 origin，并同时决定 Origin 校验和 Cookie `Secure` 属性。只有 localhost 或回环 IP 可使用 HTTP；生产由网关终止 TLS 时仍填写外部 `https://` URL。
 - 素材功能默认启用，并在监听端口前检查完整 S3 兼容对象存储配置、Bucket 访问、Region 和对象读写；不同服务的 ACL 能力和配置方式可能不同。没有可用对象存储时必须同时设置运行时 `APP_ASSETS_ENABLED=false` 和前端构建时 `VITE_ASSETS_ENABLED=false`；两份聚合 OpenAPI 仍保持完整 V1，不按开关裁剪。
 - 远程 MySQL TCP 默认拒绝明文连接；使用 DSN TLS。`MYSQL_ALLOW_INSECURE=true` 仅用于明确隔离的开发网络。

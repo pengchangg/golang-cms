@@ -30,7 +30,7 @@ export interface Principal {
   user_id: string
   display_name: string
   email: string | null
-  auth_method: 'oidc' | 'local'
+  auth_method: AuthMethod
   system_permissions: SystemPermission[]
   model_permissions: Array<{
     model_id: string
@@ -44,6 +44,22 @@ export interface SessionResponse {
   csrf_token: string
   idle_expires_at: string
   expires_at: string
+}
+
+export interface CaptchaChallenge {
+  challenge_id: string
+  background_image: string
+  tile_image: string
+  tile_x: number
+  tile_y: number
+  expires_at: string
+}
+
+export interface SMSChallenge {
+  challenge_id: string
+  phone_masked: string
+  expires_at: string
+  retry_after_seconds: number
 }
 
 export interface ValidationDetail {
@@ -63,7 +79,7 @@ export interface ErrorResponse {
 
 export type ResourceStatus = 'active' | 'archived'
 export type UserStatus = 'enabled' | 'disabled'
-export type AuthMethod = 'oidc' | 'local'
+export type AuthMethod = 'sms' | 'local'
 export type EntryStatus = 'draft' | 'archived'
 export type FieldType =
   | 'single_line_text' | 'multi_line_text' | 'rich_text' | 'integer' | 'decimal'
@@ -73,10 +89,10 @@ export type FieldType =
 
 export interface CursorResponse<T> { items: T[]; next_cursor: string | null }
 export interface UserSummary {
-  id: string; display_name: string; email: string | null; auth_methods: AuthMethod[]
+  id: string; display_name: string; email: string | null; phone_masked: string | null; auth_methods: AuthMethod[]
   is_emergency_admin: boolean; status: UserStatus; created_at: string; updated_at: string
 }
-export interface User extends UserSummary { role_ids: string[] }
+export interface User extends UserSummary { phone: string | null; role_ids: string[] }
 export interface Role {
   id: string; key: string; display_name: string; description: string
   system_permissions: SystemPermission[]

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -12,8 +13,9 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("记录不存在")
-	ErrUserDisabled = errors.New("用户已禁用")
+	ErrNotFound         = errors.New("记录不存在")
+	ErrUserDisabled     = errors.New("用户已禁用")
+	ErrInvalidChallenge = errors.New("挑战验证失败")
 )
 
 type SQLStore struct {
@@ -26,45 +28,123 @@ func NewSQLStore(db *sql.DB, writer audit.Writer) *SQLStore {
 	return &SQLStore{db: db, tx: database.NewTransactor(db), audit: writer}
 }
 
-func (s *SQLStore) SaveLoginState(ctx context.Context, state LoginState) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO oidc_login_states
-		(state_hash, browser_binding_hash, nonce, pkce_verifier, return_to, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		state.Hash, state.BindingHash, state.Nonce, state.PKCEVerifier, state.ReturnTo, state.ExpiresAt.UTC(), state.CreatedAt.UTC())
+func (s *SQLStore) SaveCaptchaChallenge(ctx context.Context, challenge CaptchaChallenge) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO captcha_challenges
+		(id_hash, browser_binding_hash, target_x, target_y, attempts_remaining, expires_at, consumed_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`, challenge.Hash, challenge.BindingHash, challenge.TargetX, challenge.TargetY,
+		challenge.AttemptsRemaining, challenge.ExpiresAt.UTC(), challenge.CreatedAt.UTC())
 	return err
 }
 
-func (s *SQLStore) ConsumeLoginState(ctx context.Context, hash, bindingHash []byte, now time.Time) (LoginState, error) {
-	var result LoginState
-	expired := false
+func (s *SQLStore) VerifyCaptchaChallenge(ctx context.Context, hash, bindingHash []byte, x, y, padding int, now time.Time) error {
+	validationErr := error(nil)
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		row := q.QueryRowContext(ctx, `SELECT browser_binding_hash, nonce, pkce_verifier, return_to, expires_at, created_at
-			FROM oidc_login_states WHERE state_hash = ? AND browser_binding_hash = ? FOR UPDATE`, hash, bindingHash)
-		if err := row.Scan(&result.BindingHash, &result.Nonce, &result.PKCEVerifier, &result.ReturnTo, &result.ExpiresAt, &result.CreatedAt); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
+		var targetX, targetY, attempts int
+		var expires time.Time
+		err := q.QueryRowContext(ctx, `SELECT target_x, target_y, attempts_remaining, expires_at FROM captcha_challenges
+			WHERE id_hash = ? AND browser_binding_hash = ? AND consumed_at IS NULL FOR UPDATE`, hash, bindingHash).
+			Scan(&targetX, &targetY, &attempts, &expires)
+		if errors.Is(err, sql.ErrNoRows) || err == nil && (!now.Before(expires) || attempts <= 0) {
+			validationErr = ErrNotFound
+			return nil
+		}
+		if err != nil {
 			return err
 		}
-		if _, err := q.ExecContext(ctx, `DELETE FROM oidc_login_states WHERE state_hash = ?`, hash); err != nil {
+		valid := x >= targetX-padding && x <= targetX+padding && y >= targetY-padding && y <= targetY+padding
+		if valid {
+			_, err = q.ExecContext(ctx, `UPDATE captcha_challenges SET consumed_at = ? WHERE id_hash = ?`, now.UTC(), hash)
 			return err
 		}
-		if !now.Before(result.ExpiresAt) {
-			expired = true
+		_, err = q.ExecContext(ctx, `UPDATE captcha_challenges SET attempts_remaining = attempts_remaining - 1,
+			consumed_at = CASE WHEN attempts_remaining = 1 THEN ? ELSE NULL END WHERE id_hash = ?`, now.UTC(), hash)
+		if err != nil {
+			return err
 		}
+		validationErr = ErrInvalidChallenge
 		return nil
 	})
-	if err == nil && expired {
-		err = ErrNotFound
+	if err != nil {
+		return err
 	}
-	return result, err
+	return validationErr
 }
 
-func (s *SQLStore) DeleteExpiredLoginStates(ctx context.Context, now time.Time, limit int) error {
-	if limit <= 0 {
-		return nil
-	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM oidc_login_states WHERE expires_at <= ? ORDER BY expires_at LIMIT ?`, now.UTC(), limit)
+func (s *SQLStore) SaveSMSChallenge(ctx context.Context, challenge SMSChallenge) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sms_challenges
+		(id_hash, browser_binding_hash, phone_e164, phone_masked, otp_hash, attempts_remaining, expires_at, consumed_at, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`, challenge.Hash, challenge.BindingHash, challenge.PhoneE164,
+		challenge.PhoneMasked, challenge.OTPHash, challenge.AttemptsRemaining, challenge.ExpiresAt.UTC(), challenge.CreatedAt.UTC())
 	return err
+}
+
+func (s *SQLStore) ConsumeSMSChallenge(ctx context.Context, hash, bindingHash, otpHash []byte, now time.Time) (string, error) {
+	var phone string
+	validationErr := error(nil)
+	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		var storedHash []byte
+		var attempts int
+		var expires time.Time
+		err := q.QueryRowContext(ctx, `SELECT phone_e164, otp_hash, attempts_remaining, expires_at FROM sms_challenges
+			WHERE id_hash = ? AND browser_binding_hash = ? AND consumed_at IS NULL FOR UPDATE`, hash, bindingHash).
+			Scan(&phone, &storedHash, &attempts, &expires)
+		if errors.Is(err, sql.ErrNoRows) || err == nil && (!now.Before(expires) || attempts <= 0) {
+			validationErr = ErrNotFound
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !hmac.Equal(storedHash, otpHash) {
+			_, err = q.ExecContext(ctx, `UPDATE sms_challenges SET attempts_remaining = attempts_remaining - 1,
+				consumed_at = CASE WHEN attempts_remaining = 1 THEN ? ELSE NULL END WHERE id_hash = ?`, now.UTC(), hash)
+			if err != nil {
+				return err
+			}
+			validationErr = ErrInvalidChallenge
+			return nil
+		}
+		_, err = q.ExecContext(ctx, `UPDATE sms_challenges SET consumed_at = ? WHERE id_hash = ?`, now.UTC(), hash)
+		return err
+	})
+	if err == nil && validationErr != nil {
+		err = validationErr
+	}
+	return phone, err
+}
+
+func (s *SQLStore) AllowRateLimit(ctx context.Context, scope string, keyHash []byte, now time.Time, window time.Duration, limit int) (bool, error) {
+	allowed := false
+	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		var started time.Time
+		var count int
+		err := q.QueryRowContext(ctx, `SELECT window_started_at, request_count FROM auth_rate_limits
+			WHERE scope = ? AND key_hash = ? FOR UPDATE`, scope, keyHash).Scan(&started, &count)
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err = q.ExecContext(ctx, `INSERT INTO auth_rate_limits
+				(scope, key_hash, window_started_at, request_count, expires_at) VALUES (?, ?, ?, 1, ?)`,
+				scope, keyHash, now.UTC(), now.Add(window).UTC())
+			allowed = err == nil
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		if !now.Before(started.Add(window)) {
+			_, err = q.ExecContext(ctx, `UPDATE auth_rate_limits SET window_started_at = ?, request_count = 1, expires_at = ?
+				WHERE scope = ? AND key_hash = ?`, now.UTC(), now.Add(window).UTC(), scope, keyHash)
+			allowed = err == nil
+			return err
+		}
+		if count >= limit {
+			return nil
+		}
+		_, err = q.ExecContext(ctx, `UPDATE auth_rate_limits SET request_count = request_count + 1
+			WHERE scope = ? AND key_hash = ?`, scope, keyHash)
+		allowed = err == nil
+		return err
+	})
+	return allowed, err
 }
 
 func (s *SQLStore) FindLocalUser(ctx context.Context, username string) (User, error) {
@@ -83,52 +163,19 @@ func (s *SQLStore) FindLocalUser(ctx context.Context, username string) (User, er
 	return user, err
 }
 
-func (s *SQLStore) CompleteOIDCLogin(ctx context.Context, subject OIDCIdentity, userID string, now time.Time, session NewSession, event audit.Event) (User, error) {
-	var result User
-	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		var email sql.NullString
-		err := q.QueryRowContext(ctx, `SELECT u.id, u.display_name, u.email, u.enabled
-			FROM oidc_identities o JOIN users u ON u.id = o.user_id
-			WHERE o.issuer = ? AND o.subject = ? FOR UPDATE`, subject.Issuer, subject.Subject).
-			Scan(&result.ID, &result.DisplayName, &email, &result.Enabled)
-		if err == nil {
-			if email.Valid {
-				result.Email = &email.String
-			}
-			if !result.Enabled {
-				return ErrUserDisabled
-			}
-			_, err = q.ExecContext(ctx, `UPDATE users SET display_name = ?, email = ?, updated_at = ? WHERE id = ?`, subject.DisplayName, subject.Email, now.UTC(), result.ID)
-			result.DisplayName, result.Email = subject.DisplayName, subject.Email
-			if err != nil {
-				return err
-			}
-		} else {
-			if !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-			if _, err := q.ExecContext(ctx, `INSERT INTO users (id, display_name, email, enabled, created_at, updated_at)
-				VALUES (?, ?, ?, TRUE, ?, ?)`, userID, subject.DisplayName, subject.Email, now.UTC(), now.UTC()); err != nil {
-				return err
-			}
-			if _, err := q.ExecContext(ctx, `INSERT INTO oidc_identities (issuer, subject, user_id, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?)`, subject.Issuer, subject.Subject, userID, now.UTC(), now.UTC()); err != nil {
-				return err
-			}
-			result = User{ID: userID, DisplayName: subject.DisplayName, Email: subject.Email, Enabled: true}
-		}
-		session.UserID = result.ID
-		if _, err := q.ExecContext(ctx, `INSERT INTO sessions
-			(id_hash, user_id, auth_method, created_at, last_seen_at, idle_expires_at, expires_at, revoked_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`, session.Hash, session.UserID, session.AuthMethod,
-			session.CreatedAt.UTC(), session.LastSeenAt.UTC(), session.IdleExpiresAt.UTC(), session.ExpiresAt.UTC()); err != nil {
-			return err
-		}
-		event.ActorID = &result.ID
-		event.ActorDisplayName = &result.DisplayName
-		return s.audit.Append(ctx, q, event)
-	})
-	return result, err
+func (s *SQLStore) FindPhoneUser(ctx context.Context, phone string) (User, error) {
+	var user User
+	var email sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT u.id, u.display_name, u.email, u.enabled
+		FROM sms_credentials c JOIN users u ON u.id = c.user_id WHERE c.phone_e164 = ?`, phone).
+		Scan(&user.ID, &user.DisplayName, &email, &user.Enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	if email.Valid {
+		user.Email = &email.String
+	}
+	return user, err
 }
 
 func (s *SQLStore) CreateSession(ctx context.Context, session NewSession, event audit.Event) error {

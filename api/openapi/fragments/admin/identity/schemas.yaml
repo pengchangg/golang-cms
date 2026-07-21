@@ -3,7 +3,16 @@ $id: https://internal-cms.invalid/schemas/admin/identity/schemas.yaml
 $defs:
   AuthMethod:
     type: string
-    enum: [oidc, local]
+    enum: [sms, local]
+  PhoneInput:
+    type: string
+    pattern: "^(?:\\+86)?1[3-9][0-9]{9}$"
+  Phone:
+    type: string
+    pattern: "^\\+861[3-9][0-9]{9}$"
+  PhoneMasked:
+    type: string
+    pattern: "^1[3-9][0-9]\\*{4}[0-9]{4}$"
   SystemPermissionCode:
     type: string
     enum:
@@ -118,11 +127,15 @@ $defs:
   UserSummary:
     type: object
     additionalProperties: false
-    required: [id, display_name, email, auth_methods, is_emergency_admin, status, created_at, updated_at]
+    required: [id, display_name, email, phone_masked, auth_methods, is_emergency_admin, status, created_at, updated_at]
     properties:
       id: { type: string, minLength: 1 }
       display_name: { type: string, minLength: 1, maxLength: 120 }
       email: { type: [string, "null"], format: email }
+      phone_masked:
+        oneOf:
+          - $ref: "#/$defs/PhoneMasked"
+          - type: "null"
       auth_methods:
         type: array
         minItems: 1
@@ -137,11 +150,19 @@ $defs:
   User:
     type: object
     additionalProperties: false
-    required: [id, display_name, email, auth_methods, is_emergency_admin, status, role_ids, created_at, updated_at]
+    required: [id, display_name, email, phone_masked, phone, auth_methods, is_emergency_admin, status, role_ids, created_at, updated_at]
     properties:
       id: { type: string, minLength: 1 }
       display_name: { type: string, minLength: 1, maxLength: 120 }
       email: { type: [string, "null"], format: email }
+      phone_masked:
+        oneOf:
+          - $ref: "#/$defs/PhoneMasked"
+          - type: "null"
+      phone:
+        oneOf:
+          - $ref: "#/$defs/Phone"
+          - type: "null"
       auth_methods:
         type: array
         minItems: 1
@@ -164,6 +185,25 @@ $defs:
     properties:
       status:
         $ref: "#/$defs/UserStatus"
+  CreateUserRequest:
+    type: object
+    additionalProperties: false
+    required: [display_name, phone, role_ids]
+    properties:
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      phone:
+        $ref: "#/$defs/PhoneInput"
+      role_ids:
+        type: array
+        uniqueItems: true
+        items: { type: string, minLength: 1 }
+  UpdateUserPhoneRequest:
+    type: object
+    additionalProperties: false
+    required: [phone]
+    properties:
+      phone:
+        $ref: "#/$defs/PhoneInput"
   UserListResponse:
     type: object
     additionalProperties: false

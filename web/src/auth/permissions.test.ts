@@ -7,7 +7,7 @@ const principal: Principal = {
   user_id: 'usr_permissions',
   display_name: '权限测试用户',
   email: null,
-  auth_method: 'oidc',
+  auth_method: 'sms',
   system_permissions: ['models.view'],
   model_permissions: [],
 }

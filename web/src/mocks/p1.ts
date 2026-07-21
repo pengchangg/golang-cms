@@ -7,6 +7,7 @@ const fields = [
 ]
 let entries = [{ id: 'ent_welcome', model_id: model.id, status: 'draft', current_draft_revision_id: 'rev_1', current_draft_content: { title: '欢迎使用', body: { type: 'doc', content: [] }, cover: null } as Record<string, unknown>, workflow_status: 'draft', current_published_revision_id: null, referenced_assets: {}, created_by: 'usr_dev_preview', created_at: now, updated_at: now }]
 const roles = [{ id: 'rol_editor', key: 'editor', display_name: '内容编辑', description: '维护模型与草稿', system_permissions: ['models.view', 'models.update'], model_permissions: [{ model_id: model.id, permissions: ['content.view', 'content.create', 'content.update'] }], created_at: now, updated_at: now }]
+const mockUser = { id: 'usr_dev_preview', display_name: '开发预览用户', email: null, phone_masked: '138****8000', auth_methods: ['sms'], is_emergency_admin: false, status: 'enabled', created_at: now, updated_at: now }
 
 export function enableP1Mock() {
   const nativeFetch = window.fetch.bind(window)
@@ -16,10 +17,12 @@ export function enableP1Mock() {
     if (!url.pathname.startsWith('/api/admin/v1/')) return nativeFetch(input, init)
     const path = url.pathname.slice('/api/admin/v1'.length)
     const method = (init?.method ?? 'GET').toUpperCase()
-    if (path === '/users' && method === 'GET') return Response.json({ items: [{ id: 'usr_dev_preview', display_name: '开发预览用户', email: 'preview@local.invalid', auth_methods: ['oidc'], is_emergency_admin: false, status: 'enabled', created_at: now, updated_at: now }], next_cursor: null })
+    if (path === '/users' && method === 'GET') return Response.json({ items: [mockUser], next_cursor: null })
+    if (path === '/users' && method === 'POST') return Response.json({ ...mockUser, ...(JSON.parse(String(init?.body)) as { display_name: string; phone: string; role_ids: string[] }) }, { status: 201 })
     if (path === '/roles' && method === 'GET') return Response.json({ items: roles })
-    if (path === '/users/usr_dev_preview' && method === 'GET') return Response.json({ id: 'usr_dev_preview', display_name: '开发预览用户', email: 'preview@local.invalid', auth_methods: ['oidc'], is_emergency_admin: false, status: 'enabled', role_ids: ['rol_editor'], created_at: now, updated_at: now })
-    if (path === '/users/usr_dev_preview/roles' && method === 'PUT') return Response.json({ id: 'usr_dev_preview', display_name: '开发预览用户', email: 'preview@local.invalid', auth_methods: ['oidc'], is_emergency_admin: false, status: 'enabled', role_ids: (JSON.parse(String(init?.body)) as { role_ids: string[] }).role_ids, created_at: now, updated_at: now })
+    if (path === '/users/usr_dev_preview' && method === 'GET') return Response.json({ ...mockUser, phone: '13800138000', role_ids: ['rol_editor'] })
+    if (path === '/users/usr_dev_preview/phone' && method === 'PATCH') return Response.json(mockUser)
+    if (path === '/users/usr_dev_preview/roles' && method === 'PUT') return Response.json({ ...mockUser, role_ids: (JSON.parse(String(init?.body)) as { role_ids: string[] }).role_ids })
     if (path === '/models' && method === 'GET') return Response.json({ items: [model] })
     if (path === `/models/${model.id}` && method === 'GET') return Response.json({ ...model, fields })
     if (path === `/models/${model.id}/entries` && method === 'GET') return Response.json({ items: entries, fields: fields.map(({ key, display_name, type, constraints, children }) => ({ key, display_name, type, constraints: { enum_options: 'enum_options' in constraints ? constraints.enum_options : undefined, filterable: false, sortable: false }, children })), next_cursor: null })

@@ -13,6 +13,7 @@ type UserSummary struct {
 	ID             string       `json:"id"`
 	DisplayName    string       `json:"display_name"`
 	Email          *string      `json:"email"`
+	PhoneMasked    *string      `json:"phone_masked"`
 	AuthMethods    []AuthMethod `json:"auth_methods"`
 	EmergencyAdmin bool         `json:"is_emergency_admin"`
 	Status         UserStatus   `json:"status"`
@@ -22,7 +23,18 @@ type UserSummary struct {
 
 type User struct {
 	UserSummary
+	Phone   *string  `json:"phone"`
 	RoleIDs []string `json:"role_ids"`
+}
+
+type CreateUserRequest struct {
+	DisplayName string   `json:"display_name"`
+	Phone       string   `json:"phone"`
+	RoleIDs     []string `json:"role_ids"`
+}
+
+type UpdatePhoneRequest struct {
+	Phone string `json:"phone"`
 }
 
 type UserFilter struct {

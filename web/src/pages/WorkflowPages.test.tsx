@@ -22,7 +22,7 @@ const entry: ContentEntry = {
 }
 
 function principal(system: Principal['system_permissions'], permissions: Principal['model_permissions'][number]['permissions']): Principal {
-  return { user_id: 'usr_2', display_name: '审核人', email: null, auth_method: 'oidc', system_permissions: system, model_permissions: [{ model_id: model.id, permissions }] }
+  return { user_id: 'usr_2', display_name: '审核人', email: null, auth_method: 'sms', system_permissions: system, model_permissions: [{ model_id: model.id, permissions }] }
 }
 
 function renderEntry(value: Principal) {

@@ -11,10 +11,12 @@ servers:
 security:
   - AdminSession: []
 paths:
-  /auth/oidc/start:
-    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1oidc~1start
-  /auth/oidc/callback:
-    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1oidc~1callback
+  /auth/captcha/challenges:
+    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1captcha~1challenges
+  /auth/sms/challenges:
+    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1sms~1challenges
+  /auth/sms/challenges/{challenge_id}/verify:
+    $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1sms~1challenges~1{challenge_id}~1verify
   /auth/local/login:
     $ref: ./fragments/admin/auth/paths.yaml#/~1auth~1local~1login
   /auth/session:
@@ -37,6 +39,8 @@ paths:
     $ref: ./fragments/admin/identity/paths.yaml#/~1users
   /users/{user_id}:
     $ref: ./fragments/admin/identity/paths.yaml#/~1users~1{user_id}
+  /users/{user_id}/phone:
+    $ref: ./fragments/admin/identity/paths.yaml#/~1users~1{user_id}~1phone
   /users/{user_id}/roles:
     $ref: ./fragments/admin/roles/paths.yaml#/~1users~1{user_id}~1roles
   /roles:

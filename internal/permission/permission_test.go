@@ -70,3 +70,13 @@ func TestEmergencyPermissionsAlwaysGrantEverything(t *testing.T) {
 		}
 	}
 }
+
+func TestSMSAuthMethodDoesNotChangeEmergencyPermissionSource(t *testing.T) {
+	principal := identity.NewPrincipal("usr_sms", "手机用户", nil, identity.AuthMethodSMS, []string{UsersView}, nil)
+	if principal.AuthMethod != identity.AuthMethodSMS {
+		t.Fatalf("auth_method = %q", principal.AuthMethod)
+	}
+	if len(principal.SystemPermissions) != 1 || principal.SystemPermissions[0] != UsersView {
+		t.Fatalf("SMS 用户权限被提升: %v", principal.SystemPermissions)
+	}
+}

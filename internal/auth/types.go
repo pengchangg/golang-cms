@@ -9,37 +9,44 @@ import (
 )
 
 const (
-	CookieName     = "cms_session"
-	OIDCCookieName = "cms_oidc_binding"
-	CSRFHeader     = "X-CSRF-Token"
-	IdleTimeout    = 30 * time.Minute
-	AbsoluteExpiry = 12 * time.Hour
+	CookieName           = "cms_session"
+	CaptchaBindingCookie = "cms_captcha_binding"
+	CSRFHeader           = "X-CSRF-Token"
+	IdleTimeout          = 30 * time.Minute
+	AbsoluteExpiry       = 12 * time.Hour
+	CaptchaExpiry        = 5 * time.Minute
+	SMSExpiry            = 5 * time.Minute
+	CaptchaMaxAttempts   = 5
+	SMSMaxAttempts       = 5
 )
 
 type Clock interface {
 	Now() time.Time
 }
 
-type OIDCIdentity struct {
-	Issuer      string
-	Subject     string
-	DisplayName string
-	Email       *string
+type SMSProvider interface {
+	SendCode(context.Context, string, string, time.Duration) error
 }
 
-type OIDCClient interface {
-	AuthorizationURL(state, nonce, challenge string) string
-	Exchange(context.Context, string, string, string) (OIDCIdentity, error)
+type CaptchaChallenge struct {
+	Hash              []byte
+	BindingHash       []byte
+	TargetX           int
+	TargetY           int
+	AttemptsRemaining int
+	ExpiresAt         time.Time
+	CreatedAt         time.Time
 }
 
-type LoginState struct {
-	Hash         []byte
-	BindingHash  []byte
-	Nonce        string
-	PKCEVerifier string
-	ReturnTo     string
-	ExpiresAt    time.Time
-	CreatedAt    time.Time
+type SMSChallenge struct {
+	Hash              []byte
+	BindingHash       []byte
+	PhoneE164         string
+	PhoneMasked       string
+	OTPHash           []byte
+	AttemptsRemaining int
+	ExpiresAt         time.Time
+	CreatedAt         time.Time
 }
 
 type User struct {
@@ -71,11 +78,13 @@ type NewSession struct {
 }
 
 type Store interface {
-	SaveLoginState(context.Context, LoginState) error
-	ConsumeLoginState(context.Context, []byte, []byte, time.Time) (LoginState, error)
-	DeleteExpiredLoginStates(context.Context, time.Time, int) error
+	SaveCaptchaChallenge(context.Context, CaptchaChallenge) error
+	VerifyCaptchaChallenge(context.Context, []byte, []byte, int, int, int, time.Time) error
+	SaveSMSChallenge(context.Context, SMSChallenge) error
+	ConsumeSMSChallenge(context.Context, []byte, []byte, []byte, time.Time) (string, error)
+	AllowRateLimit(context.Context, string, []byte, time.Time, time.Duration, int) (bool, error)
 	FindLocalUser(context.Context, string) (User, error)
-	CompleteOIDCLogin(context.Context, OIDCIdentity, string, time.Time, NewSession, audit.Event) (User, error)
+	FindPhoneUser(context.Context, string) (User, error)
 	CreateSession(context.Context, NewSession, audit.Event) error
 	Session(context.Context, []byte) (Session, error)
 	TouchSession(context.Context, []byte, time.Time, time.Time) error

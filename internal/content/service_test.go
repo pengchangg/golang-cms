@@ -493,7 +493,7 @@ func TestUniqueValueConflictAndArchiveRelease(t *testing.T) {
 
 func TestPermissionDefaultsToDenyAndSystemPermissionCannotSubstitute(t *testing.T) {
 	service, _, _, _ := testService()
-	principal := identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodOIDC, []string{"models.create"}, nil)
+	principal := identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, []string{"models.create"}, nil)
 	_, err := service.CreateEntry(context.Background(), principal, testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"内容"}`)})
 	assertApplicationCode(t, err, "permission_denied")
 }
@@ -508,7 +508,7 @@ func TestWorkflowPublishEditAndUnpublish(t *testing.T) {
 	if _, err = service.Submit(context.Background(), creator, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID}); err != nil {
 		t.Fatal(err)
 	}
-	reviewer := identity.NewPrincipal("usr_2", "审核人", nil, identity.AuthMethodOIDC, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{permissionReview, permissionPublish, permissionUnpublish}}})
+	reviewer := identity.NewPrincipal("usr_2", "审核人", nil, identity.AuthMethodSMS, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{permissionReview, permissionPublish, permissionUnpublish}}})
 	published, err := service.Approve(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID})
 	if err != nil {
 		t.Fatal(err)
@@ -693,7 +693,7 @@ func TestListEntriesRequiresViewPermissionForEveryExpandedTarget(t *testing.T) {
 		t.Fatalf("目标模型授权失败前不应查询或展开条目: list=%d expand=%d", repository.listCalls, repository.expandCalls)
 	}
 
-	principal = identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodOIDC, nil, []identity.ModelPermissions{
+	principal = identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, nil, []identity.ModelPermissions{
 		{ModelID: "mdl_1", Permissions: []string{permissionView}},
 		{ModelID: targetModelID, Permissions: []string{permissionView}},
 	})
@@ -925,7 +925,7 @@ func testService() (*Service, *memoryRepository, *directTx, *auditRecorder) {
 }
 
 func contentPrincipal(permissions ...string) identity.Principal {
-	return identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodOIDC, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: permissions}})
+	return identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: permissions}})
 }
 
 func testMeta() RequestMeta { return RequestMeta{RequestID: "req_1", IP: "127.0.0.1"} }

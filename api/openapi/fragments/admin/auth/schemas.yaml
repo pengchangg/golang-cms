@@ -1,6 +1,50 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://internal-cms.invalid/schemas/admin/auth/schemas.yaml
 $defs:
+  CreateCaptchaChallengeRequest:
+    type: object
+    additionalProperties: false
+    maxProperties: 0
+  CaptchaChallengeResponse:
+    type: object
+    additionalProperties: false
+    required: [challenge_id, background_image, tile_image, tile_x, tile_y, expires_at]
+    properties:
+      challenge_id: { type: string, minLength: 1 }
+      background_image: { type: string, minLength: 1 }
+      tile_image: { type: string, minLength: 1 }
+      tile_x: { type: integer, minimum: 0 }
+      tile_y: { type: integer, minimum: 0 }
+      expires_at: { type: string, format: date-time }
+  CreateSMSChallengeRequest:
+    type: object
+    additionalProperties: false
+    required: [phone, captcha_challenge_id, captcha_x, captcha_y]
+    properties:
+      phone:
+        $ref: ../identity/schemas.yaml#/$defs/PhoneInput
+      captcha_challenge_id: { type: string, minLength: 1 }
+      captcha_x: { type: integer, minimum: 0 }
+      captcha_y: { type: integer, minimum: 0 }
+  SMSChallengeResponse:
+    type: object
+    additionalProperties: false
+    required: [challenge_id, phone_masked, expires_at, retry_after_seconds]
+    properties:
+      challenge_id: { type: string, minLength: 1 }
+      phone_masked:
+        $ref: ../identity/schemas.yaml#/$defs/PhoneMasked
+      expires_at: { type: string, format: date-time }
+      retry_after_seconds: { type: integer, minimum: 0 }
+  VerifySMSChallengeRequest:
+    type: object
+    additionalProperties: false
+    required: [code]
+    properties:
+      code:
+        type: string
+        pattern: "^[0-9]{6}$"
+        writeOnly: true
   LocalLoginRequest:
     type: object
     additionalProperties: false

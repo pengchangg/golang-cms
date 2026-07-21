@@ -24,8 +24,10 @@ func NewHandler(service *UserService, principal PrincipalProvider) *Handler {
 }
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/v1/users", h.list)
+	mux.HandleFunc("POST /api/admin/v1/users", h.create)
 	mux.HandleFunc("GET /api/admin/v1/users/{user_id}", h.get)
 	mux.HandleFunc("PATCH /api/admin/v1/users/{user_id}", h.setStatus)
+	mux.HandleFunc("PATCH /api/admin/v1/users/{user_id}/phone", h.updatePhone)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -44,8 +46,8 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	if value := r.URL.Query().Get("auth_method"); value != "" {
 		parsed := AuthMethod(value)
-		if parsed != AuthMethodLocal && parsed != AuthMethodOIDC {
-			writeValidation(w, r, "/auth_method", "invalid_value", "auth_method 必须是 local 或 oidc")
+		if parsed != AuthMethodLocal && parsed != AuthMethodSMS {
+			writeValidation(w, r, "/auth_method", "invalid_value", "auth_method 必须是 local 或 sms")
 			return
 		}
 		filter.AuthMethod = &parsed
@@ -68,6 +70,26 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var request CreateUserRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	if request.RoleIDs == nil {
+		writeValidation(w, r, "/role_ids", "required", "role_ids 必填")
+		return
+	}
+	result, err := h.service.Create(r.Context(), principal, requestMeta(r), request)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
 }
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	principal, ok := h.authenticate(w, r)
@@ -97,6 +119,22 @@ func (h *Handler) setStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.service.SetStatus(r.Context(), principal, requestMeta(r), r.PathValue("user_id"), request.Status)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+func (h *Handler) updatePhone(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var request UpdatePhoneRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	result, err := h.service.UpdatePhone(r.Context(), principal, requestMeta(r), r.PathValue("user_id"), request)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return

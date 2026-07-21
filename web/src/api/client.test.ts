@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { authStore } from '../auth/store'
-import { ApiError, api, oidcStartUrl, safeReturnTo, uploadAssetFile } from './client'
+import { ApiError, api, safeReturnTo, uploadAssetFile } from './client'
 import type { SessionResponse } from './types'
 
 const session: SessionResponse = {
@@ -104,12 +104,6 @@ describe('API Client', () => {
     expect(authStore.getSnapshot().status).toBe('authenticated')
   })
 
-  it('只生成同源 OIDC 发起地址', () => {
-    expect(oidcStartUrl('/articles?status=draft#editor')).toContain('return_to=%2Farticles%3Fstatus%3Ddraft%23editor')
-    expect(() => oidcStartUrl('//outside.example')).toThrow(TypeError)
-    expect(() => oidcStartUrl('/\\outside.example')).toThrow(TypeError)
-  })
-
   it('只接受同源绝对 returnTo 并保留查询与哈希', () => {
     expect(safeReturnTo('/articles?status=draft#editor')).toBe('/articles?status=draft#editor')
     expect(safeReturnTo('//outside.example')).toBeNull()
@@ -130,6 +124,33 @@ describe('API Client', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/v1/users?status=enabled&query=%E6%9E%97+%E5%B2%9A')
     expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/v1/models/mdl%2Fa/entries/ent%2Fb')
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ base_revision_id: 'rev_1', content: { title: '草稿' } }) }))
+  })
+
+  it('短信登录和手机号账户管理使用批准的路径与 DTO', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'cap_1' }))
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'sms_1' }))
+      .mockResolvedValueOnce(Response.json(session))
+      .mockResolvedValueOnce(Response.json({ id: 'usr_1' }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({ id: 'usr_1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.createCaptchaChallenge()
+    await api.createSMSChallenge({ phone: '13800138000', captcha_challenge_id: 'cap_1', captcha_x: 80, captcha_y: 72 })
+    await api.verifySMSChallenge('sms/a', '123456')
+    await api.createUser({ display_name: '林岚', phone: '13800138000', role_ids: ['rol_1'] })
+    await api.updateUserPhone('usr/a', '13900139000')
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      '/api/admin/v1/auth/captcha/challenges',
+      '/api/admin/v1/auth/sms/challenges',
+      '/api/admin/v1/auth/sms/challenges/sms%2Fa/verify',
+      '/api/admin/v1/users',
+      '/api/admin/v1/users/usr%2Fa/phone',
+    ])
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'POST', body: JSON.stringify({ phone: '13800138000', captcha_challenge_id: 'cap_1', captcha_x: 80, captcha_y: 72 }) }))
+    expect(fetchMock.mock.calls[3][1]).toEqual(expect.objectContaining({ body: JSON.stringify({ display_name: '林岚', phone: '13800138000', role_ids: ['rol_1'] }) }))
+    expect(fetchMock.mock.calls[4][1]).toEqual(expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ phone: '13900139000' }) }))
   })
 
   it('工作流动作显式携带目标 Revision 和驳回理由', async () => {

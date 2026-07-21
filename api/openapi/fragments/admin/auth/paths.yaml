@@ -1,88 +1,127 @@
-/auth/oidc/start:
-  get:
-    operationId: startAdminOIDCLogin
-    summary: 发起 OIDC Authorization Code + PKCE 登录
+/auth/captcha/challenges:
+  post:
+    operationId: createAdminCaptchaChallenge
+    summary: 创建滑动拼图挑战
     security: []
+    description: 必须通过同源 Origin 校验；建立会话前不要求 CSRF Token。
     parameters:
-      - name: return_to
-        in: query
-        required: false
-        schema:
-          type: string
-          pattern: '^/(?!/)(?!.*\\).*$'
-        description: 登录后返回的同源绝对路径；不得包含 scheme 或 host。
-    responses:
-      "302":
-        description: 重定向至企业 OIDC 身份源。
-        headers:
-          Location:
-            required: true
-            schema:
-              type: string
-              format: uri
-      "400":
-        description: return_to 不合法。
-        content:
-          application/json:
-            schema:
-              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
-      "503":
-        description: OIDC 身份源暂时不可用。
-        content:
-          application/json:
-            schema:
-              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
-/auth/oidc/callback:
-  get:
-    operationId: completeAdminOIDCLogin
-    summary: 完成 OIDC 回调并建立管理会话
-    security: []
-    parameters:
-      - name: code
-        in: query
-        required: false
-        schema: { type: string, minLength: 1 }
-      - name: state
-        in: query
+      - &origin
+        name: Origin
+        in: header
         required: true
-        schema: { type: string, minLength: 1 }
-      - name: error
-        in: query
-        required: false
-        schema: { type: string, minLength: 1 }
-      - name: error_description
-        in: query
-        required: false
-        schema: { type: string }
+        schema: { type: string, format: uri }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateCaptchaChallengeRequest
     responses:
-      "303":
-        description: 登录成功，设置 cms_session 并重定向至同源管理页。
+      "201":
+        description: 滑动拼图挑战已创建。
         headers:
-          Location:
+          Set-Cookie:
             required: true
             schema: { type: string }
+            description: cms_captcha_binding；HttpOnly、Secure、SameSite=Strict、Path=/api/admin/v1/auth，无 Domain。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/CaptchaChallengeResponse
+      "400": &validationFailed
+        description: 请求体格式或字段校验失败。
+        content:
+          application/json:
+            schema:
+              $ref: ../identity/schemas.yaml#/$defs/ValidationErrorResponse
+      "403": &originRejected
+        description: Origin 缺失或不匹配。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "429": &rateLimited
+        description: 请求过于频繁。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/auth/sms/challenges:
+  post:
+    operationId: createAdminSMSChallenge
+    summary: 创建短信验证码挑战
+    security: []
+    description: 必须通过同源 Origin 校验，并携带创建滑动拼图挑战时设置的浏览器绑定 Cookie。
+    parameters:
+      - *origin
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateSMSChallengeRequest
+    responses:
+      "201":
+        description: 短信验证码挑战已创建并发送验证码。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/SMSChallengeResponse
+      "400": *validationFailed
+      "401": &challengeRejected
+        description: 滑动拼图挑战无效或已过期。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": *originRejected
+      "429": *rateLimited
+      "503":
+        description: 短信服务暂时不可用。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/auth/sms/challenges/{challenge_id}/verify:
+  parameters:
+    - name: challenge_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  post:
+    operationId: verifyAdminSMSChallenge
+    summary: 校验短信验证码并建立管理会话
+    security: []
+    description: 必须通过同源 Origin 校验，并携带短信挑战绑定的浏览器 Cookie。
+    parameters:
+      - *origin
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/VerifySMSChallengeRequest
+    responses:
+      "200":
+        description: 验证成功并建立会话。
+        headers:
           Set-Cookie:
             required: true
             schema: { type: string }
             description: cms_session；HttpOnly、Secure、SameSite=Lax、Path=/api/admin/v1，无 Domain。
-      "400":
-        description: 回调参数、state 或 OIDC 声明不合法。
         content:
           application/json:
             schema:
-              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+              $ref: ./schemas.yaml#/$defs/SessionResponse
+      "400": *validationFailed
       "401":
-        description: 用户不可登录或身份验证失败。
+        description: 手机号或验证码无效，错误码固定为 invalid_credentials。
         content:
           application/json:
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
-      "503":
-        description: OIDC 身份源暂时不可用。
-        content:
-          application/json:
-            schema:
-              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "403": *originRejected
+      "429": *rateLimited
 /auth/local/login:
   post:
     operationId: loginAdminLocally
@@ -90,10 +129,7 @@
     security: []
     description: 必须通过同源 Origin 校验；建立会话前不要求 CSRF Token。
     parameters:
-      - name: Origin
-        in: header
-        required: true
-        schema: { type: string, format: uri }
+      - *origin
     requestBody:
       required: true
       content:

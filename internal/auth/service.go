@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,16 +22,16 @@ type Service struct {
 	store       Store
 	permissions identity.PermissionProvider
 	models      ModelSummaryProvider
-	oidc        OIDCClient
+	sms         SMSProvider
+	captcha     CaptchaGenerator
 	clock       Clock
 	random      io.Reader
 	secret      []byte
 	localIP     *rateLimiter
 	localUser   *rateLimiter
-	oidcIP      *rateLimiter
 }
 
-func NewService(store Store, permissions identity.PermissionProvider, models ModelSummaryProvider, oidcClient OIDCClient, clock Clock, random io.Reader, sessionSecret string) (*Service, error) {
+func NewService(store Store, permissions identity.PermissionProvider, models ModelSummaryProvider, sms SMSProvider, captcha CaptchaGenerator, clock Clock, random io.Reader, sessionSecret string) (*Service, error) {
 	if store == nil || clock == nil || random == nil || len(sessionSecret) < 32 {
 		return nil, errors.New("认证服务依赖或会话密钥不合法")
 	}
@@ -39,131 +39,121 @@ func NewService(store Store, permissions identity.PermissionProvider, models Mod
 		return nil, errors.New("认证服务缺少模型摘要提供者")
 	}
 	return &Service{
-		store: store, permissions: permissions, models: models, oidc: oidcClient, clock: clock, random: random, secret: []byte(sessionSecret),
+		store: store, permissions: permissions, models: models, sms: sms, captcha: captcha, clock: clock, random: random, secret: []byte(sessionSecret),
 		localIP: newRateLimiter(20, 4096, 5*time.Minute), localUser: newRateLimiter(10, 4096, 5*time.Minute),
-		oidcIP: newRateLimiter(30, 4096, 5*time.Minute),
 	}, nil
 }
 
-func (s *Service) StartOIDC(ctx context.Context, returnTo string, meta RequestMeta) (string, string, error) {
-	if s.oidc == nil {
-		return "", "", appError(apperror.KindUnavailable, "oidc_unavailable", "OIDC 身份源暂时不可用")
-	}
-	if !validReturnTo(returnTo) {
-		return "", "", appError(apperror.KindInvalidArgument, "invalid_return_to", "登录返回路径不合法")
-	}
-	now := s.clock.Now().UTC()
-	if !s.oidcIP.allow(meta.IP, now) {
-		return "", "", appError(apperror.KindUnavailable, "oidc_rate_limited", "OIDC 登录请求过于频繁")
-	}
-	state, err := s.token(32)
-	if err != nil {
-		return "", "", err
-	}
-	binding, err := s.token(32)
-	if err != nil {
-		return "", "", err
-	}
-	nonce, err := s.token(32)
-	if err != nil {
-		return "", "", err
-	}
-	verifier, err := s.token(64)
-	if err != nil {
-		return "", "", err
-	}
-	if err := s.store.DeleteExpiredLoginStates(ctx, now, 100); err != nil {
-		return "", "", fmt.Errorf("清理过期 OIDC 登录状态: %w", err)
-	}
-	err = s.store.SaveLoginState(ctx, LoginState{Hash: s.digest("state", state), BindingHash: s.digest("oidc_binding", binding), Nonce: nonce, PKCEVerifier: verifier, ReturnTo: returnTo, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)})
-	if err != nil {
-		return "", "", fmt.Errorf("保存 OIDC 登录状态: %w", err)
-	}
-	challenge := sha256.Sum256([]byte(verifier))
-	return s.oidc.AuthorizationURL(state, nonce, base64.RawURLEncoding.EncodeToString(challenge[:])), binding, nil
-}
+var mainlandPhonePattern = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
 
-func (s *Service) CompleteOIDC(ctx context.Context, code, state, binding string, meta RequestMeta) (sessionResult, string, error) {
-	if s.oidc == nil {
-		return sessionResult{}, "", appError(apperror.KindUnavailable, "oidc_unavailable", "OIDC 身份源暂时不可用")
+func (s *Service) CreateCaptcha(ctx context.Context, binding string, meta RequestMeta) (CaptchaResponse, string, error) {
+	if s.captcha == nil {
+		return CaptchaResponse{}, "", appError(apperror.KindUnavailable, "captcha_unavailable", "行为验证暂时不可用")
 	}
 	now := s.clock.Now().UTC()
-	if code == "" || state == "" || binding == "" {
-		if auditErr := s.auditFailure(ctx, "auth_oidc_login_failed", "invalid_oidc_callback", meta); auditErr != nil {
-			return sessionResult{}, "", auditErr
-		}
-		return sessionResult{}, "", appError(apperror.KindInvalidArgument, "invalid_oidc_callback", "OIDC 回调无效")
-	}
-	loginState, err := s.store.ConsumeLoginState(ctx, s.digest("state", state), s.digest("oidc_binding", binding), now)
-	if err != nil {
-		if auditErr := s.auditFailure(ctx, "auth_oidc_login_failed", "invalid_oidc_callback", meta); auditErr != nil {
-			return sessionResult{}, "", auditErr
-		}
-		return sessionResult{}, "", appError(apperror.KindInvalidArgument, "invalid_oidc_callback", "OIDC 回调无效")
-	}
-	claims, err := s.oidc.Exchange(ctx, code, loginState.PKCEVerifier, loginState.Nonce)
-	if err != nil {
-		if auditErr := s.auditFailure(ctx, "auth_oidc_login_failed", "oidc_verification_failed", meta); auditErr != nil {
-			return sessionResult{}, "", auditErr
-		}
-		return sessionResult{}, "", appError(apperror.KindUnauthenticated, "oidc_verification_failed", "OIDC 身份验证失败")
-	}
-	userID, err := s.identifier("usr", 18)
-	if err != nil {
-		return sessionResult{}, "", err
-	}
-	raw, err := s.token(32)
-	if err != nil {
-		return sessionResult{}, "", err
-	}
-	expires := now.Add(AbsoluteExpiry)
-	event, err := s.event("auth_oidc_login_succeeded", "success", nil, &userID, &claims.DisplayName, meta)
-	if err != nil {
-		return sessionResult{}, "", err
-	}
-	created := NewSession{Hash: s.digest("session", raw), UserID: userID, AuthMethod: identity.AuthMethodOIDC, CreatedAt: now, LastSeenAt: now, IdleExpiresAt: now.Add(IdleTimeout), ExpiresAt: expires}
-	user, err := s.store.CompleteOIDCLogin(ctx, claims, userID, now, created, event)
-	if err != nil {
-		if errors.Is(err, ErrUserDisabled) {
-			if auditErr := s.auditFailure(ctx, "auth_oidc_login_failed", "user_disabled", meta); auditErr != nil {
-				return sessionResult{}, "", auditErr
-			}
-			return sessionResult{}, "", appError(apperror.KindUnauthenticated, "invalid_credentials", "身份凭据无效")
-		}
-		return sessionResult{}, "", fmt.Errorf("完成 OIDC 登录: %w", err)
-	}
-	principal, models, err := s.principalWithModels(ctx, user.ID, user.DisplayName, user.Email, identity.AuthMethodOIDC)
-	if err != nil {
-		return sessionResult{}, "", fmt.Errorf("读取当前权限: %w", err)
-	}
-	return sessionResult{Raw: raw, Response: SessionResponse{Principal: principal, ContentModels: models, CSRFToken: s.csrf(raw), IdleExpiresAt: created.IdleExpiresAt, ExpiresAt: expires}}, loginState.ReturnTo, nil
-}
-
-func (s *Service) RejectOIDCCallback(ctx context.Context, state, binding string, meta RequestMeta) error {
-	now := s.clock.Now().UTC()
-	if state == "" {
-		if err := s.auditFailure(ctx, "auth_oidc_login_failed", "invalid_oidc_callback", meta); err != nil {
-			return err
-		}
-		return appError(apperror.KindInvalidArgument, "invalid_oidc_callback", "OIDC 回调无效")
+	if err := s.requireRateLimit(ctx, "captcha_ip", meta.IP, now, 5*time.Minute, 30); err != nil {
+		return CaptchaResponse{}, "", err
 	}
 	if binding == "" {
-		if err := s.auditFailure(ctx, "auth_oidc_login_failed", "invalid_oidc_callback", meta); err != nil {
-			return err
+		var err error
+		binding, err = s.token(32)
+		if err != nil {
+			return CaptchaResponse{}, "", err
 		}
-		return appError(apperror.KindInvalidArgument, "invalid_oidc_callback", "OIDC 回调无效")
 	}
-	_, err := s.store.ConsumeLoginState(ctx, s.digest("state", state), s.digest("oidc_binding", binding), now)
+	data, err := s.captcha.Generate()
 	if err != nil {
-		if err := s.auditFailure(ctx, "auth_oidc_login_failed", "invalid_oidc_callback", meta); err != nil {
-			return err
+		return CaptchaResponse{}, "", fmt.Errorf("生成滑动拼图: %w", err)
+	}
+	id, err := s.token(24)
+	if err != nil {
+		return CaptchaResponse{}, "", err
+	}
+	expires := now.Add(CaptchaExpiry)
+	challenge := CaptchaChallenge{Hash: s.digest("captcha", id), BindingHash: s.digest("captcha_binding", binding), TargetX: data.TargetX, TargetY: data.TargetY, AttemptsRemaining: CaptchaMaxAttempts, ExpiresAt: expires, CreatedAt: now}
+	if err := s.store.SaveCaptchaChallenge(ctx, challenge); err != nil {
+		return CaptchaResponse{}, "", fmt.Errorf("保存滑动拼图挑战: %w", err)
+	}
+	return CaptchaResponse{ChallengeID: id, BackgroundImage: data.BackgroundImage, TileImage: data.TileImage, TileX: data.TileX, TileY: data.TileY, ExpiresAt: expires}, binding, nil
+}
+
+func (s *Service) CreateSMSChallenge(ctx context.Context, phone, captchaID, binding string, x, y int, meta RequestMeta) (SMSChallengeResponse, error) {
+	normalized, masked, err := normalizeMainlandPhone(phone)
+	if err != nil || captchaID == "" || binding == "" || x < 0 || y < 0 {
+		return SMSChallengeResponse{}, appError(apperror.KindInvalidArgument, "validation_failed", "请求数据校验失败")
+	}
+	now := s.clock.Now().UTC()
+	if err := s.store.VerifyCaptchaChallenge(ctx, s.digest("captcha", captchaID), s.digest("captcha_binding", binding), x, y, 5, now); err != nil {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidChallenge) {
+			return SMSChallengeResponse{}, appError(apperror.KindUnauthenticated, "captcha_invalid", "行为验证无效或已过期")
 		}
-		return appError(apperror.KindInvalidArgument, "invalid_oidc_callback", "OIDC 回调无效")
+		return SMSChallengeResponse{}, fmt.Errorf("校验滑动拼图挑战: %w", err)
 	}
-	if err := s.auditFailure(ctx, "auth_oidc_login_failed", "oidc_provider_error", meta); err != nil {
-		return err
+	if err := s.requireRateLimit(ctx, "sms_ip", meta.IP, now, 10*time.Minute, 10); err != nil {
+		return SMSChallengeResponse{}, err
 	}
-	return appError(apperror.KindUnauthenticated, "oidc_verification_failed", "OIDC 身份验证失败")
+	if err := s.requireRateLimit(ctx, "sms_phone", normalized, now, 10*time.Minute, 5); err != nil {
+		return SMSChallengeResponse{}, err
+	}
+	if err := s.requireRateLimit(ctx, "sms_resend", normalized, now, time.Minute, 1); err != nil {
+		return SMSChallengeResponse{}, err
+	}
+	if err := s.requireRateLimit(ctx, "sms_global", "global", now, time.Minute, 100); err != nil {
+		return SMSChallengeResponse{}, err
+	}
+	id, err := s.token(24)
+	if err != nil {
+		return SMSChallengeResponse{}, err
+	}
+	code, err := s.numericCode(6)
+	if err != nil {
+		return SMSChallengeResponse{}, err
+	}
+	if fixed, ok := s.sms.(interface{ FixedCode() string }); ok {
+		code = fixed.FixedCode()
+	}
+	expires := now.Add(SMSExpiry)
+	challenge := SMSChallenge{Hash: s.digest("sms_challenge", id), BindingHash: s.digest("captcha_binding", binding), PhoneE164: normalized, PhoneMasked: masked, OTPHash: s.digest("sms_otp", id+"\x00"+code), AttemptsRemaining: SMSMaxAttempts, ExpiresAt: expires, CreatedAt: now}
+	if err := s.store.SaveSMSChallenge(ctx, challenge); err != nil {
+		return SMSChallengeResponse{}, fmt.Errorf("保存短信挑战: %w", err)
+	}
+	user, findErr := s.store.FindPhoneUser(ctx, normalized)
+	if findErr == nil && user.Enabled {
+		if s.sms == nil {
+			return SMSChallengeResponse{}, appError(apperror.KindUnavailable, "sms_unavailable", "短信服务暂时不可用")
+		}
+		if err := s.sms.SendCode(ctx, normalized, code, SMSExpiry); err != nil {
+			return SMSChallengeResponse{}, fmt.Errorf("发送登录短信: %w", err)
+		}
+	} else if findErr != nil && !errors.Is(findErr, ErrNotFound) {
+		return SMSChallengeResponse{}, fmt.Errorf("读取手机号用户: %w", findErr)
+	}
+	return SMSChallengeResponse{ChallengeID: id, PhoneMasked: masked, ExpiresAt: expires, RetryAfterSeconds: 60}, nil
+}
+
+func (s *Service) VerifySMSChallenge(ctx context.Context, challengeID, code, binding string, meta RequestMeta) (sessionResult, error) {
+	if challengeID == "" || binding == "" || len(code) != 6 || strings.Trim(code, "0123456789") != "" {
+		return sessionResult{}, s.smsFailure(ctx, meta)
+	}
+	now := s.clock.Now().UTC()
+	if err := s.requireRateLimit(ctx, "sms_verify_ip", meta.IP, now, 10*time.Minute, 30); err != nil {
+		return sessionResult{}, err
+	}
+	phone, err := s.store.ConsumeSMSChallenge(ctx, s.digest("sms_challenge", challengeID), s.digest("captcha_binding", binding), s.digest("sms_otp", challengeID+"\x00"+code), now)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidChallenge) {
+			return sessionResult{}, s.smsFailure(ctx, meta)
+		}
+		return sessionResult{}, fmt.Errorf("校验短信挑战: %w", err)
+	}
+	user, err := s.store.FindPhoneUser(ctx, phone)
+	if err != nil || !user.Enabled {
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return sessionResult{}, fmt.Errorf("读取手机号用户: %w", err)
+		}
+		return sessionResult{}, s.smsFailure(ctx, meta)
+	}
+	return s.createSession(ctx, user, identity.AuthMethodSMS, "auth_sms_login_succeeded", meta)
 }
 
 func (s *Service) LocalLogin(ctx context.Context, username, password string, meta RequestMeta) (sessionResult, error) {
@@ -372,15 +362,50 @@ func (s *Service) csrf(raw string) string {
 	return base64.RawURLEncoding.EncodeToString(s.digest("csrf", raw))
 }
 
-func validReturnTo(value string) bool {
-	if value == "" {
-		return true
+func (s *Service) numericCode(size int) (string, error) {
+	result := make([]byte, size)
+	for i := range result {
+		var value [1]byte
+		for {
+			if _, err := io.ReadFull(s.random, value[:]); err != nil {
+				return "", err
+			}
+			if value[0] < 250 {
+				break
+			}
+		}
+		result[i] = '0' + value[0]%10
 	}
-	if !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") || strings.Contains(value, "\\") {
-		return false
+	return string(result), nil
+}
+
+func (s *Service) requireRateLimit(ctx context.Context, scope, key string, now time.Time, window time.Duration, limit int) error {
+	allowed, err := s.store.AllowRateLimit(ctx, scope, s.digest("rate_limit", scope+"\x00"+key), now, window, limit)
+	if err != nil {
+		return fmt.Errorf("检查认证限流: %w", err)
 	}
-	parsed, err := url.Parse(value)
-	return err == nil && parsed.IsAbs() == false && parsed.Host == ""
+	if !allowed {
+		return appError(apperror.KindUnavailable, "auth_rate_limited", "认证请求过于频繁")
+	}
+	return nil
+}
+
+func (s *Service) smsFailure(ctx context.Context, meta RequestMeta) error {
+	if err := s.auditFailure(ctx, "auth_sms_login_failed", "invalid_credentials", meta); err != nil {
+		return err
+	}
+	return appError(apperror.KindUnauthenticated, "invalid_credentials", "手机号或验证码无效")
+}
+
+func normalizeMainlandPhone(value string) (string, string, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "+86") {
+		value = strings.TrimPrefix(value, "+86")
+	}
+	if !mainlandPhonePattern.MatchString(value) {
+		return "", "", errors.New("大陆手机号格式不合法")
+	}
+	return "+86" + value, value[:3] + "****" + value[7:], nil
 }
 
 func sessionInvalid() error {

@@ -125,14 +125,11 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	schemaRepository := schema.NewRepository()
 	modelAdapter := schema.PermissionModelAdapter{DB: db, Repository: schemaRepository}
 	permissionProvider := permission.SQLProvider{DB: db, Models: modelAdapter}
-	var oidcClient auth.OIDCClient
-	if cfg.OIDCEnabled {
-		oidcClient, err = auth.NewCoreOSOIDC(ctx, cfg.OIDCIssuerURL, cfg.OIDCClientID, cfg.OIDCClientSecret, cfg.OIDCRedirectURL)
-		if err != nil {
-			return fmt.Errorf("初始化 OIDC: %w", err)
-		}
+	smsProvider, err := buildSMSProvider(cfg)
+	if err != nil {
+		return err
 	}
-	authService, err := auth.NewService(auth.NewSQLStore(db, auditWriter), permissionProvider, integration.AuthModelSummaryProvider{DB: db}, oidcClient, auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
+	authService, err := auth.NewService(auth.NewSQLStore(db, auditWriter), permissionProvider, integration.AuthModelSummaryProvider{DB: db}, smsProvider, auth.NewGoCaptchaGenerator(), auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
 	if err != nil {
 		return err
 	}
@@ -214,6 +211,17 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		defer shutdownCancel()
 		return server.Shutdown(shutdownCtx)
 	}, services...)
+}
+
+func buildSMSProvider(cfg config.Config) (auth.SMSProvider, error) {
+	if cfg.SMSProvider == "fixed" {
+		return auth.FixedSMSProvider{Code: cfg.SMSFixedCode}, nil
+	}
+	provider, err := auth.NewTencentSMSProvider(auth.TencentSMSConfig{SecretID: cfg.TencentSecretID, SecretKey: cfg.TencentSecretKey, Region: cfg.TencentSMSRegion, SDKAppID: cfg.TencentSMSSDKAppID, SignName: cfg.TencentSMSSignName, TemplateID: cfg.TencentSMSTemplateID})
+	if err != nil {
+		return nil, fmt.Errorf("初始化腾讯云短信: %w", err)
+	}
+	return provider, nil
 }
 
 func runParallel(ctx context.Context, shutdown func() error, services ...func(context.Context) error) error {
@@ -329,7 +337,7 @@ func runAdmin(username, displayName string, ensure bool, logger *slog.Logger) er
 	if len(password) < 12 {
 		return errors.New("应急管理员密码长度不能少于 12 个字符")
 	}
-	service, err := auth.NewService(auth.NewSQLStore(db, audit.SQLWriter{}), nil, nil, nil, auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
+	service, err := auth.NewService(auth.NewSQLStore(db, audit.SQLWriter{}), nil, nil, nil, nil, auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
 	if err != nil {
 		return err
 	}

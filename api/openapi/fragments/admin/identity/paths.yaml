@@ -52,6 +52,48 @@
           application/json:
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  post:
+    operationId: createAdminUser
+    summary: 创建手机号管理用户
+    parameters:
+      - *sessionCookie
+      - &origin
+        name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - &csrf
+        name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateUserRequest
+    responses:
+      "201":
+        description: 手机号管理用户已创建。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/User
+      "400":
+        description: 请求校验失败。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ValidationErrorResponse
+      "401": *unauthenticated
+      "403": *forbidden
+      "409": &conflict
+        description: 手机号或资源状态冲突。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
 /users/{user_id}:
   parameters:
     - &userId
@@ -83,16 +125,8 @@
     summary: 启用或禁用管理用户
     parameters:
       - *sessionCookie
-      - &origin
-        name: Origin
-        in: header
-        required: true
-        schema: { type: string, format: uri }
-      - &csrf
-        name: X-CSRF-Token
-        in: header
-        required: true
-        schema: { type: string, minLength: 32 }
+      - *origin
+      - *csrf
     requestBody:
       required: true
       content:
@@ -121,3 +155,36 @@
           application/json:
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/users/{user_id}/phone:
+  parameters:
+    - *userId
+  patch:
+    operationId: updateAdminUserPhone
+    summary: 修改手机号管理用户的手机号
+    parameters:
+      - *sessionCookie
+      - *origin
+      - *csrf
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateUserPhoneRequest
+    responses:
+      "200":
+        description: 手机号已更新，用户的现有会话已撤销。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/User
+      "400":
+        description: 请求校验失败。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ValidationErrorResponse
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict

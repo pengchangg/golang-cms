@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"cms/internal/auth"
+	"cms/internal/platform/config"
 )
 
 func TestExecuteRejectsUnknownCommand(t *testing.T) {
@@ -87,5 +90,22 @@ func TestExecuteRejectsMissingCommand(t *testing.T) {
 	code, err := execute(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if code != 2 || err == nil {
 		t.Fatalf("execute() = (%d, %v)", code, err)
+	}
+}
+
+func TestBuildSMSProviderSelectsConfiguredAdapter(t *testing.T) {
+	fixed, err := buildSMSProvider(config.Config{SMSProvider: "fixed", SMSFixedCode: "123456"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider, ok := fixed.(auth.FixedSMSProvider); !ok || provider.Code != "123456" {
+		t.Fatalf("fixed provider = %#v", fixed)
+	}
+	tencent, err := buildSMSProvider(config.Config{SMSProvider: "tencent", TencentSecretID: "id", TencentSecretKey: "key", TencentSMSRegion: "ap-guangzhou", TencentSMSSDKAppID: "app", TencentSMSSignName: "sign", TencentSMSTemplateID: "template"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tencent.(*auth.TencentSMSProvider); !ok {
+		t.Fatalf("tencent provider = %#v", tencent)
 	}
 }

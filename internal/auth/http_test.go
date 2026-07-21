@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +21,7 @@ func testHandler(t *testing.T) (*Service, *memoryStore, http.Handler) {
 		t.Fatal(err)
 	}
 	store.local = User{ID: "usr_local", DisplayName: "Admin", Enabled: true, PasswordHash: hash}
-	service := testService(t, store, &fakeOIDC{}, clock)
+	service := testService(t, store, clock)
 	module, err := NewModule(service, "https://CMS.EXAMPLE.COM:443", true)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +70,7 @@ func TestLocalLoginOverHTTPDoesNotSetSecureCookie(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.local = User{ID: "usr_local", DisplayName: "Admin", Enabled: true, PasswordHash: hash}
-	service := testService(t, store, &fakeOIDC{}, clock)
+	service := testService(t, store, clock)
 	module, err := NewModule(service, "http://localhost:8080", true)
 	if err != nil {
 		t.Fatal(err)
@@ -132,56 +131,62 @@ func TestSessionDoesNotCreateCookie(t *testing.T) {
 	}
 }
 
-func TestOIDCProviderErrorConsumesState(t *testing.T) {
+func TestCaptchaRequiresOriginAndSetsBrowserBinding(t *testing.T) {
 	_, _, handler := testHandler(t)
-	start := httptest.NewRequest(http.MethodGet, "/api/admin/v1/auth/oidc/start", nil)
+	start := httptest.NewRequest(http.MethodPost, routePrefix+"/captcha/challenges", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, start)
-	location := response.Header().Get("Location")
-	state := location[strings.LastIndex(location, "=")+1:]
-	var binding *http.Cookie
-	for _, cookie := range response.Result().Cookies() {
-		if cookie.Name == OIDCCookieName {
-			binding = cookie
-		}
+	if response.Code != http.StatusForbidden || errorCode(t, response) != "origin_required" {
+		t.Fatalf("missing origin = %d %s", response.Code, response.Body.String())
 	}
-	if binding == nil || !binding.HttpOnly || !binding.Secure || binding.SameSite != http.SameSiteLaxMode || binding.Path != routePrefix+"/oidc/callback" || binding.MaxAge != 600 {
-		t.Fatalf("OIDC binding cookie = %+v", binding)
-	}
-	callback := httptest.NewRequest(http.MethodGet, "/api/admin/v1/auth/oidc/callback?error=access_denied&state="+state, nil)
-	callback.AddCookie(binding)
+	start = httptest.NewRequest(http.MethodPost, routePrefix+"/captcha/challenges", nil)
+	start.Header.Set("Origin", "https://cms.example.com")
 	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, callback)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("callback status = %d", response.Code)
+	handler.ServeHTTP(response, start)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("captcha response = %d %s", response.Code, response.Body.String())
 	}
-	cleared := response.Result().Cookies()[0]
-	if cleared.Name != OIDCCookieName || cleared.MaxAge != -1 || cleared.Path != binding.Path {
-		t.Fatalf("OIDC binding cookie 未清理: %+v", cleared)
-	}
-	replay := httptest.NewRequest(http.MethodGet, "/api/admin/v1/auth/oidc/callback?code=code&state="+state, nil)
-	replay.AddCookie(binding)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, replay)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("replay status = %d", response.Code)
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != CaptchaBindingCookie || !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteStrictMode || cookies[0].Path != routePrefix {
+		t.Fatalf("captcha binding cookie = %+v", cookies)
 	}
 }
 
-func TestOIDCCallbackRequiresBrowserBinding(t *testing.T) {
-	_, _, handler := testHandler(t)
-	start := httptest.NewRequest(http.MethodGet, routePrefix+"/oidc/start", nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, start)
-	location, err := url.Parse(response.Header().Get("Location"))
-	if err != nil {
+func TestSMSHTTPFlowSetsSessionAndClearsBinding(t *testing.T) {
+	_, store, handler := testHandler(t)
+	store.phones["+8613800138000"] = User{ID: "usr_sms", DisplayName: "短信用户", Enabled: true}
+	captchaRequest := httptest.NewRequest(http.MethodPost, routePrefix+"/captcha/challenges", nil)
+	captchaRequest.Header.Set("Origin", "https://cms.example.com")
+	captchaResponse := httptest.NewRecorder()
+	handler.ServeHTTP(captchaResponse, captchaRequest)
+	var captcha CaptchaResponse
+	if err := json.Unmarshal(captchaResponse.Body.Bytes(), &captcha); err != nil {
 		t.Fatal(err)
 	}
-	callback := httptest.NewRequest(http.MethodGet, routePrefix+"/oidc/callback?code=code&state="+url.QueryEscape(location.Query().Get("state")), nil)
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, callback)
-	if response.Code != http.StatusBadRequest || errorCode(t, response) != "invalid_oidc_callback" {
-		t.Fatalf("missing binding response = %d %s", response.Code, response.Body.String())
+	binding := captchaResponse.Result().Cookies()[0]
+	smsRequest := httptest.NewRequest(http.MethodPost, routePrefix+"/sms/challenges", strings.NewReader(`{"phone":"13800138000","captcha_challenge_id":"`+captcha.ChallengeID+`","captcha_x":180,"captcha_y":40}`))
+	smsRequest.Header.Set("Origin", "https://cms.example.com")
+	smsRequest.AddCookie(binding)
+	smsResponse := httptest.NewRecorder()
+	handler.ServeHTTP(smsResponse, smsRequest)
+	if smsResponse.Code != http.StatusCreated {
+		t.Fatalf("sms challenge = %d %s", smsResponse.Code, smsResponse.Body.String())
+	}
+	var challenge SMSChallengeResponse
+	if err := json.Unmarshal(smsResponse.Body.Bytes(), &challenge); err != nil {
+		t.Fatal(err)
+	}
+	verify := httptest.NewRequest(http.MethodPost, routePrefix+"/sms/challenges/"+challenge.ChallengeID+"/verify", strings.NewReader(`{"code":"123456"}`))
+	verify.Header.Set("Origin", "https://cms.example.com")
+	verify.AddCookie(binding)
+	verifyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(verifyResponse, verify)
+	if verifyResponse.Code != http.StatusOK {
+		t.Fatalf("sms verify = %d %s", verifyResponse.Code, verifyResponse.Body.String())
+	}
+	cookies := verifyResponse.Result().Cookies()
+	if len(cookies) != 2 || cookies[0].Name != CookieName || cookies[1].Name != CaptchaBindingCookie || cookies[1].MaxAge != -1 {
+		t.Fatalf("verify cookies = %+v", cookies)
 	}
 }
 

@@ -1,9 +1,9 @@
 import { authStore } from '../auth/store'
 import type {
-  APIKey, APIKeySecret, APIKeyStatus, Asset, AssetStatus, AssetUpload, AuditEvent, ContentEntry, ContentField, ContentFieldInput, ContentFieldPatch,
+  APIKey, APIKeySecret, APIKeyStatus, Asset, AssetStatus, AssetUpload, AuditEvent, CaptchaChallenge, ContentEntry, ContentField, ContentFieldInput, ContentFieldPatch,
   ContentModel, ContentModelSummary, CreateAPIKeyRequest, CursorResponse, EntryListQuery,
   EntryListResponse, ErrorResponse, ExportCSVQuery, ModelPermission, Role, RotateAPIKeyRequest, SessionResponse,
-  SystemPermission, UpdateFieldOrderRequest, User, UserStatus, UserSummary, WorkflowEvent, CreateAssetUploadRequest,
+  SMSChallenge, SystemPermission, UpdateFieldOrderRequest, User, UserStatus, UserSummary, WorkflowEvent, CreateAssetUploadRequest,
 } from './types'
 
 const API_BASE = '/api/admin/v1'
@@ -123,11 +123,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
+  createCaptchaChallenge: () => request<CaptchaChallenge>('/auth/captcha/challenges', json('POST', {})),
+  createSMSChallenge: (body: { phone: string; captcha_challenge_id: string; captcha_x: number; captcha_y: number }) =>
+    request<SMSChallenge>('/auth/sms/challenges', json('POST', body)),
+  verifySMSChallenge: (id: string, code: string) =>
+    request<SessionResponse>(`/auth/sms/challenges/${encodeURIComponent(id)}/verify`, json('POST', { code })),
   logout: () => request<void>('/auth/logout', { method: 'POST' }),
   listUsers: (filters: { status?: string; auth_method?: string; query?: string; cursor?: string } = {}) =>
     request<CursorResponse<UserSummary>>(`/users${queryString(filters)}`),
   getUser: (id: string) => request<User>(`/users/${encodeURIComponent(id)}`),
+  createUser: (body: { display_name: string; phone: string; role_ids: string[] }) => request<User>('/users', json('POST', body)),
   setUserStatus: (id: string, status: UserStatus) => request<User>(`/users/${encodeURIComponent(id)}`, json('PATCH', { status })),
+  updateUserPhone: (id: string, phone: string) => request<User>(`/users/${encodeURIComponent(id)}/phone`, json('PATCH', { phone })),
   replaceUserRoles: (id: string, role_ids: string[]) => request<User>(`/users/${encodeURIComponent(id)}/roles`, json('PUT', { role_ids })),
   listRoles: () => request<{ items: Role[] }>('/roles'),
   createRole: (body: { key: string; display_name: string; description?: string }) => request<Role>('/roles', json('POST', body)),
@@ -209,12 +216,4 @@ export function safeReturnTo(value: unknown) {
   } catch {
     return null
   }
-}
-
-export function oidcStartUrl(returnTo: string) {
-  const safePath = safeReturnTo(returnTo)
-  if (!safePath) {
-    throw new TypeError('return_to 必须是同源绝对路径')
-  }
-  return `${API_BASE}/auth/oidc/start?${new URLSearchParams({ return_to: safePath })}`
 }

@@ -34,9 +34,22 @@ button, a { touch-action: manipulation; }
 .login-index { position: absolute; right: -20px; bottom: -70px; color: rgb(37 107 85 / 10%); font-family: Georgia, serif; font-size: clamp(220px, 30vw, 460px); line-height: 1; letter-spacing: -.08em; pointer-events: none; }
 .login-actions { z-index: 1; display: flex; flex-direction: column; justify-content: center; padding: clamp(32px, 5vw, 72px); background: var(--paper); box-shadow: -12px 0 36px rgb(32 36 31 / 8%); }
 .login-actions h2 { margin-bottom: 6px; font-family: "Songti SC", "Noto Serif SC", serif; font-size: 30px; }
-.login-actions .ant-divider { margin-block: 30px 22px; color: var(--muted); font-size: 12px; }
 .login-actions .ant-alert { margin-bottom: 18px; }
 .login-actions .ant-btn { min-height: 44px; }
+.captcha-panel { margin-bottom: 20px; padding: 14px; border: 1px solid var(--line); background: rgb(244 243 238 / 48%); }
+.captcha-heading { display: flex; min-height: 32px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.captcha-stage { position: relative; width: 100%; overflow: hidden; border: 1px solid var(--line); background: #dce7df; user-select: none; }
+.captcha-stage > img:first-child { display: block; width: 100%; height: 100%; object-fit: cover; }
+.captcha-piece { position: absolute; top: 0; height: 100%; object-fit: fill; filter: drop-shadow(0 2px 3px rgb(32 36 31 / 35%)); pointer-events: none; }
+.captcha-slider-label { display: block; margin: 12px 0 5px; color: var(--muted); font-size: 12px; }
+.captcha-slider { width: 100%; height: 28px; margin: 0 0 10px; accent-color: var(--green); cursor: grab; }
+.captcha-slider:active { cursor: grabbing; }
+.captcha-slider:focus-visible { outline: 3px solid rgb(37 107 85 / 24%); outline-offset: 2px; }
+.captcha-placeholder { display: grid; min-height: 140px; place-items: center; margin-bottom: 10px; color: var(--muted); background: #e8e8df; }
+.sms-sent { margin-top: 2px; }
+.emergency-login { margin-top: 20px; border-top: 1px solid var(--line); border-radius: 0; }
+.emergency-login > .ant-collapse-item > .ant-collapse-header { padding-inline: 0; color: var(--muted); }
+.emergency-login .ant-collapse-content-box { padding-inline: 0 !important; }
 
 .callback-page, .loading-page { display: grid; min-height: 100svh; place-items: center; background: var(--canvas); }
 .loading-page::after { width: 32px; height: 32px; border: 2px solid rgb(37 107 85 / 20%); border-top-color: var(--green); border-radius: 50%; content: ""; animation: spin 700ms linear infinite; }
@@ -213,6 +226,7 @@ button, a { touch-action: manipulation; }
   .login-intro p { margin-bottom: 0; font-size: 15px; }
   .login-index { right: -4px; bottom: -45px; font-size: 190px; }
   .login-actions { padding: 36px 24px max(36px, env(safe-area-inset-bottom)); box-shadow: 0 -8px 24px rgb(32 36 31 / 7%); }
+  .captcha-panel { margin-inline: -8px; padding: 12px; }
   .user-menu span:last-child { display: none; }
   .identity-details { grid-template-columns: 1fr; }
   .app-header { padding-inline: 16px; }

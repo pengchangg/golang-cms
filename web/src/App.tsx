@@ -8,7 +8,6 @@ import './App.css'
 
 const AppShell = lazy(() => import('./pages/AppShell'))
 const LoginPage = lazy(() => import('./pages/LoginPage').then((module) => ({ default: module.LoginPage })))
-const OidcCallbackPage = lazy(() => import('./pages/OidcCallbackPage').then((module) => ({ default: module.OidcCallbackPage })))
 
 function App() {
   return (
@@ -28,7 +27,6 @@ function App() {
         <AuthProvider>
           <Suspense fallback={<main className="loading-page" aria-label="正在加载页面" />}><Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/auth/oidc/callback" element={<OidcCallbackPage />} />
             <Route path="/*" element={<AppShell />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes></Suspense>
