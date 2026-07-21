@@ -5,8 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -89,19 +87,5 @@ func TestExecuteRejectsMissingCommand(t *testing.T) {
 	code, err := execute(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if code != 2 || err == nil {
 		t.Fatalf("execute() = (%d, %v)", code, err)
-	}
-}
-
-func TestCSVUploadStatusHandlerMapsFileTooLargeTo413(t *testing.T) {
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"code":"file_too_large"}}`))
-	})
-	request := httptest.NewRequest(http.MethodPost, "/api/admin/v1/models/mdl_1/imports/uploads", nil)
-	response := httptest.NewRecorder()
-	csvUploadStatusHandler(next).ServeHTTP(response, request)
-	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), "file_too_large") {
-		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }

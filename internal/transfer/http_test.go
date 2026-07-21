@@ -1,100 +1,118 @@
 package transfer
 
 import (
-	"context"
+	"bytes"
 	"errors"
-	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"cms/internal/identity"
-	"cms/internal/platform/apperror"
-	"cms/internal/platform/database"
-	"cms/internal/schema"
 )
 
-func TestUploadSuccessDisablesCaching(t *testing.T) {
-	service := NewService(Dependencies{Models: staticModelReader{}, Uploads: staticUploadManager{}})
-	response := serveTransferRequest(service, http.MethodPost, "/api/admin/v1/models/mdl_1/imports/uploads", `{"filename":"data.csv","size":1,"sha256":"`+strings.Repeat("a", 64)+`"}`)
-	if response.Code != http.StatusCreated || response.Header().Get("Cache-Control") != "no-store" {
-		t.Fatalf("上传响应 = %d, Cache-Control = %q", response.Code, response.Header().Get("Cache-Control"))
+func TestImportAcceptsSingleMultipartFile(t *testing.T) {
+	importer := &recordingImporter{}
+	service := NewService(Dependencies{Models: staticModelReader{}, Importer: importer})
+	response := serveImport(t, service, "title\n\"\"\"标题\"\"\"\n", nil)
+	if response.Code != http.StatusOK || response.Body.String() != "{\"imported\":1}\n" || importer.calls != 1 {
+		t.Fatalf("response=%d %s calls=%d", response.Code, response.Body.String(), importer.calls)
 	}
 }
 
-func TestUploadTemporaryObjectStoreFailureReturns503(t *testing.T) {
-	service := NewService(Dependencies{Models: staticModelReader{}, Uploads: staticUploadManager{err: unavailableStoreError()}})
-	response := serveTransferRequest(service, http.MethodPost, "/api/admin/v1/models/mdl_1/imports/uploads", `{"filename":"data.csv","size":1,"sha256":"`+strings.Repeat("a", 64)+`"}`)
-	assertUnavailableResponse(t, response)
+func TestImportReturnsStructuredCSVError(t *testing.T) {
+	service := NewService(Dependencies{Models: staticModelReader{}, Importer: &recordingImporter{}})
+	var csv strings.Builder
+	csv.WriteString("title\n")
+	for range MaxRows + 1 {
+		csv.WriteString("\"\"\"值\"\"\"\n")
+	}
+	response := serveImport(t, service, csv.String(), nil)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"row_limit_exceeded"`) || !strings.Contains(response.Body.String(), `"row":1002`) {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
 }
 
-func TestDownloadTemporaryObjectStoreFailureReturns503(t *testing.T) {
-	expires := time.Now().Add(time.Hour)
-	repository := downloadRepository{job: Job{ID: "job_1", ModelID: "mdl_1", ResultObjectKey: "transfers/job_1/result.csv", ExpiresAt: &expires}}
-	service := NewService(Dependencies{Repository: repository, Store: failingTransferStore{}})
-	response := serveTransferRequest(service, http.MethodGet, "/api/admin/v1/jobs/job_1/files/result", "")
-	assertUnavailableResponse(t, response)
+func TestImportRejectsMoreThanTenMiB(t *testing.T) {
+	service := NewService(Dependencies{Models: staticModelReader{}, Importer: &recordingImporter{}})
+	response := serveImport(t, service, strings.Repeat("x", maxImportBytes+1), nil)
+	if response.Code != http.StatusRequestEntityTooLarge || !strings.Contains(response.Body.String(), `"code":"file_too_large"`) {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
 }
 
-func serveTransferRequest(service *Service, method, target, body string) *httptest.ResponseRecorder {
+func TestImportAllowsTenMiBFileBoundary(t *testing.T) {
+	service := NewService(Dependencies{Models: staticModelReader{}, Importer: &recordingImporter{}})
+	response := serveImport(t, service, strings.Repeat("x", maxImportBytes), nil)
+	if response.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestImportRejectsAdditionalMultipartField(t *testing.T) {
+	service := NewService(Dependencies{Models: staticModelReader{}, Importer: &recordingImporter{}})
+	response := serveImport(t, service, "title\n", func(writer *multipart.Writer) error {
+		return writer.WriteField("extra", "value")
+	})
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"invalid_multipart"`) {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestOnlySynchronousRoutesAreRegistered(t *testing.T) {
+	service := NewService(Dependencies{Models: staticModelReader{}, Importer: &recordingImporter{}, Entries: &pagedEntries{}})
 	mux := http.NewServeMux()
-	NewHandler(service, func(*http.Request) (identity.Principal, error) { return transferPrincipal(), nil }).RegisterRoutes(mux)
-	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	NewHandler(service, principalProvider).RegisterRoutes(mux)
+	for _, target := range []string{"/api/admin/v1/jobs", "/api/admin/v1/models/mdl_1/imports/uploads", "/api/admin/v1/models/mdl_1/exports"} {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d", target, response.Code)
+		}
+	}
+}
+
+func TestExportFailureOnLaterPageReturnsJSONError(t *testing.T) {
+	service := NewService(Dependencies{Models: staticModelReader{}, Entries: &pagedEntries{err: errors.New("第二页失败"), failAt: 2}})
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/models/mdl_1/exports.csv", nil)
 	response := httptest.NewRecorder()
+	mux := http.NewServeMux()
+	NewHandler(service, func(*http.Request) (identity.Principal, error) { return transferPrincipal("content.view"), nil }).RegisterRoutes(mux)
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Header().Get("Content-Type"), "application/json") || strings.HasPrefix(response.Body.String(), "\xef\xbb\xbf") {
+		t.Fatalf("response=%d content-type=%q body=%q", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+}
+
+func serveImport(t *testing.T, service *Service, csv string, extra func(*multipart.Writer) error) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	file, err := writer.CreateFormFile("file", "data.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = file.Write([]byte(csv)); err != nil {
+		t.Fatal(err)
+	}
+	if extra != nil {
+		if err = extra(writer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/v1/models/mdl_1/imports", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+	mux := http.NewServeMux()
+	NewHandler(service, principalProvider).RegisterRoutes(mux)
 	mux.ServeHTTP(response, request)
 	return response
 }
 
-func assertUnavailableResponse(t *testing.T, response *httptest.ResponseRecorder) {
-	t.Helper()
-	body := response.Body.String()
-	if response.Code != http.StatusServiceUnavailable || !strings.Contains(body, `"code":"object_store_unavailable"`) || strings.Contains(body, "secret") {
-		t.Fatalf("临时故障响应 = %d %s", response.Code, body)
-	}
-}
-
-func unavailableStoreError() error {
-	return &apperror.Error{Kind: apperror.KindUnavailable, Code: "object_store_unavailable", Message: "对象存储暂时不可用", Cause: errors.New("secret OSS failure")}
-}
-
-type staticModelReader struct{}
-
-func (staticModelReader) GetModel(context.Context, database.Querier, string) (schema.ContentModel, error) {
-	return schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1"}}, nil
-}
-
-type staticUploadManager struct{ err error }
-
-func (m staticUploadManager) Create(context.Context, string, int64, string, time.Time) (ImportUpload, error) {
-	return ImportUpload{UploadID: "upl_1"}, m.err
-}
-func (staticUploadManager) Confirm(context.Context, string) (UploadClaims, error) {
-	return UploadClaims{}, errors.New("unused")
-}
-
-type downloadRepository struct {
-	Repository
-	job Job
-}
-
-func (downloadRepository) IsEmergencyAdmin(context.Context, database.Querier, string) (bool, error) {
-	return false, nil
-}
-
-func (r downloadRepository) GetJob(context.Context, database.Querier, string, string, bool) (Job, error) {
-	return r.job, nil
-}
-
-type failingTransferStore struct{}
-
-func (failingTransferStore) Get(context.Context, string) (io.ReadCloser, error) {
-	return nil, errors.New("unused")
-}
-func (failingTransferStore) Put(context.Context, string, string, io.Reader) error {
-	return errors.New("unused")
-}
-func (failingTransferStore) SignGet(context.Context, string, string, time.Time) (string, error) {
-	return "", unavailableStoreError()
+func principalProvider(*http.Request) (identity.Principal, error) {
+	return transferPrincipal("content.create"), nil
 }

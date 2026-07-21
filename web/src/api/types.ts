@@ -15,8 +15,6 @@ export const systemPermissionCodes = [
   'api_keys.create',
   'api_keys.revoke',
   'audit.view',
-  'transfers.execute',
-  'transfers.download',
 ] as const
 
 export type SystemPermission = (typeof systemPermissionCodes)[number]
@@ -122,6 +120,7 @@ export type WorkflowStatus = 'draft' | 'pending_review' | 'rejected' | 'publishe
 export type WorkflowRevision = ContentRevision
 export interface ContentEntrySummary {
   id: string; model_id: string; status: EntryStatus; current_draft_revision_id: string
+  current_draft_content: Record<string, unknown>
   workflow_status: WorkflowStatus; current_published_revision_id: string | null
   expanded?: Record<string, ContentEntrySummary | ContentEntrySummary[]>
   created_by: string; created_at: string; updated_at: string
@@ -141,6 +140,10 @@ export interface EntryListQuery {
   filter?: string; relation_filter?: string; sort?: string; expand?: string; include_total?: boolean
 }
 export interface EntryListResponse extends CursorResponse<ContentEntrySummary> {
+  fields: Array<{
+    key: string; display_name: string; type: FieldType
+    constraints: Pick<FieldConstraints, 'enum_options' | 'filterable' | 'sortable'>
+  }>
   total?: number; total_is_estimate?: boolean
 }
 export type APIKeyStatus = 'active' | 'expired' | 'revoked'
@@ -169,17 +172,6 @@ export interface SignedUpload { method: 'PUT'; url: string; headers: Record<stri
 export interface AssetUpload { asset: Asset; upload: SignedUpload }
 export interface CreateAssetUploadRequest { filename: string; mime_type: string; size: number; sha256: string }
 
-export type JobType = 'csv_import' | 'csv_export'
-export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
-export interface Job {
-  id: string; type: JobType; status: JobStatus; model_id: string; progress: number
-  attempt: number; max_attempts: 3; cancel_requested_at: string | null
-  error_code: string | null; error_message: string | null; created_by: string; created_at: string
-  started_at: string | null; finished_at: string | null; expires_at: string | null
-}
-export interface TransferError { row: number; field: string; code: string; message: string }
-export interface TransferErrorListResponse extends CursorResponse<TransferError> { errors_truncated: boolean }
-export interface ImportUpload extends SignedUpload { upload_id: string }
-export interface CreateExportRequest {
+export interface ExportCSVQuery {
   workflow_status?: WorkflowStatus; filter?: string; relation_filter?: string; sort?: string
 }

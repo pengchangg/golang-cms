@@ -38,6 +38,14 @@ func TestAllDeclaredSystemPermissionsAreValid(t *testing.T) {
 	}
 }
 
+func TestDeprecatedTransferPermissionsAreInvalid(t *testing.T) {
+	for _, code := range []string{"transfers.execute", "transfers.download"} {
+		if ValidSystemPermission(code) {
+			t.Fatalf("废弃系统权限 %q 仍然有效", code)
+		}
+	}
+}
+
 func TestEmergencyPermissionsAlwaysGrantEverything(t *testing.T) {
 	system, models := emergencyPermissions([]string{"mdl_b", "mdl_a"})
 	if len(system) != len(allSystemPermissions) || !slices.IsSorted(system) {

@@ -37,17 +37,17 @@ x-integration-status: integrated
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "404": &notFound
-        description: 模型、上传或其他资源不存在。
+        description: 模型不存在。
         content:
           application/json:
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
-/models/{model_id}/imports/uploads:
+/models/{model_id}/imports:
   parameters: *modelId
   post:
     x-integration-status: integrated
-    operationId: createAdminImportUpload
-    summary: 创建 CSV 导入源文件签名上传
+    operationId: importAdminCSV
+    summary: 同步导入 CSV 草稿
     parameters: &writeHeaders
       - *sessionCookie
       - name: Origin
@@ -61,119 +61,70 @@ x-integration-status: integrated
     requestBody:
       required: true
       content:
-        application/json:
+        multipart/form-data:
           schema:
-            $ref: ./schemas.yaml#/$defs/CreateImportUploadRequest
+            type: object
+            additionalProperties: false
+            required: [file]
+            properties:
+              file:
+                type: string
+                contentEncoding: binary
     responses:
-      "201":
-        description: 已创建任务源文件上传并签发短时 PUT 请求。
-        headers:
-          Cache-Control:
-            schema: { const: no-store }
+      "200":
+        description: 全部草稿已在同一事务中导入。
         content:
           application/json:
             schema:
-              $ref: ./schemas.yaml#/$defs/ImportUpload
+              $ref: ./schemas.yaml#/$defs/ImportResult
       "400": &badRequest
-        description: 请求或查询校验失败。
+        description: multipart、CSV 或内容校验失败；CSV details 包含 row、field、code、message，行超限时 code 为 row_limit_exceeded。
         content:
           application/json:
             schema:
-              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+              oneOf:
+                - $ref: ./schemas.yaml#/$defs/CSVErrorResponse
+                - $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound
       "413":
-        description: 文件超过允许大小，error.code 为 file_too_large。
+        description: 请求超过 10 MiB，error.code 为 file_too_large。
         content:
           application/json:
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
-      "503": &storeUnavailable
-        description: 对象存储临时不可用，error.code 为 object_store_unavailable。
-        content:
-          application/json:
-            schema:
-              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
-/models/{model_id}/imports:
+/models/{model_id}/exports.csv:
   parameters: *modelId
-  post:
+  get:
     x-integration-status: integrated
-    operationId: createAdminCSVImport
-    summary: 确认源文件并创建 CSV 导入任务
+    operationId: exportAdminCSV
+    summary: 同步导出当前草稿 CSV
     parameters:
       - *sessionCookie
-      - name: Origin
-        in: header
-        required: true
-        schema: { type: string, format: uri }
-      - name: X-CSRF-Token
-        in: header
-        required: true
-        schema: { type: string, minLength: 32 }
-      - &idempotencyKey
-        name: Idempotency-Key
-        in: header
-        required: true
-        schema: { type: string, minLength: 16, maxLength: 128, pattern: "^[!-~]+$" }
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            $ref: ./schemas.yaml#/$defs/CreateImportRequest
+      - name: workflow_status
+        in: query
+        schema:
+          $ref: ../content/workflow-schemas.yaml#/$defs/WorkflowStatus
+      - name: filter
+        in: query
+        schema: { type: string }
+      - name: relation_filter
+        in: query
+        schema: { type: string }
+      - name: sort
+        in: query
+        schema: { type: string }
     responses:
-      "201": &jobCreated
-        description: 新任务已持久化并排队。
+      "200":
+        description: 当前草稿内容的 UTF-8 BOM CSV。
+        headers:
+          Content-Disposition:
+            schema: { type: string, minLength: 1 }
         content:
-          application/json:
-            schema:
-              $ref: ../jobs/schemas.yaml#/$defs/Job
-      "200": &jobReplayed
-        description: 幂等重放，返回原任务。
-        content:
-          application/json:
-            schema:
-              $ref: ../jobs/schemas.yaml#/$defs/Job
+          text/csv:
+            schema: { type: string, contentEncoding: binary }
       "400": *badRequest
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound
-      "409": &conflict
-        description: 上传状态或幂等键冲突。
-        content:
-          application/json:
-            schema:
-              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
-      "503": *storeUnavailable
-/models/{model_id}/exports:
-  parameters: *modelId
-  post:
-    x-integration-status: integrated
-    operationId: createAdminCSVExport
-    summary: 按不可变查询快照创建 CSV 导出任务
-    parameters:
-      - *sessionCookie
-      - name: Origin
-        in: header
-        required: true
-        schema: { type: string, format: uri }
-      - name: X-CSRF-Token
-        in: header
-        required: true
-        schema: { type: string, minLength: 32 }
-      - *idempotencyKey
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            $ref: ./schemas.yaml#/$defs/CreateExportRequest
-    responses:
-      "201": *jobCreated
-      "200": *jobReplayed
-      "400": *badRequest
-      "401": *unauthenticated
-      "403": *forbidden
-      "404": *notFound
-      "409": *conflict

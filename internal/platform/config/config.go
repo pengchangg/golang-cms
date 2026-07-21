@@ -12,36 +12,31 @@ import (
 )
 
 type Config struct {
-	ListenAddr          string
-	MySQLDSN            string
-	WebDistDir          string
-	AllowInsecureMySQL  bool
-	BaseURL             string
-	SessionSecret       string
-	OIDCIssuerURL       string
-	OIDCClientID        string
-	OIDCClientSecret    string
-	OIDCRedirectURL     string
-	LocalLoginEnabled   bool
-	OIDCEnabled         bool
-	AssetsEnabled       bool
-	S3Endpoint          string
-	S3Region            string
-	S3Bucket            string
-	S3AccessKeyID       string
-	S3AccessKeySecret   string
-	S3SessionToken      string
-	S3UsePathStyle      bool
-	S3BucketEndpoint    bool
-	S3UploadTTL         time.Duration
-	S3DownloadTTL       time.Duration
-	AssetMimeTypes      []string
-	AssetMaxSize        int64
-	WorkerOwner         string
-	WorkerConcurrency   int
-	WorkerPollInterval  time.Duration
-	WorkerLeaseDuration time.Duration
-	WorkerRenewInterval time.Duration
+	ListenAddr         string
+	MySQLDSN           string
+	WebDistDir         string
+	AllowInsecureMySQL bool
+	BaseURL            string
+	SessionSecret      string
+	OIDCIssuerURL      string
+	OIDCClientID       string
+	OIDCClientSecret   string
+	OIDCRedirectURL    string
+	LocalLoginEnabled  bool
+	OIDCEnabled        bool
+	AssetsEnabled      bool
+	S3Endpoint         string
+	S3Region           string
+	S3Bucket           string
+	S3AccessKeyID      string
+	S3AccessKeySecret  string
+	S3SessionToken     string
+	S3UsePathStyle     bool
+	S3BucketEndpoint   bool
+	S3UploadTTL        time.Duration
+	S3DownloadTTL      time.Duration
+	AssetMimeTypes     []string
+	AssetMaxSize       int64
 }
 
 func Load(command string) (Config, error) {
@@ -66,7 +61,6 @@ func Load(command string) (Config, error) {
 		S3SessionToken:    os.Getenv("S3_SESSION_TOKEN"),
 		S3UploadTTL:       15 * time.Minute,
 		S3DownloadTTL:     5 * time.Minute,
-		WorkerOwner:       os.Getenv("APP_WORKER_OWNER"),
 	}
 	if err := parseBoolEnv("APP_ASSETS_ENABLED", &cfg.AssetsEnabled); err != nil {
 		return Config{}, err
@@ -123,9 +117,7 @@ func loadAssetsConfig(cfg *Config) error {
 		{"S3_ENDPOINT", cfg.S3Endpoint}, {"S3_REGION", cfg.S3Region},
 		{"S3_BUCKET", cfg.S3Bucket}, {"S3_ACCESS_KEY_ID", cfg.S3AccessKeyID},
 		{"S3_ACCESS_KEY_SECRET", cfg.S3AccessKeySecret}, {"ASSET_ALLOWED_MIME_TYPES", os.Getenv("ASSET_ALLOWED_MIME_TYPES")},
-		{"ASSET_MAX_SIZE_BYTES", os.Getenv("ASSET_MAX_SIZE_BYTES")}, {"APP_WORKER_OWNER", cfg.WorkerOwner},
-		{"APP_WORKER_CONCURRENCY", os.Getenv("APP_WORKER_CONCURRENCY")}, {"APP_WORKER_POLL_INTERVAL", os.Getenv("APP_WORKER_POLL_INTERVAL")},
-		{"APP_WORKER_LEASE_DURATION", os.Getenv("APP_WORKER_LEASE_DURATION")}, {"APP_WORKER_RENEW_INTERVAL", os.Getenv("APP_WORKER_RENEW_INTERVAL")},
+		{"ASSET_MAX_SIZE_BYTES", os.Getenv("ASSET_MAX_SIZE_BYTES")},
 	}
 	for _, item := range required {
 		if strings.TrimSpace(item.value) == "" {
@@ -167,21 +159,6 @@ func loadAssetsConfig(cfg *Config) error {
 	}
 	if cfg.AssetMaxSize, err = strconv.ParseInt(os.Getenv("ASSET_MAX_SIZE_BYTES"), 10, 64); err != nil || cfg.AssetMaxSize < 1 || cfg.AssetMaxSize > 5*1024*1024*1024 {
 		return errors.New("ASSET_MAX_SIZE_BYTES 必须在 1 至 5368709120 之间")
-	}
-	if cfg.WorkerConcurrency, err = strconv.Atoi(os.Getenv("APP_WORKER_CONCURRENCY")); err != nil || cfg.WorkerConcurrency < 1 || cfg.WorkerConcurrency > 64 {
-		return errors.New("APP_WORKER_CONCURRENCY 必须是 1 至 64")
-	}
-	if cfg.WorkerPollInterval, err = parseDurationRange("APP_WORKER_POLL_INTERVAL", 100*time.Millisecond, time.Minute); err != nil {
-		return err
-	}
-	if cfg.WorkerLeaseDuration, err = parseDurationRange("APP_WORKER_LEASE_DURATION", 10*time.Second, 10*time.Minute); err != nil {
-		return err
-	}
-	if cfg.WorkerRenewInterval, err = parseDurationRange("APP_WORKER_RENEW_INTERVAL", time.Second, cfg.WorkerLeaseDuration/2); err != nil {
-		return err
-	}
-	if len(cfg.WorkerOwner) > 128 {
-		return errors.New("APP_WORKER_OWNER 不能超过 128 字节")
 	}
 	return nil
 }

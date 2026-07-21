@@ -52,7 +52,7 @@ func TestLoadServeAssetsEnabledLoadsTypedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.AssetsEnabled || cfg.S3Endpoint != "https://minio.example.com:9000" || cfg.S3Region != "cn-hangzhou" || cfg.S3Bucket != "private-cms" || cfg.S3AccessKeyID != "test-id" || cfg.S3AccessKeySecret != "test-secret" || cfg.S3SessionToken != "test-token" || !cfg.S3UsePathStyle || cfg.S3BucketEndpoint || cfg.S3UploadTTL != 20*time.Minute || cfg.S3DownloadTTL != 10*time.Minute || cfg.WorkerConcurrency != 2 || cfg.AssetMaxSize != 10485760 || len(cfg.AssetMimeTypes) != 2 {
+	if !cfg.AssetsEnabled || cfg.S3Endpoint != "https://minio.example.com:9000" || cfg.S3Region != "cn-hangzhou" || cfg.S3Bucket != "private-cms" || cfg.S3AccessKeyID != "test-id" || cfg.S3AccessKeySecret != "test-secret" || cfg.S3SessionToken != "test-token" || !cfg.S3UsePathStyle || cfg.S3BucketEndpoint || cfg.S3UploadTTL != 20*time.Minute || cfg.S3DownloadTTL != 10*time.Minute || cfg.AssetMaxSize != 10485760 || len(cfg.AssetMimeTypes) != 2 {
 		t.Fatalf("unexpected assets config: %+v", cfg)
 	}
 }
@@ -145,11 +145,6 @@ func setValidAssetsEnvironment(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY_SECRET", "test-secret")
 	t.Setenv("ASSET_ALLOWED_MIME_TYPES", "image/png,text/csv")
 	t.Setenv("ASSET_MAX_SIZE_BYTES", "10485760")
-	t.Setenv("APP_WORKER_OWNER", "cms-test")
-	t.Setenv("APP_WORKER_CONCURRENCY", "2")
-	t.Setenv("APP_WORKER_POLL_INTERVAL", "1s")
-	t.Setenv("APP_WORKER_LEASE_DURATION", "60s")
-	t.Setenv("APP_WORKER_RENEW_INTERVAL", "20s")
 }
 
 func TestLoadServeRequiresDatabase(t *testing.T) {

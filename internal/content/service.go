@@ -108,7 +108,16 @@ func (s *Service) ListEntries(ctx context.Context, principal identity.Principal,
 	if err != nil {
 		return EntryList{}, err
 	}
-	result := EntryList{Items: items, NextCursor: nil}
+	result := EntryList{Items: items, Fields: make([]EntryListField, 0, len(model.Fields)), NextCursor: nil}
+	for _, field := range model.Fields {
+		if field.Status != schema.StatusActive {
+			continue
+		}
+		result.Fields = append(result.Fields, EntryListField{
+			Key: field.Key, DisplayName: field.DisplayName, Type: field.Type,
+			Constraints: EntryListFieldConstraints{EnumOptions: field.Constraints.EnumOptions, Filterable: field.Constraints.Filterable, Sortable: field.Constraints.Sortable},
+		})
+	}
 	if len(items) > query.Limit {
 		result.Items = items[:query.Limit]
 		if len(orderedValues) >= query.Limit {
@@ -337,7 +346,7 @@ func (s *Service) createDraftInTx(ctx context.Context, q database.Querier, princ
 	}
 	now := s.now()
 	revision := Revision{ID: revisionID, EntryID: entryID, ModelID: modelID, Number: 1, Content: content, WorkflowStatus: WorkflowDraft, CreatedBy: principal.UserID, CreatedAt: now}
-	entry := EntrySummary{ID: entryID, ModelID: modelID, Status: StatusDraft, CurrentDraftRevisionID: revisionID, WorkflowStatus: WorkflowDraft, CreatedBy: principal.UserID, CreatedAt: now, UpdatedAt: now}
+	entry := EntrySummary{ID: entryID, ModelID: modelID, Status: StatusDraft, CurrentDraftRevisionID: revisionID, CurrentDraftContent: content, WorkflowStatus: WorkflowDraft, CreatedBy: principal.UserID, CreatedAt: now, UpdatedAt: now}
 	if err = s.repository.CreateEntry(ctx, q, entry); err != nil {
 		return Entry{}, err
 	}
@@ -461,7 +470,7 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 				return err
 			}
 		}
-		entry.CurrentDraftRevisionID, entry.UpdatedAt = revisionID, now
+		entry.CurrentDraftRevisionID, entry.CurrentDraftContent, entry.UpdatedAt = revisionID, content, now
 		if err := s.repository.UpdateEntry(ctx, q, entry); err != nil {
 			return err
 		}

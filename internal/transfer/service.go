@@ -2,14 +2,8 @@ package transfer
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math/big"
 	"regexp"
@@ -19,48 +13,35 @@ import (
 
 	"cms/internal/content"
 	"cms/internal/identity"
+	"cms/internal/platform/apperror"
 	"cms/internal/platform/database"
 	"cms/internal/schema"
-	"github.com/go-sql-driver/mysql"
 )
 
-type TransactionRunner interface {
-	WithinTx(context.Context, *sql.TxOptions, func(database.Querier) error) error
-}
 type ModelReader interface {
 	GetModel(context.Context, database.Querier, string) (schema.ContentModel, error)
 }
 
 type Dependencies struct {
-	DB          database.Querier
-	Transactor  TransactionRunner
-	Repository  Repository
-	Models      ModelReader
-	Uploads     UploadManager
-	Store       ObjectStore
-	UploadTTL   time.Duration
-	DownloadTTL time.Duration
+	DB       database.Querier
+	Models   ModelReader
+	Importer Importer
+	Entries  EntryLister
 }
 
 type Service struct {
-	db          database.Querier
-	tx          TransactionRunner
-	repository  Repository
-	models      ModelReader
-	uploads     UploadManager
-	store       ObjectStore
-	uploadTTL   time.Duration
-	downloadTTL time.Duration
-	now         func() time.Time
-	newID       func(string) (string, error)
+	db       database.Querier
+	models   ModelReader
+	importer Importer
+	entries  EntryLister
 }
 
 func NewService(d Dependencies) *Service {
-	return &Service{db: d.DB, tx: d.Transactor, repository: d.Repository, models: d.Models, uploads: d.Uploads, store: d.Store, uploadTTL: d.UploadTTL, downloadTTL: d.DownloadTTL, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, newID: randomID}
+	return &Service{db: d.DB, models: d.Models, importer: d.Importer, entries: d.Entries}
 }
 
-func (s *Service) Template(ctx context.Context, p identity.Principal, modelID string, w io.Writer) error {
-	if !hasSystem(p, "transfers.download") || !hasModel(p, modelID, "content.view") {
+func (s *Service) Template(ctx context.Context, principal identity.Principal, modelID string, w io.Writer) error {
+	if !hasModel(principal, modelID, "content.view") {
 		return forbidden()
 	}
 	model, err := s.models.GetModel(ctx, s.db, modelID)
@@ -69,235 +50,105 @@ func (s *Service) Template(ctx context.Context, p identity.Principal, modelID st
 	}
 	return WriteTemplate(w, ActiveRootFields(model.Fields))
 }
-func (s *Service) CreateUpload(ctx context.Context, p identity.Principal, modelID, filename string, size int64, sha string) (ImportUpload, error) {
-	if !hasSystem(p, "transfers.execute") || !hasModel(p, modelID, "content.create") {
-		return ImportUpload{}, forbidden()
+
+func (s *Service) Import(ctx context.Context, principal identity.Principal, meta content.RequestMeta, modelID string, rows []json.RawMessage) (ImportResult, error) {
+	if !hasModel(principal, modelID, "content.create") {
+		return ImportResult{}, forbidden()
 	}
-	if s.uploads == nil {
-		return ImportUpload{}, fmt.Errorf("上传管理器未装配")
+	if s.importer == nil {
+		return ImportResult{}, errors.New("导入服务未装配")
 	}
-	if strings.TrimSpace(filename) == "" || size < 1 || len(sha) != 64 {
-		return ImportUpload{}, invalid("validation_failed", "上传参数无效")
-	}
-	if _, err := hex.DecodeString(sha); err != nil || strings.ToLower(sha) != sha {
-		return ImportUpload{}, invalid("validation_failed", "sha256 必须是小写十六进制")
-	}
-	if _, err := s.models.GetModel(ctx, s.db, modelID); err != nil {
-		return ImportUpload{}, err
-	}
-	return s.uploads.Create(ctx, filename, size, sha, s.now().Add(s.uploadTTL))
-}
-func (s *Service) CreateImport(ctx context.Context, p identity.Principal, modelID, uploadID, key string) (Job, bool, error) {
-	if !hasSystem(p, "transfers.execute") || !hasModel(p, modelID, "content.create") {
-		return Job{}, false, forbidden()
-	}
-	if s.uploads == nil {
-		return Job{}, false, fmt.Errorf("上传管理器未装配")
-	}
-	if err := validateIdempotencyKey(key); err != nil {
-		return Job{}, false, err
-	}
-	path := "/api/admin/v1/models/" + modelID + "/imports"
-	existing, _, err := s.repository.FindIdempotent(ctx, s.db, p.UserID, "POST", path, key)
-	if err != nil {
-		return Job{}, false, err
-	}
-	if existing.ID != "" {
-		var request struct {
-			UploadID string `json:"upload_id"`
-		}
-		if json.Unmarshal(existing.RequestSnapshot, &request) != nil || request.UploadID != uploadID {
-			return Job{}, false, conflict("idempotency_key_reused", "幂等键已用于不同请求")
-		}
-		return existing, true, nil
-	}
-	claims, err := s.uploads.Confirm(ctx, uploadID)
-	if err != nil {
-		return Job{}, false, err
-	}
-	request := map[string]any{"upload_id": uploadID}
-	return s.createJob(ctx, p, modelID, JobCSVImport, "POST", path, key, request, claims.ObjectKey)
-}
-func (s *Service) CreateExport(ctx context.Context, p identity.Principal, modelID, key string, request ExportRequest) (Job, bool, error) {
-	if !hasSystem(p, "transfers.execute") || !hasModel(p, modelID, "content.view") {
-		return Job{}, false, forbidden()
-	}
-	model, err := s.models.GetModel(ctx, s.db, modelID)
-	if err != nil {
-		return Job{}, false, err
-	}
-	if _, err = ValidateExportRequest(model.Fields, request); err != nil {
-		return Job{}, false, err
-	}
-	return s.createJob(ctx, p, modelID, JobCSVExport, "POST", "/api/admin/v1/models/"+modelID+"/exports", key, request, "")
-}
-func (s *Service) createJob(ctx context.Context, p identity.Principal, modelID string, kind JobType, method, path, key string, request any, source string) (Job, bool, error) {
-	if err := validateIdempotencyKey(key); err != nil {
-		return Job{}, false, err
-	}
-	model, err := s.models.GetModel(ctx, s.db, modelID)
-	if err != nil {
-		return Job{}, false, err
-	}
-	fields := ActiveRootFields(model.Fields)
-	modelSnapshot, err := json.Marshal(struct {
-		ID        string                `json:"id"`
-		UpdatedAt time.Time             `json:"updated_at"`
-		Fields    []schema.ContentField `json:"fields"`
-	}{model.ID, model.UpdatedAt, fields})
-	if err != nil {
-		return Job{}, false, err
-	}
-	requestSnapshot, err := json.Marshal(request)
-	if err != nil {
-		return Job{}, false, invalid("validation_failed", "请求快照无效")
-	}
-	digest := sha256.Sum256(append(append([]byte(string(kind)+"\x00"+modelID+"\x00"), requestSnapshot...), modelSnapshot...))
-	hash := hex.EncodeToString(digest[:])
-	id, err := s.newID("job_")
-	if err != nil {
-		return Job{}, false, err
-	}
-	job := Job{ID: id, Type: kind, Status: JobQueued, ModelID: modelID, MaxAttempts: 3, CreatedBy: p.UserID, CreatedAt: s.now(), ModelSnapshot: modelSnapshot, RequestSnapshot: requestSnapshot, SourceObjectKey: source}
-	replayed := false
-	err = s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		existing, existingHash, err := s.repository.FindIdempotent(ctx, q, p.UserID, method, path, key)
-		if err != nil {
-			return err
-		}
-		if existing.ID != "" {
-			if existingHash != hash {
-				return conflict("idempotency_key_reused", "幂等键已用于不同请求")
+	source := func(yield func(content.ImportDraft) error) error {
+		for i, raw := range rows {
+			if err := yield(content.ImportDraft{Content: raw}); err != nil {
+				return &importRowError{row: i + 2, err: err}
 			}
-			job, replayed = existing, true
-			return nil
 		}
-		return s.repository.CreateJob(ctx, q, job, method, path, key, hash)
-	})
-	var duplicate *mysql.MySQLError
-	if errors.As(err, &duplicate) && duplicate.Number == 1062 {
-		existing, existingHash, readErr := s.repository.FindIdempotent(ctx, s.db, p.UserID, method, path, key)
-		if readErr != nil {
-			return Job{}, false, readErr
+		return nil
+	}
+	if err := s.importer.ImportDrafts(ctx, principal, meta, modelID, source, nil); err != nil {
+		row := 1
+		var rowError *importRowError
+		if errors.As(err, &rowError) {
+			row, err = rowError.row, rowError.err
 		}
-		if existing.ID != "" {
-			if existingHash != hash {
-				return Job{}, false, conflict("idempotency_key_reused", "幂等键已用于不同请求")
-			}
-			return existing, true, nil
-		}
+		return ImportResult{}, importError(row, err)
 	}
-	return job, replayed, err
-}
-func (s *Service) Get(ctx context.Context, p identity.Principal, id string) (Job, error) {
-	if !hasSystem(p, "transfers.execute") {
-		return Job{}, forbidden()
-	}
-	emergency, err := s.repository.IsEmergencyAdmin(ctx, s.db, p.UserID)
-	if err != nil {
-		return Job{}, err
-	}
-	job, err := s.repository.GetJob(ctx, s.db, p.UserID, id, emergency)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Job{}, notFound()
-	}
-	return job, err
-}
-func (s *Service) List(ctx context.Context, p identity.Principal, filter JobFilter) (JobList, error) {
-	if !hasSystem(p, "transfers.execute") {
-		return JobList{}, forbidden()
-	}
-	if filter.Limit < 1 || filter.Limit > 100 {
-		return JobList{}, invalid("invalid_query", "任务查询无效")
-	}
-	if filter.Type != "" && filter.Type != JobCSVImport && filter.Type != JobCSVExport || filter.Status != "" && filter.Status != JobQueued && filter.Status != JobRunning && filter.Status != JobSucceeded && filter.Status != JobFailed && filter.Status != JobCanceled {
-		return JobList{}, invalid("invalid_query", "任务查询无效")
-	}
-	if filter.Cursor != "" {
-		decoded, err := base64.RawURLEncoding.DecodeString(filter.Cursor)
-		if err != nil || len(decoded) == 0 {
-			return JobList{}, invalid("invalid_cursor", "分页游标无效")
-		}
-		filter.Cursor = string(decoded)
-	}
-	emergency, err := s.repository.IsEmergencyAdmin(ctx, s.db, p.UserID)
-	if err != nil {
-		return JobList{}, err
-	}
-	items, err := s.repository.ListJobs(ctx, s.db, p.UserID, filter, emergency)
-	if err != nil {
-		return JobList{}, err
-	}
-	result := JobList{Items: items}
-	if len(items) > filter.Limit {
-		result.Items = items[:filter.Limit]
-		cursor := base64.RawURLEncoding.EncodeToString([]byte(result.Items[len(result.Items)-1].ID))
-		result.NextCursor = &cursor
-	}
-	return result, nil
-}
-func (s *Service) Cancel(ctx context.Context, p identity.Principal, id string) (Job, error) {
-	if !hasSystem(p, "transfers.execute") {
-		return Job{}, forbidden()
-	}
-	var result Job
-	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		emergency, err := s.repository.IsEmergencyAdmin(ctx, q, p.UserID)
-		if err != nil {
-			return err
-		}
-		job, err := s.repository.GetJob(ctx, q, p.UserID, id, emergency)
-		if errors.Is(err, sql.ErrNoRows) {
-			return notFound()
-		}
-		if err != nil {
-			return err
-		}
-		if !hasModel(p, job.ModelID, permissionForJob(job.Type)) {
-			return forbidden()
-		}
-		result, err = s.repository.Cancel(ctx, q, p.UserID, id, s.now(), emergency)
-		return err
-	})
-	return result, err
-}
-func (s *Service) Retry(ctx context.Context, p identity.Principal, id string) (Job, error) {
-	if !hasSystem(p, "transfers.execute") {
-		return Job{}, forbidden()
-	}
-	var result Job
-	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		emergency, err := s.repository.IsEmergencyAdmin(ctx, q, p.UserID)
-		if err != nil {
-			return err
-		}
-		job, err := s.repository.GetJob(ctx, q, p.UserID, id, emergency)
-		if errors.Is(err, sql.ErrNoRows) {
-			return notFound()
-		}
-		if err != nil {
-			return err
-		}
-		if !hasModel(p, job.ModelID, permissionForJob(job.Type)) {
-			return forbidden()
-		}
-		result, err = s.repository.Retry(ctx, q, p.UserID, id, s.now(), emergency)
-		return err
-	})
-	return result, err
+	return ImportResult{Imported: len(rows)}, nil
 }
 
-func permissionForJob(kind JobType) string {
-	if kind == JobCSVExport {
-		return "content.view"
+type importRowError struct {
+	row int
+	err error
+}
+
+func (e *importRowError) Error() string { return e.err.Error() }
+func (e *importRowError) Unwrap() error { return e.err }
+
+func importError(row int, err error) error {
+	var application *apperror.Error
+	if !errors.As(err, &application) || application.Kind != apperror.KindInvalidArgument && application.Kind != apperror.KindConflict {
+		return err
 	}
-	return "content.create"
+	details := make([]map[string]any, 0, len(application.Details))
+	for _, detail := range application.Details {
+		field := strings.TrimPrefix(stringValue(detail["path"]), "/content/")
+		if field == "/content" {
+			field = ""
+		}
+		details = append(details, map[string]any{"row": row, "field": field, "code": stringValue(detail["code"]), "message": stringValue(detail["message"])})
+	}
+	if len(details) == 0 {
+		details = append(details, map[string]any{"row": row, "field": "", "code": application.Code, "message": application.Message})
+	}
+	return &apperror.Error{Kind: apperror.KindInvalidArgument, Code: "csv_invalid", Message: "CSV 数据无效", Details: details}
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func (s *Service) Export(ctx context.Context, principal identity.Principal, modelID string, request ExportRequest, w io.Writer) error {
+	if !hasModel(principal, modelID, "content.view") {
+		return forbidden()
+	}
+	model, err := s.models.GetModel(ctx, s.db, modelID)
+	if err != nil {
+		return err
+	}
+	parsed, err := ValidateExportRequest(model.Fields, request)
+	if err != nil {
+		return err
+	}
+	query := content.AdminEntryQuery{Status: content.StatusDraft, WorkflowStatus: parsed.WorkflowStatus, Limit: 100, Filters: parsed.Filters, RelationFilters: parsed.RelationFilters, Sort: parsed.Sort}
+	page, err := s.entries.ListEntries(ctx, principal, modelID, query)
+	if err != nil {
+		return err
+	}
+	fields := ActiveRootFields(model.Fields)
+	return WriteCSV(w, fields, func(yield func(json.RawMessage) error) error {
+		for {
+			for _, entry := range page.Items {
+				if err := yield(entry.CurrentDraftContent); err != nil {
+					return err
+				}
+			}
+			if page.NextCursor == nil {
+				return nil
+			}
+			query.Cursor = *page.NextCursor
+			page, err = s.entries.ListEntries(ctx, principal, modelID, query)
+			if err != nil {
+				return err
+			}
+		}
+	})
 }
 
 var exportInteger = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 var exportDecimal = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
-// ValidateExportRequest 按 F2 管理列表语义解析并校验导出查询。
 func ValidateExportRequest(fields []schema.ContentField, request ExportRequest) (ExportQuery, error) {
 	query := ExportQuery{}
 	if request.WorkflowStatus != "" {
@@ -489,109 +340,16 @@ func validExportValue(fieldType schema.FieldType, value any) bool {
 		return false
 	}
 }
-func (s *Service) Errors(ctx context.Context, p identity.Principal, id string, limit, after int) (ErrorList, error) {
-	if !hasSystem(p, "transfers.execute") {
-		return ErrorList{}, forbidden()
-	}
-	if limit < 1 || limit > 100 || after < 0 {
-		return ErrorList{}, invalid("invalid_query", "错误详情查询无效")
-	}
-	emergency, err := s.repository.IsEmergencyAdmin(ctx, s.db, p.UserID)
-	if err != nil {
-		return ErrorList{}, err
-	}
-	items, truncated, err := s.repository.ListErrors(ctx, s.db, p.UserID, id, limit+1, after, emergency)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrorList{}, notFound()
-	}
-	if err != nil {
-		return ErrorList{}, err
-	}
-	result := ErrorList{Items: items, ErrorsTruncated: truncated}
-	if len(items) > limit {
-		result.Items = items[:limit]
-		cursor := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprint(after + limit)))
-		result.NextCursor = &cursor
-	}
-	return result, nil
-}
-func (s *Service) Download(ctx context.Context, p identity.Principal, id, kind string) (Download, error) {
-	if !hasSystem(p, "transfers.download") {
-		return Download{}, forbidden()
-	}
-	emergency, err := s.repository.IsEmergencyAdmin(ctx, s.db, p.UserID)
-	if err != nil {
-		return Download{}, err
-	}
-	job, err := s.repository.GetJob(ctx, s.db, p.UserID, id, emergency)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Download{}, notFound()
-	}
-	if err != nil {
-		return Download{}, err
-	}
-	if !hasModel(p, job.ModelID, map[string]string{"result": "content.view", "errors": "content.create"}[kind]) {
-		return Download{}, forbidden()
-	}
-	key, filename := job.ResultObjectKey, "export.csv"
-	if kind == "errors" {
-		key, filename = job.ErrorObjectKey, "errors.csv"
-	}
-	if key == "" {
-		return Download{}, notFound()
-	}
-	if job.ExpiresAt == nil || !job.ExpiresAt.After(s.now()) {
-		return Download{}, &jobFileExpiredError{}
-	}
-	expiresAt := s.now().Add(s.downloadTTL)
-	if job.ExpiresAt.Before(expiresAt) {
-		expiresAt = *job.ExpiresAt
-	}
-	location, err := s.store.SignGet(ctx, key, filename, expiresAt)
-	if err != nil {
-		return Download{}, objectStoreUnavailable(err)
-	}
-	return Download{Location: location}, nil
-}
-func validateIdempotencyKey(key string) error {
-	if len(key) < 16 || len(key) > 128 {
-		return invalid("validation_failed", "Idempotency-Key 长度必须为 16 至 128")
-	}
-	for _, r := range key {
-		if r < '!' || r > '~' {
-			return invalid("validation_failed", "Idempotency-Key 必须是可见 ASCII")
-		}
-	}
-	return nil
-}
-func hasSystem(p identity.Principal, permission string) bool {
-	for _, v := range p.SystemPermissions {
-		if v == permission {
-			return true
-		}
-	}
-	return false
-}
-func hasModel(p identity.Principal, modelID, permission string) bool {
-	for _, scope := range p.ModelPermissions {
+
+func hasModel(principal identity.Principal, modelID, permission string) bool {
+	for _, scope := range principal.ModelPermissions {
 		if scope.ModelID == modelID {
-			for _, v := range scope.Permissions {
-				if v == permission {
+			for _, value := range scope.Permissions {
+				if value == permission {
 					return true
 				}
 			}
 		}
 	}
 	return false
-}
-func randomID(prefix string) (string, error) {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return "", err
-	}
-	return prefix + hex.EncodeToString(value[:]), nil
-}
-
-type Importer interface {
-	ImportDrafts(context.Context, identity.Principal, content.RequestMeta, string, content.DraftSource, func(database.Querier) error) error
 }

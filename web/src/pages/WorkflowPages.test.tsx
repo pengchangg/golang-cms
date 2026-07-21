@@ -14,6 +14,7 @@ const field = { id: 'fld_title', key: 'title', display_name: '标题', descripti
 const model: ContentModel = { id: 'mdl_1', key: 'articles', display_name: '文章', description: '', status: 'active', fields: [field], created_at: now, updated_at: now }
 const entry: ContentEntry = {
   id: 'ent_1', model_id: model.id, status: 'draft', current_draft_revision_id: 'rev_1', workflow_status: 'draft', current_published_revision_id: null,
+  current_draft_content: { title: '旧标题' },
   created_by: 'usr_1', created_at: now, updated_at: now,
   current_draft_revision: { id: 'rev_1', entry_id: 'ent_1', model_id: model.id, number: 1, content: { title: '旧标题' }, created_by: 'usr_1', created_at: now, workflow_status: 'draft', submitted_by: null, submitted_at: null },
   current_published_revision: null,
@@ -67,11 +68,29 @@ describe('工作流页面行为', () => {
   })
 
   it('内容列表使用 next_cursor 请求下一页', async () => {
-    vi.spyOn(api, 'getModel').mockResolvedValue(model)
+    const getModel = vi.spyOn(api, 'getModel')
+    const details = { body: 'x'.repeat(100) }
+    const fields = [
+      { key: 'title', display_name: '标题', type: 'single_line_text' as const, constraints: { filterable: true, sortable: true } },
+      { key: 'kind', display_name: '类型', type: 'single_select' as const, constraints: { enum_options: [{ value: 'news', label: '新闻' }], filterable: true, sortable: false } },
+      { key: 'details', display_name: '详情', type: 'json' as const, constraints: { filterable: false, sortable: false } },
+    ]
+    const listedEntry = { ...entry, current_draft_content: { title: '旧标题', kind: 'news', details } }
     const listEntries = vi.spyOn(api, 'listEntries')
-      .mockResolvedValueOnce({ items: [entry], next_cursor: 'entries_2' })
-      .mockResolvedValueOnce({ items: [], next_cursor: null })
-    render(<MemoryRouter initialEntries={['/content/mdl_1']}><Routes><Route path="/content/:modelId" element={<EntriesPage principal={principal(['models.view'], ['content.view'])} />} /></Routes></MemoryRouter>)
+      .mockResolvedValueOnce({ items: [listedEntry], fields, next_cursor: 'entries_2' })
+      .mockResolvedValueOnce({ items: [listedEntry], fields, next_cursor: 'entries_2' })
+      .mockResolvedValueOnce({ items: [], fields: [], next_cursor: null })
+    render(<MemoryRouter initialEntries={['/content/mdl_1']}><Routes><Route path="/content/:modelId" element={<EntriesPage principal={principal([], ['content.view'])} />} /></Routes></MemoryRouter>)
+    expect(await screen.findByText('旧标题')).toBeVisible()
+    expect(screen.getByText('新闻')).toBeVisible()
+    expect(screen.getByText(`${JSON.stringify(details).slice(0, 77)}...`)).toBeVisible()
+    expect(screen.getByRole('columnheader', { name: '标题' })).toBeVisible()
+    const fieldSelect = screen.getByRole('combobox', { name: '过滤字段' })
+    await userEvent.click(fieldSelect)
+    expect(await screen.findByRole('option', { name: '标题' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '类型' })).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    expect(getModel).not.toHaveBeenCalled()
     await userEvent.click(await screen.findByRole('button', { name: '下一页' }))
     await waitFor(() => expect(listEntries).toHaveBeenLastCalledWith('mdl_1', expect.objectContaining({ cursor: 'entries_2' })))
   })

@@ -13,7 +13,7 @@ import { TransferActions } from './components/TransferActions'
 const session: SessionResponse = {
   principal: {
     user_id: 'usr_assets_disabled', display_name: '阶段二用户', email: null, auth_method: 'oidc',
-    system_permissions: ['assets.view', 'transfers.execute', 'transfers.download'],
+    system_permissions: ['assets.view'],
     model_permissions: [{ model_id: 'mdl_1', permissions: ['content.view', 'content.create'] }],
   },
   content_models: [{ id: 'mdl_1', key: 'articles', display_name: '文章' }],
@@ -43,7 +43,7 @@ describe('显式禁用素材能力', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('不展示媒体选择器和传输操作', () => {
+  it('不展示媒体选择器，但仍展示同步传输操作', () => {
     const mediaField = {
       id: 'fld_cover', key: 'cover', display_name: '封面', description: '', type: 'single_media' as const,
       required: false, default_value: null, constraints: {}, children: [], status: 'active' as const,
@@ -52,8 +52,9 @@ describe('显式禁用素材能力', () => {
     const { rerender } = render(<DynamicContentForm fields={[mediaField]} content={{ cover: 'ast_1' }} onChange={vi.fn()} />)
     expect(screen.queryByRole('button', { name: '更换素材' })).not.toBeInTheDocument()
 
-    rerender(<MemoryRouter><TransferActions principal={session.principal} modelId="mdl_1" exportQuery={{}} /></MemoryRouter>)
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
-    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+    rerender(<MemoryRouter><TransferActions principal={session.principal} modelId="mdl_1" exportQuery={{}} onImported={vi.fn()} /></MemoryRouter>)
+    expect(screen.getByRole('button', { name: '导入 CSV' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '按当前筛选导出' })).toBeEnabled()
+    expect(screen.getByRole('link', { name: '下载 CSV 模板' })).toHaveAttribute('href', '/api/admin/v1/models/mdl_1/transfers/template')
   })
 })

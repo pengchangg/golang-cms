@@ -59,16 +59,17 @@ type WorkflowEventList struct {
 }
 
 type EntrySummary struct {
-	ID                         string         `json:"id"`
-	ModelID                    string         `json:"model_id"`
-	Status                     EntryStatus    `json:"status"`
-	CurrentDraftRevisionID     string         `json:"current_draft_revision_id"`
-	WorkflowStatus             WorkflowStatus `json:"workflow_status"`
-	CurrentPublishedRevisionID *string        `json:"current_published_revision_id"`
-	CreatedBy                  string         `json:"created_by"`
-	CreatedAt                  time.Time      `json:"created_at"`
-	UpdatedAt                  time.Time      `json:"updated_at"`
-	Expanded                   map[string]any `json:"expanded,omitempty"`
+	ID                         string          `json:"id"`
+	ModelID                    string          `json:"model_id"`
+	Status                     EntryStatus     `json:"status"`
+	CurrentDraftRevisionID     string          `json:"current_draft_revision_id"`
+	CurrentDraftContent        json.RawMessage `json:"current_draft_content"`
+	WorkflowStatus             WorkflowStatus  `json:"workflow_status"`
+	CurrentPublishedRevisionID *string         `json:"current_published_revision_id"`
+	CreatedBy                  string          `json:"created_by"`
+	CreatedAt                  time.Time       `json:"created_at"`
+	UpdatedAt                  time.Time       `json:"updated_at"`
+	Expanded                   map[string]any  `json:"expanded,omitempty"`
 }
 
 type Entry struct {
@@ -229,10 +230,24 @@ func (r *UpdateEntryRequest) UnmarshalJSON(data []byte) error {
 }
 
 type EntryList struct {
-	Items           []EntrySummary `json:"items"`
-	NextCursor      *string        `json:"next_cursor"`
-	Total           *int           `json:"total,omitempty"`
-	TotalIsEstimate *bool          `json:"total_is_estimate,omitempty"`
+	Items           []EntrySummary   `json:"items"`
+	Fields          []EntryListField `json:"fields"`
+	NextCursor      *string          `json:"next_cursor"`
+	Total           *int             `json:"total,omitempty"`
+	TotalIsEstimate *bool            `json:"total_is_estimate,omitempty"`
+}
+
+type EntryListFieldConstraints struct {
+	EnumOptions []schema.EnumOption `json:"enum_options,omitempty"`
+	Filterable  bool                `json:"filterable"`
+	Sortable    bool                `json:"sortable"`
+}
+
+type EntryListField struct {
+	Key         string                    `json:"key"`
+	DisplayName string                    `json:"display_name"`
+	Type        schema.FieldType          `json:"type"`
+	Constraints EntryListFieldConstraints `json:"constraints"`
 }
 
 type AdminEntryQuery struct {

@@ -77,7 +77,7 @@ func (SQLRepository) HasAnyContent(ctx context.Context, q database.Querier, mode
 
 func (SQLRepository) ListEntries(ctx context.Context, q database.Querier, modelID string, input AdminEntryQuery, fields map[string]schema.ContentField, limit int, cursor *EntryCursor) ([]EntrySummary, [][]*string, error) {
 	from, joinArgs, where, whereArgs, orders := adminEntriesSQL(modelID, input, fields)
-	selectSQL := `SELECT e.id,e.model_id,e.status,p.revision_id,rv.workflow_status,pp.revision_id,e.created_by,e.created_at,e.updated_at`
+	selectSQL := `SELECT e.id,e.model_id,e.status,p.revision_id,rv.content,rv.workflow_status,pp.revision_id,e.created_by,e.created_at,e.updated_at`
 	for _, order := range orders {
 		selectSQL += `,` + order.Expression
 	}
@@ -110,7 +110,7 @@ func (SQLRepository) ListEntries(ctx context.Context, q database.Querier, modelI
 		var item EntrySummary
 		var published sql.NullString
 		values := make([]sql.RawBytes, len(orders))
-		dest := []any{&item.ID, &item.ModelID, &item.Status, &item.CurrentDraftRevisionID, &item.WorkflowStatus, &published, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt}
+		dest := []any{&item.ID, &item.ModelID, &item.Status, &item.CurrentDraftRevisionID, &item.CurrentDraftContent, &item.WorkflowStatus, &published, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt}
 		for i := range values {
 			dest = append(dest, &values[i])
 		}
@@ -207,7 +207,7 @@ func (SQLRepository) ExpandEntries(ctx context.Context, q database.Querier, item
 		byID[field.ID] = field
 		fieldIDs = append(fieldIDs, field.ID)
 	}
-	query, args := scopeQuery(`SELECT rel.revision_id,rel.field_id,e.id,e.model_id,e.status,p.revision_id,rv.workflow_status,pp.revision_id,e.created_by,e.created_at,e.updated_at FROM content_relations rel JOIN content_entries e ON e.id=rel.target_entry_id AND e.model_id=rel.target_model_id JOIN content_draft_pointers p ON p.entry_id=e.id AND p.model_id=e.model_id JOIN content_revisions rv ON rv.id=p.revision_id LEFT JOIN content_published_pointers pp ON pp.entry_id=e.id WHERE rel.revision_id IN (`, revisionIDs, `) AND rel.field_id IN (`)
+	query, args := scopeQuery(`SELECT rel.revision_id,rel.field_id,e.id,e.model_id,e.status,p.revision_id,rv.content,rv.workflow_status,pp.revision_id,e.created_by,e.created_at,e.updated_at FROM content_relations rel JOIN content_entries e ON e.id=rel.target_entry_id AND e.model_id=rel.target_model_id JOIN content_draft_pointers p ON p.entry_id=e.id AND p.model_id=e.model_id JOIN content_revisions rv ON rv.id=p.revision_id LEFT JOIN content_published_pointers pp ON pp.entry_id=e.id WHERE rel.revision_id IN (`, revisionIDs, `) AND rel.field_id IN (`)
 	query2, args2 := scopeQuery("", fieldIDs, `) ORDER BY rel.revision_id,rel.field_id,rel.position`)
 	query += query2
 	args = append(args, args2...)
@@ -220,7 +220,7 @@ func (SQLRepository) ExpandEntries(ctx context.Context, q database.Querier, item
 		var revisionID, fieldID string
 		var target EntrySummary
 		var published sql.NullString
-		if err := rows.Scan(&revisionID, &fieldID, &target.ID, &target.ModelID, &target.Status, &target.CurrentDraftRevisionID, &target.WorkflowStatus, &published, &target.CreatedBy, &target.CreatedAt, &target.UpdatedAt); err != nil {
+		if err := rows.Scan(&revisionID, &fieldID, &target.ID, &target.ModelID, &target.Status, &target.CurrentDraftRevisionID, &target.CurrentDraftContent, &target.WorkflowStatus, &published, &target.CreatedBy, &target.CreatedAt, &target.UpdatedAt); err != nil {
 			return err
 		}
 		if published.Valid {
@@ -254,6 +254,7 @@ func (r SQLRepository) GetEntry(ctx context.Context, q database.Querier, modelID
 	}
 	revision, err := r.GetRevision(ctx, q, modelID, entryID, entry.CurrentDraftRevisionID)
 	entry.CurrentDraftRevision = revision
+	entry.CurrentDraftContent = revision.Content
 	if err == nil && published.Valid {
 		value, e := r.GetRevision(ctx, q, modelID, entryID, published.String)
 		if e != nil {

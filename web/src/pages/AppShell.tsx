@@ -22,8 +22,6 @@ const EntryEditorPage = lazy(() => import('./EntryEditorPage'))
 const AuditPage = lazy(() => import('./AuditPage'))
 const APIKeysPage = lazy(() => import('./APIKeysPage'))
 const AssetsPage = lazy(() => import('./AssetsPage'))
-const JobsPage = lazy(() => import('./JobsPage'))
-const JobDetailPage = lazy(() => import('./JobDetailPage'))
 const { Header, Sider, Content } = Layout
 
 export default function AppShell() {
@@ -112,8 +110,6 @@ export default function AppShell() {
               <Route path="content/:modelId/:entryId" element={contentRoute('content.view', <EntryEditorPage principal={principal} />)} />
               <Route path="api-keys" element={systemRoute('api_keys.view', <APIKeysPage principal={principal} />)} />
               <Route path="assets" element={ASSETS_ENABLED ? systemRoute('assets.view', <AssetsPage principal={principal} />) : <Navigate to="/" replace />} />
-              <Route path="jobs" element={ASSETS_ENABLED ? systemRoute('transfers.execute', <JobsPage />) : <Navigate to="/" replace />} />
-              <Route path="jobs/:jobId" element={ASSETS_ENABLED ? systemRoute('transfers.execute', <JobDetailPage principal={principal} />) : <Navigate to="/" replace />} />
               <Route path="audit" element={systemRoute('audit.view', <AuditPage principal={principal} />)} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

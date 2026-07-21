@@ -2,38 +2,36 @@ $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://internal-cms.invalid/schemas/admin/transfers/schemas.yaml
 x-integration-status: integrated
 $defs:
-  CreateImportUploadRequest:
+  ImportResult:
     type: object
     additionalProperties: false
-    required: [filename, size, sha256]
+    required: [imported]
     properties:
-      filename: { type: string, minLength: 1, maxLength: 255 }
-      size: { type: integer, minimum: 1 }
-      sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
-  ImportUpload:
+      imported: { type: integer, minimum: 0, maximum: 1000 }
+  CSVErrorDetail:
     type: object
     additionalProperties: false
-    required: [upload_id, method, url, headers, expires_at]
+    required: [row, field, code, message]
     properties:
-      upload_id: { type: string, minLength: 1 }
-      method: { const: PUT }
-      url: { type: string, format: uri }
-      headers:
+      row: { type: integer, minimum: 1 }
+      field: { type: string }
+      code: { type: string, minLength: 1 }
+      message: { type: string, minLength: 1 }
+  CSVErrorResponse:
+    type: object
+    additionalProperties: false
+    required: [error]
+    properties:
+      error:
         type: object
-        additionalProperties: { type: string }
-      expires_at: { type: string, format: date-time }
-  CreateImportRequest:
-    type: object
-    additionalProperties: false
-    required: [upload_id]
-    properties:
-      upload_id: { type: string, minLength: 1 }
-  CreateExportRequest:
-    type: object
-    additionalProperties: false
-    properties:
-      workflow_status:
-        $ref: ../content/workflow-schemas.yaml#/$defs/WorkflowStatus
-      filter: { type: string }
-      relation_filter: { type: string }
-      sort: { type: string }
+        additionalProperties: false
+        required: [code, message, request_id, details]
+        properties:
+          code: { type: string, minLength: 1 }
+          message: { type: string, minLength: 1 }
+          request_id: { type: string, minLength: 1 }
+          details:
+            type: array
+            minItems: 1
+            items:
+              $ref: "#/$defs/CSVErrorDetail"

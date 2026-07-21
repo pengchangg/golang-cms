@@ -90,10 +90,7 @@ func TestParseCSVRejectsHeaderAndDuplicateJSONProperties(t *testing.T) {
 	}
 }
 
-func TestParseCSVAcceptsExactlyOneHundredThousandRows(t *testing.T) {
-	if testing.Short() {
-		t.Skip("跳过容量边界测试")
-	}
+func TestParseCSVAcceptsExactlyOneThousandRows(t *testing.T) {
 	fields := []schema.ContentField{{Key: "count", Type: schema.FieldTypeInteger, Status: schema.StatusActive}}
 	var input strings.Builder
 	input.Grow(700000)
@@ -110,7 +107,7 @@ func TestParseCSVAcceptsExactlyOneHundredThousandRows(t *testing.T) {
 	}
 	input.WriteString("1\n")
 	err := ParseCSV(strings.NewReader(input.String()), fields, func(int, json.RawMessage) error { return nil })
-	if csvErr, ok := err.(*CSVError); !ok || csvErr.Detail.Code != "csv_row_limit_exceeded" {
+	if csvErr, ok := err.(*CSVError); !ok || csvErr.Detail.Code != "row_limit_exceeded" {
 		t.Fatalf("应拒绝超限文件: %v", err)
 	}
 }

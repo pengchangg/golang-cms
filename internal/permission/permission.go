@@ -32,7 +32,7 @@ type ActiveModelProvider interface {
 var allSystemPermissions = []string{
 	UsersView, UsersManage, RolesView, RolesManage, ModelsView, ModelsCreate, ModelsUpdate, ModelsArchive,
 	"assets.view", "assets.upload", "assets.update", "assets.archive", "api_keys.view", "api_keys.create",
-	"api_keys.revoke", AuditView, "transfers.execute", "transfers.download",
+	"api_keys.revoke", AuditView,
 }
 
 var systemPermissionSet = makeSet(allSystemPermissions)

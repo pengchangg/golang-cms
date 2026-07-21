@@ -30,7 +30,6 @@ import (
 	"cms/internal/platform/config"
 	"cms/internal/platform/database"
 	"cms/internal/platform/migrate"
-	"cms/internal/platform/task"
 	"cms/internal/schema"
 	"cms/internal/transfer"
 	"cms/internal/version"
@@ -177,7 +176,6 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	client.NewAdminHandler(clientService, principalFromRequest).RegisterRoutes(adminMux)
 	contentMux := http.NewServeMux()
 	client.NewContentHandler(clientService, publishedReader).RegisterRoutes(contentMux)
-	var runner *task.Runner
 	if cfg.AssetsEnabled {
 		assetService, serviceErr := asset.NewService(asset.Dependencies{DB: db, Transactor: transactor, Repository: asset.SQLRepository{}, Store: objectStore, Audit: auditWriter, Config: asset.Config{AllowedMimeTypes: cfg.AssetMimeTypes, MaxSize: cfg.AssetMaxSize, UploadTTL: cfg.S3UploadTTL, DownloadTTL: cfg.S3DownloadTTL}})
 		if serviceErr != nil {
@@ -185,34 +183,14 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		}
 		asset.NewHandler(assetService, principalFromRequest).RegisterRoutes(adminMux)
 		integration.ClientAssetHandler{DB: db, Client: clientService, Assets: assetService}.RegisterRoutes(contentMux)
-
-		transferRepository := integration.TransferRepository{SQLRepository: transfer.NewRepository(db)}
-		transferStore := integration.TransferStore{Store: objectStore}
-		modelReader := integration.ModelReader{DB: db, Repository: schemaRepository}
-		transferService := transfer.NewService(transfer.Dependencies{DB: db, Transactor: transactor, Repository: transferRepository, Models: modelReader, Uploads: integration.UploadManager{DB: db, Store: objectStore, MaxSize: cfg.AssetMaxSize}, Store: transferStore, UploadTTL: cfg.S3UploadTTL, DownloadTTL: cfg.S3DownloadTTL})
-		transfer.NewModule(transferService, integration.TransferPrincipalProvider(principalFromRequest)).RegisterRoutes(adminMux)
-		principals := integration.PrincipalSnapshot{DB: db, Permissions: permissionProvider}
-		jobHandler := transfer.NewJobHandler(transfer.JobHandler{Repository: transferRepository, Store: transferStore, Importer: contentService, Validator: integration.DraftValidator{Content: contentService, DB: db}, Exporter: integration.ExportSource{Content: contentService, Principals: principals, Models: modelReader}, Principals: principals})
-		registry := task.NewRegistry()
-		if err = registry.Register(string(transfer.JobCSVImport), jobHandler.TaskHandler()); err != nil {
-			return err
-		}
-		if err = registry.Register(string(transfer.JobCSVExport), jobHandler.TaskHandler()); err != nil {
-			return err
-		}
-		taskStore, storeErr := task.NewSQLStore(db)
-		if storeErr != nil {
-			return storeErr
-		}
-		runner, err = task.NewRunner(taskStore, registry, task.RunnerConfig{Owner: cfg.WorkerOwner, Concurrency: cfg.WorkerConcurrency, PollInterval: cfg.WorkerPollInterval, LeaseDuration: cfg.WorkerLeaseDuration, RenewInterval: cfg.WorkerRenewInterval})
-		if err != nil {
-			return fmt.Errorf("初始化任务 Worker: %w", err)
-		}
 	}
+	modelReader := integration.ModelReader{DB: db, Repository: schemaRepository}
+	transferService := transfer.NewService(transfer.Dependencies{DB: db, Models: modelReader, Importer: contentService, Entries: contentService})
+	transfer.NewModule(transferService, principalFromRequest).RegisterRoutes(adminMux)
 	handler := app.New(
 		web,
 		authModule,
-		app.HandlerModule(authModule.Protect(csvUploadStatusHandler(adminMux)), "/api/admin/v1/"),
+		app.HandlerModule(authModule.Protect(adminMux), "/api/admin/v1/"),
 		app.HandlerModule(contentMux, "/api/content/v1/"),
 	)
 	server := &http.Server{
@@ -227,63 +205,11 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		logger.Info("HTTP 服务启动", "address", cfg.ListenAddr)
 		return server.ListenAndServe()
 	}}
-	if runner != nil {
-		services = append(services, func(workerCtx context.Context) error {
-			err := runner.Run(workerCtx)
-			if err == nil && workerCtx.Err() == nil {
-				return errors.New("任务 Worker 意外停止")
-			}
-			return err
-		})
-	}
 	return runParallel(ctx, func() error {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer shutdownCancel()
 		return server.Shutdown(shutdownCtx)
 	}, services...)
-}
-
-// csvUploadStatusHandler 补齐 transfer 通用 HTTP 层尚未提供的上传超限状态映射。
-func csvUploadStatusHandler(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/imports/uploads") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		recorder := &bufferedResponse{header: make(http.Header)}
-		next.ServeHTTP(recorder, r)
-		status := recorder.status
-		if status == 0 {
-			status = http.StatusOK
-		}
-		if status == http.StatusBadRequest && strings.Contains(recorder.body.String(), `"code":"file_too_large"`) {
-			status = http.StatusRequestEntityTooLarge
-		}
-		for key, values := range recorder.header {
-			w.Header()[key] = values
-		}
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(recorder.body.String()))
-	})
-}
-
-type bufferedResponse struct {
-	header http.Header
-	body   strings.Builder
-	status int
-}
-
-func (w *bufferedResponse) Header() http.Header { return w.header }
-func (w *bufferedResponse) WriteHeader(status int) {
-	if w.status == 0 {
-		w.status = status
-	}
-}
-func (w *bufferedResponse) Write(value []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
-	return w.body.Write(value)
 }
 
 func runParallel(ctx context.Context, shutdown func() error, services ...func(context.Context) error) error {

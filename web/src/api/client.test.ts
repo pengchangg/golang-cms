@@ -30,6 +30,37 @@ describe('API Client', () => {
     expect(headers.get('X-CSRF-Token')).toBe(session.csrf_token)
   })
 
+  it('CSV 导入使用 FormData boundary 并沿用 CSRF 与错误解析', async () => {
+    authStore.setSession(session)
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ imported: 2 }))
+      .mockResolvedValueOnce(Response.json({ error: { code: 'validation_failed', message: 'CSV 校验失败', request_id: 'req_csv', details: [] } }, { status: 400 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const file = new File(['title\n示例'], 'entries.csv', { type: 'text/csv' })
+
+    await expect(api.importCSV('mdl/a', file)).resolves.toEqual({ imported: 2 })
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    const headers = init.headers as Headers
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/v1/models/mdl%2Fa/imports')
+    expect(init.body).toBeInstanceOf(FormData)
+    expect((init.body as FormData).get('file')).toBe(file)
+    expect(headers.has('Content-Type')).toBe(false)
+    expect(headers.get('X-CSRF-Token')).toBe(session.csrf_token)
+    await expect(api.importCSV('mdl/a', file)).rejects.toMatchObject({ code: 'validation_failed', requestId: 'req_csv' })
+  })
+
+  it('CSV 导出编码查询并返回 Blob', async () => {
+    const responseBlob = new Blob(['title\n示例'], { type: 'text/csv' })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(responseBlob, { headers: { 'Content-Type': 'text/csv' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await api.exportCSV('mdl/a', { workflow_status: 'draft', filter: '{"title":{"eq":"示例"}}', sort: '-title' })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/v1/models/mdl%2Fa/exports.csv?workflow_status=draft&filter=%7B%22title%22%3A%7B%22eq%22%3A%22%E7%A4%BA%E4%BE%8B%22%7D%7D&sort=-title')
+    expect(result).toBeInstanceOf(Blob)
+    expect(result.type).toBe('text/csv')
+    expect(result.size).toBeGreaterThan(0)
+  })
+
   it('素材上传仅在对象存储 PUT 成功后确认并返回可用素材', async () => {
     const file = new File([new Uint8Array([1, 2, 3])], 'cover.png', { type: 'image/png' })
     Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1, 2, 3]).buffer })

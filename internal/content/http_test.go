@@ -84,11 +84,12 @@ func TestListEntriesAcceptsWorkflowFilterAndIncludesTotal(t *testing.T) {
 	service, repository, _, _ := testService()
 	now := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC)
 	repository.entries["ent_1"] = EntrySummary{ID: "ent_1", ModelID: "mdl_1", Status: StatusDraft, CurrentDraftRevisionID: "rev_1", WorkflowStatus: WorkflowPendingReview, CreatedAt: now, UpdatedAt: now}
+	repository.revisions["ent_1"] = []Revision{{ID: "rev_1", EntryID: "ent_1", ModelID: "mdl_1", Content: json.RawMessage(`{"title":"待审核标题"}`)}}
 	handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) { return contentPrincipal(permissionView), nil })
 	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/models/mdl_1/entries?workflow_status=pending_review&sort=-updated_at&include_total=true", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"workflow_status":"pending_review"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"total":1`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"total_is_estimate":false`)) {
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"workflow_status":"pending_review"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"current_draft_content":{"title":"待审核标题"}`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"fields":[{"key":"title"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"total":1`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"total_is_estimate":false`)) {
 		t.Fatalf("F2 列表响应错误: %d, %s", response.Code, response.Body.String())
 	}
 }

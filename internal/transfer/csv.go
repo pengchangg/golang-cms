@@ -15,7 +15,7 @@ import (
 	"cms/internal/schema"
 )
 
-const MaxRows = 100000
+const MaxRows = 1000
 const maxFieldBytes = 10 << 20
 const maxRecordBytes = 20 << 20
 
@@ -93,7 +93,7 @@ func ParseCSV(input io.Reader, fields []schema.ContentField, stage StageRow) err
 			return csvError(row, "", "invalid_csv", "CSV 记录格式无效")
 		}
 		if row-1 > MaxRows {
-			return csvError(row, "", "csv_row_limit_exceeded", "CSV 最多包含 100000 行数据")
+			return csvError(row, "", "row_limit_exceeded", "CSV 最多包含 1000 行数据")
 		}
 		recordBytes := 0
 		object := make(map[string]any, len(fields))

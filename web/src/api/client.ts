@@ -2,8 +2,8 @@ import { authStore } from '../auth/store'
 import type {
   APIKey, APIKeySecret, APIKeyStatus, Asset, AssetStatus, AssetUpload, AuditEvent, ContentEntry, ContentField, ContentFieldInput, ContentFieldPatch,
   ContentModel, ContentModelSummary, CreateAPIKeyRequest, CursorResponse, EntryListQuery,
-  EntryListResponse, ErrorResponse, ImportUpload, Job, JobStatus, JobType, ModelPermission, Role, RotateAPIKeyRequest, SessionResponse,
-  SystemPermission, TransferErrorListResponse, UpdateFieldOrderRequest, User, UserStatus, UserSummary, WorkflowEvent, CreateAssetUploadRequest, CreateExportRequest,
+  EntryListResponse, ErrorResponse, ExportCSVQuery, ModelPermission, Role, RotateAPIKeyRequest, SessionResponse,
+  SystemPermission, UpdateFieldOrderRequest, User, UserStatus, UserSummary, WorkflowEvent, CreateAssetUploadRequest,
 } from './types'
 
 const API_BASE = '/api/admin/v1'
@@ -44,14 +44,14 @@ function isErrorResponse(value: unknown): value is ErrorResponse {
   )
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, parse: (response: Response) => Promise<T> = (response) => response.json() as Promise<T>): Promise<T> {
   if (!path.startsWith('/') || path.startsWith('//')) {
     throw new TypeError('API 路径必须是同源绝对路径')
   }
 
   const method = (init.method ?? 'GET').toUpperCase()
   const headers = new Headers(init.headers)
-  if (init.body && !headers.has('Content-Type')) {
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
   if (!SAFE_METHODS.has(method)) {
@@ -91,7 +91,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
 
   if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
+  return parse(response)
 }
 
 function queryString(values: Record<string, string | number | boolean | undefined | null>) {
@@ -105,10 +105,6 @@ function queryString(values: Record<string, string | number | boolean | undefine
 
 function json(method: string, body: unknown): RequestInit {
   return { method, body: JSON.stringify(body) }
-}
-
-function idempotencyKey() {
-  return crypto.randomUUID().replaceAll('-', '')
 }
 
 export const api = {
@@ -158,14 +154,12 @@ export const api = {
   confirmAssetUpload: (id: string) => request<Asset>(`/assets/${encodeURIComponent(id)}/confirm`, json('POST', {})),
   updateAsset: (id: string, filename: string) => request<Asset>(`/assets/${encodeURIComponent(id)}`, json('PATCH', { filename })),
   archiveAsset: (id: string) => request<void>(`/assets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  createImportUpload: (modelId: string, body: { filename: string; size: number; sha256: string }) => request<ImportUpload>(`/models/${encodeURIComponent(modelId)}/imports/uploads`, { ...json('POST', body), cache: 'no-store' }),
-  createImport: (modelId: string, upload_id: string) => request<Job>(`/models/${encodeURIComponent(modelId)}/imports`, { ...json('POST', { upload_id }), headers: { 'Idempotency-Key': idempotencyKey() } }),
-  createExport: (modelId: string, body: CreateExportRequest) => request<Job>(`/models/${encodeURIComponent(modelId)}/exports`, { ...json('POST', body), headers: { 'Idempotency-Key': idempotencyKey() } }),
-  listJobs: (filters: { type?: JobType; status?: JobStatus; model_id?: string; limit?: number; cursor?: string } = {}) => request<CursorResponse<Job>>(`/jobs${queryString(filters)}`),
-  getJob: (id: string) => request<Job>(`/jobs/${encodeURIComponent(id)}`),
-  cancelJob: (id: string) => request<Job>(`/jobs/${encodeURIComponent(id)}/cancel`, json('POST', {})),
-  retryJob: (id: string) => request<Job>(`/jobs/${encodeURIComponent(id)}/retry`, json('POST', {})),
-  listJobErrors: (id: string, cursor?: string) => request<TransferErrorListResponse>(`/jobs/${encodeURIComponent(id)}/errors${queryString({ cursor })}`),
+  importCSV: (modelId: string, file: File) => {
+    const body = new FormData()
+    body.append('file', file)
+    return request<{ imported: number }>(`/models/${encodeURIComponent(modelId)}/imports`, { method: 'POST', body })
+  },
+  exportCSV: (modelId: string, query: ExportCSVQuery) => request<Blob>(`/models/${encodeURIComponent(modelId)}/exports.csv${queryString({ ...query })}`, {}, (response) => response.blob()),
 }
 
 export async function putSignedUpload(upload: { method: 'PUT'; url: string; headers: Record<string, string> }, file: Blob) {

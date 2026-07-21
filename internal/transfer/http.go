@@ -2,58 +2,61 @@ package transfer
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime/multipart"
+	"net"
 	"net/http"
-	"strconv"
+	"os"
+	"strings"
 
+	"cms/internal/content"
 	"cms/internal/identity"
 	"cms/internal/platform/apperror"
 	"cms/internal/platform/httpx"
 )
 
+const maxImportBytes = 10 << 20
+const maxImportRequestBytes = maxImportBytes + 1<<20
+
 type PrincipalProvider func(*http.Request) (identity.Principal, error)
+
 type Handler struct {
 	service   *Service
 	principal PrincipalProvider
 }
 
 func NewHandler(service *Service, principal PrincipalProvider) *Handler {
-	return &Handler{service, principal}
+	return &Handler{service: service, principal: principal}
 }
+
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/v1/models/{model_id}/transfers/template", h.template)
-	mux.HandleFunc("POST /api/admin/v1/models/{model_id}/imports/uploads", h.upload)
-	mux.HandleFunc("POST /api/admin/v1/models/{model_id}/imports", h.createImport)
-	mux.HandleFunc("POST /api/admin/v1/models/{model_id}/exports", h.createExport)
-	mux.HandleFunc("GET /api/admin/v1/jobs", h.list)
-	mux.HandleFunc("GET /api/admin/v1/jobs/{job_id}", h.get)
-	mux.HandleFunc("POST /api/admin/v1/jobs/{job_id}/cancel", h.cancel)
-	mux.HandleFunc("POST /api/admin/v1/jobs/{job_id}/retry", h.retry)
-	mux.HandleFunc("GET /api/admin/v1/jobs/{job_id}/errors", h.errors)
-	mux.HandleFunc("GET /api/admin/v1/jobs/{job_id}/files/{file_kind}", h.download)
+	mux.HandleFunc("POST /api/admin/v1/models/{model_id}/imports", h.importCSV)
+	mux.HandleFunc("GET /api/admin/v1/models/{model_id}/exports.csv", h.exportCSV)
 }
-func (h *Handler) auth(w http.ResponseWriter, r *http.Request) (identity.Principal, bool) {
+
+func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (identity.Principal, bool) {
 	if h.principal == nil {
 		httpx.WriteError(w, r, &apperror.Error{Kind: apperror.KindUnauthenticated, Code: "session_invalid", Message: "管理会话无效"})
 		return identity.Principal{}, false
 	}
-	p, err := h.principal(r)
+	principal, err := h.principal(r)
 	if err != nil {
 		httpx.WriteError(w, r, err)
-		return p, false
+		return principal, false
 	}
-	return p, true
+	return principal, true
 }
+
 func (h *Handler) template(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
+	principal, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
 	var body bytes.Buffer
-	if err := h.service.Template(r.Context(), p, r.PathValue("model_id"), &body); err != nil {
+	if err := h.service.Template(r.Context(), principal, r.PathValue("model_id"), &body); err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
@@ -61,181 +64,142 @@ func (h *Handler) template(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="template.csv"`)
 	_, _ = w.Write(body.Bytes())
 }
-func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
+
+func (h *Handler) importCSV(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
 	if !ok {
 		return
 	}
-	var req struct {
-		Filename string `json:"filename"`
-		Size     int64  `json:"size"`
-		SHA256   string `json:"sha256"`
-	}
-	if !decode(w, r, &req) {
+	if !hasModel(principal, r.PathValue("model_id"), "content.create") {
+		httpx.WriteError(w, r, forbidden())
 		return
 	}
-	result, err := h.service.CreateUpload(r.Context(), p, r.PathValue("model_id"), req.Filename, req.Size, req.SHA256)
-	if err == nil {
-		w.Header().Set("Cache-Control", "no-store")
-	}
-	respond(w, r, http.StatusCreated, result, err)
-}
-func (h *Handler) createImport(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
-	if !ok {
-		return
-	}
-	var req struct {
-		UploadID string `json:"upload_id"`
-	}
-	if !decode(w, r, &req) {
-		return
-	}
-	job, replayed, err := h.service.CreateImport(r.Context(), p, r.PathValue("model_id"), req.UploadID, r.Header.Get("Idempotency-Key"))
-	status := http.StatusCreated
-	if replayed {
-		status = http.StatusOK
-	}
-	respond(w, r, status, job, err)
-}
-func (h *Handler) createExport(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
-	if !ok {
-		return
-	}
-	var req ExportRequest
-	if !decode(w, r, &req) {
-		return
-	}
-	job, replayed, err := h.service.CreateExport(r.Context(), p, r.PathValue("model_id"), r.Header.Get("Idempotency-Key"), req)
-	status := http.StatusCreated
-	if replayed {
-		status = http.StatusOK
-	}
-	respond(w, r, status, job, err)
-}
-func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
-	if !ok {
-		return
-	}
-	result, err := h.service.Get(r.Context(), p, r.PathValue("job_id"))
-	respond(w, r, http.StatusOK, result, err)
-}
-func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
-	if !ok {
-		return
-	}
-	limit := 20
-	if text := r.URL.Query().Get("limit"); text != "" {
-		var err error
-		limit, err = strconv.Atoi(text)
-		if err != nil {
-			httpx.WriteError(w, r, invalid("invalid_query", "任务查询无效"))
+	// multipart 自身有边界和头部开销，文件大小在解析后单独按 10 MiB 校验。
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportRequestBytes)
+	if err := r.ParseMultipartForm(maxImportBytes); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeStatusError(w, r, http.StatusRequestEntityTooLarge, "file_too_large", "CSV 文件不能超过 10 MiB")
 			return
 		}
-	}
-	result, err := h.service.List(r.Context(), p, JobFilter{Type: JobType(r.URL.Query().Get("type")), Status: JobStatus(r.URL.Query().Get("status")), ModelID: r.URL.Query().Get("model_id"), Limit: limit, Cursor: r.URL.Query().Get("cursor")})
-	respond(w, r, http.StatusOK, result, err)
-}
-func (h *Handler) cancel(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
-	if !ok {
+		httpx.WriteError(w, r, invalid("invalid_multipart", "请求必须是 multipart/form-data"))
 		return
 	}
-	result, err := h.service.Cancel(r.Context(), p, r.PathValue("job_id"))
-	respond(w, r, http.StatusOK, result, err)
-}
-func (h *Handler) retry(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
-	if !ok {
-		return
-	}
-	result, err := h.service.Retry(r.Context(), p, r.PathValue("job_id"))
-	respond(w, r, http.StatusOK, result, err)
-}
-func (h *Handler) errors(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
-	if !ok {
-		return
-	}
-	limit, after := 20, 0
-	if text := r.URL.Query().Get("limit"); text != "" {
-		var err error
-		limit, err = strconv.Atoi(text)
-		if err != nil {
-			httpx.WriteError(w, r, invalid("invalid_query", "错误详情查询无效"))
-			return
-		}
-	}
-	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(cursor)
-		if err != nil {
-			httpx.WriteError(w, r, invalid("invalid_cursor", "分页游标无效"))
-			return
-		}
-		after, err = strconv.Atoi(string(raw))
-		if err != nil {
-			httpx.WriteError(w, r, invalid("invalid_cursor", "分页游标无效"))
-			return
-		}
-	}
-	result, err := h.service.Errors(r.Context(), p, r.PathValue("job_id"), limit, after)
-	respond(w, r, http.StatusOK, result, err)
-}
-func (h *Handler) download(w http.ResponseWriter, r *http.Request) {
-	p, ok := h.auth(w, r)
-	if !ok {
-		return
-	}
-	kind := r.PathValue("file_kind")
-	if kind != "errors" && kind != "result" {
-		httpx.WriteError(w, r, notFound())
-		return
-	}
-	result, err := h.service.Download(r.Context(), p, r.PathValue("job_id"), kind)
+	defer r.MultipartForm.RemoveAll()
+	file, err := singleImportFile(r.MultipartForm)
 	if err != nil {
-		var expired *jobFileExpiredError
-		if errors.As(err, &expired) {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusGone)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": "job_file_expired", "message": "任务文件已过期", "request_id": httpx.RequestIDFromContext(r.Context()), "details": []map[string]any{}}})
+		var tooLarge *fileTooLargeError
+		if errors.As(err, &tooLarge) {
+			writeStatusError(w, r, http.StatusRequestEntityTooLarge, "file_too_large", tooLarge.Error())
 			return
 		}
 		httpx.WriteError(w, r, err)
 		return
 	}
-	w.Header().Set("Cache-Control", "private, no-store")
-	http.Redirect(w, r, result.Location, http.StatusFound)
-}
-func decode(w http.ResponseWriter, r *http.Request, target any) bool {
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		httpx.WriteError(w, r, invalid("validation_failed", "请求体不是合法 JSON"))
-		return false
+	defer file.Close()
+	model, err := h.service.models.GetModel(r.Context(), h.service.db, r.PathValue("model_id"))
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
 	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		httpx.WriteError(w, r, invalid("validation_failed", "请求体只能包含一个 JSON 值"))
-		return false
+	rows := make([]json.RawMessage, 0)
+	err = ParseCSV(file, ActiveRootFields(model.Fields), func(_ int, raw json.RawMessage) error {
+		rows = append(rows, append(json.RawMessage(nil), raw...))
+		return nil
+	})
+	if err != nil {
+		var csvErr *CSVError
+		if errors.As(err, &csvErr) {
+			httpx.WriteError(w, r, invalidDetail(csvErr.Detail))
+		} else {
+			httpx.WriteError(w, r, err)
+		}
+		return
 	}
-	return true
-}
-func respond(w http.ResponseWriter, r *http.Request, status int, value any, err error) {
+	result, err := h.service.Import(r.Context(), principal, requestMeta(r), r.PathValue("model_id"), rows)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func singleImportFile(form *multipart.Form) (multipart.File, error) {
+	if len(form.Value) != 0 || len(form.File) != 1 || len(form.File["file"]) != 1 {
+		return nil, invalid("invalid_multipart", "必须且只能提供一个 file 文件字段")
+	}
+	header := form.File["file"][0]
+	if header.Size > maxImportBytes {
+		return nil, &fileTooLargeError{}
+	}
+	file, err := header.Open()
+	if err != nil {
+		return nil, invalid("invalid_multipart", "无法读取 CSV 文件")
+	}
+	return file, nil
+}
+
+type fileTooLargeError struct{}
+
+func (*fileTooLargeError) Error() string { return "CSV 文件不能超过 10 MiB" }
+
+func (h *Handler) exportCSV(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	values := r.URL.Query()
+	for key := range values {
+		if key != "workflow_status" && key != "filter" && key != "relation_filter" && key != "sort" || len(values[key]) != 1 {
+			httpx.WriteError(w, r, invalid("invalid_query", "导出查询无效"))
+			return
+		}
+	}
+	file, err := os.CreateTemp("", "cms-export-*.csv")
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	defer func() { name := file.Name(); _ = file.Close(); _ = os.Remove(name) }()
+	if err = h.service.Export(r.Context(), principal, r.PathValue("model_id"), ExportRequest{WorkflowStatus: values.Get("workflow_status"), Filter: values.Get("filter"), RelationFilter: values.Get("relation_filter"), Sort: values.Get("sort")}, file); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="export.csv"`)
+	_, _ = io.Copy(w, file)
+}
+
+func requestMeta(r *http.Request) content.RequestMeta {
+	ip := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	if parsed := net.ParseIP(ip); parsed != nil {
+		ip = parsed.String()
+	}
+	userAgent := []rune(r.UserAgent())
+	if len(userAgent) > 512 {
+		userAgent = userAgent[:512]
+	}
+	return content.RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: ip, UserAgent: string(userAgent)}
+}
+
+func writeStatusError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": code, "message": message, "request_id": httpx.RequestIDFromContext(r.Context()), "details": []map[string]any{}}})
 }
 
 type Module struct{ handler *Handler }
 
 func NewModule(service *Service, principal PrincipalProvider) Module {
-	return Module{NewHandler(service, principal)}
+	return Module{handler: NewHandler(service, principal)}
 }
+
 func (m Module) RegisterRoutes(mux *http.ServeMux) { m.handler.RegisterRoutes(mux) }

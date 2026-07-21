@@ -149,6 +149,12 @@ func (r *memoryRepository) ListEntries(_ context.Context, _ database.Querier, mo
 	items := []EntrySummary{}
 	for _, item := range r.entries {
 		if item.ModelID == modelID && item.Status == query.Status && (query.WorkflowStatus == nil || item.WorkflowStatus == *query.WorkflowStatus) {
+			for _, revision := range r.revisions[item.ID] {
+				if revision.ID == item.CurrentDraftRevisionID {
+					item.CurrentDraftContent = revision.Content
+					break
+				}
+			}
 			items = append(items, item)
 		}
 	}
@@ -185,6 +191,7 @@ func (r *memoryRepository) GetEntry(_ context.Context, _ database.Querier, model
 	revisions := r.revisions[entryID]
 	for _, revision := range revisions {
 		if revision.ID == entry.CurrentDraftRevisionID {
+			entry.CurrentDraftContent = revision.Content
 			return Entry{EntrySummary: entry, CurrentDraftRevision: revision}, nil
 		}
 	}
@@ -685,6 +692,31 @@ func TestListEntriesRequiresViewPermissionForEveryExpandedTarget(t *testing.T) {
 	}
 	if repository.listCalls != 1 || repository.expandCalls != 1 {
 		t.Fatalf("授权后应正常查询并展开: list=%d expand=%d", repository.listCalls, repository.expandCalls)
+	}
+}
+
+func TestListEntriesReturnsDraftContentAndActiveRootFieldDefinitions(t *testing.T) {
+	service, _, _, _ := testService()
+	created, err := service.CreateEntry(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"列表标题"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := service.models.(memoryModels)
+	models.model.Fields = append(models.model.Fields,
+		schema.ContentField{ID: "fld_kind", Key: "kind", DisplayName: "类型", Type: schema.FieldTypeSingleSelect, Constraints: schema.FieldConstraints{EnumOptions: []schema.EnumOption{{Value: "news", Label: "新闻"}}, Filterable: true, Sortable: true}, Status: schema.StatusActive},
+		schema.ContentField{ID: "fld_old", Key: "old", DisplayName: "旧字段", Type: schema.FieldTypeSingleLineText, Status: schema.StatusArchived},
+	)
+	service.models = models
+
+	result, err := service.ListEntries(context.Background(), contentPrincipal(permissionView), "mdl_1", AdminEntryQuery{Status: StatusDraft, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].ID != created.ID || string(result.Items[0].CurrentDraftContent) != `{"title":"列表标题"}` {
+		t.Fatalf("列表未返回当前草稿内容: %#v", result.Items)
+	}
+	if len(result.Fields) != 2 || result.Fields[0].Key != "title" || result.Fields[1].Key != "kind" || len(result.Fields[1].Constraints.EnumOptions) != 1 || !result.Fields[1].Constraints.Filterable || !result.Fields[1].Constraints.Sortable {
+		t.Fatalf("列表字段定义未按活动根字段裁剪: %#v", result.Fields)
 	}
 }
 

@@ -23,8 +23,6 @@ $defs:
       - api_keys.create
       - api_keys.revoke
       - audit.view
-      - transfers.execute
-      - transfers.download
   ModelPermissionCode:
     type: string
     enum:

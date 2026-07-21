@@ -35,7 +35,6 @@ var systemPermissionCodes = map[string]struct{}{
 	"models.view": {}, "models.create": {}, "models.update": {}, "models.archive": {},
 	"assets.view": {}, "assets.upload": {}, "assets.update": {}, "assets.archive": {},
 	"api_keys.view": {}, "api_keys.create": {}, "api_keys.revoke": {}, "audit.view": {},
-	"transfers.execute": {}, "transfers.download": {},
 }
 
 var modelPermissionCodes = map[string]struct{}{
