@@ -32,7 +32,8 @@ describe('动态内容表单', () => {
     const ids = Array.from({ length: 52 }, (_, index) => `ast_${index}`)
     render(<DynamicContentForm fields={[field('multi_media')]} content={{ multi_media: ['ast_0', 'ast_0', ...ids.slice(1)] }} onChange={vi.fn()} />)
     expect(screen.getByText('已选 50 / 50')).toBeVisible()
-    expect(screen.getByText('1.')).toBeVisible()
+    expect(screen.getByText('ast_0')).toBeVisible()
+    expect(screen.getByRole('button', { name: '移除素材 1' })).toBeVisible()
     expect(screen.queryByText('ast_50')).not.toBeInTheDocument()
   })
 

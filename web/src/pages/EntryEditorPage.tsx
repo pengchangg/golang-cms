@@ -96,7 +96,7 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
     {entry.data?.status === 'archived' ? <Alert type="warning" showIcon title="归档内容不可编辑" /> : null}
     <div className="entry-workspace">
       <DataState loading={entry.loading || (canViewModel && model.loading)} error={entry.error ?? (canViewModel ? model.error : undefined)} retry={() => { model.reload(); entry.reload() }}>
-        {canEditStructure ? <DynamicContentForm fields={model.data!.fields} content={content} onChange={setDraft} disabled={!canWrite || !editable || entry.data?.status === 'archived'} canSelectAssets={hasSystemPermission(principal, 'assets.view')} canUploadAssets={hasSystemPermission(principal, 'assets.view') && hasSystemPermission(principal, 'assets.upload')} /> : entry.data ? <pre aria-label="只读内容数据">{JSON.stringify(entry.data.current_draft_revision.content, null, 2)}</pre> : null}
+        {canEditStructure ? <DynamicContentForm fields={model.data!.fields} content={content} onChange={setDraft} disabled={!canWrite || !editable || entry.data?.status === 'archived'} canSelectAssets={hasSystemPermission(principal, 'assets.view')} canUploadAssets={hasSystemPermission(principal, 'assets.view') && hasSystemPermission(principal, 'assets.upload')} referencedAssets={entry.data?.referenced_assets} /> : entry.data ? <pre aria-label="只读内容数据">{JSON.stringify(entry.data.current_draft_revision.content, null, 2)}</pre> : null}
       </DataState>
       {entryId ? <aside className="workflow-history" aria-label="版本工作流事件">
         <Typography.Title level={3}>版本事件</Typography.Title>

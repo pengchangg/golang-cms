@@ -138,7 +138,8 @@ button, a { touch-action: manipulation; }
 .secret-modal .ant-modal-content { border-top: 5px solid var(--green); }
 .secret-value { margin: 20px 0 12px !important; padding: 16px; border: 1px solid var(--line); background: #f3f3eb; overflow-wrap: anywhere; }
 .asset-picker { display: grid; gap: 10px; }
-.asset-selection { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; }
+.asset-selection { display: grid; max-width: 720px; gap: 8px; min-height: 24px; }
+.asset-selection-item { display: grid; align-items: center; gap: 8px; grid-template-columns: minmax(0, 1fr) auto; padding: 8px; border: 1px solid var(--line); background: rgb(255 254 249 / 55%); }
 .asset-picker-actions { margin-bottom: 16px; }
 .repeatable-group { display: grid; gap: 12px; }
 .repeatable-add { justify-self: start; }
