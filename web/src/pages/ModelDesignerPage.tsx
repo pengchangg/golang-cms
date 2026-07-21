@@ -6,7 +6,7 @@ import { Alert, Button, Checkbox, Drawer, Form, Input, InputNumber, Modal, Selec
 import { useState, type ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
 
-import { ApiError, api } from '../api/client'
+import { ApiError, api, apiErrorMessage } from '../api/client'
 import type { ContentField, FieldType, Principal, UpdateFieldOrderRequest } from '../api/types'
 import { hasSystemPermission } from '../auth/permissions'
 import { DataState, PageHeader, useApiData } from '../components/Page'
@@ -20,7 +20,7 @@ import { relationModelOptions } from '../relationModels'
 type Editor = { field?: ContentField; parent?: ContentField; depth: number } | null
 
 function errorText(error: unknown, fallback: string) {
-  if (!(error instanceof ApiError)) return fallback
+  if (!(error instanceof ApiError)) return apiErrorMessage(error, fallback)
   const labels: Record<string, string> = {
     validation_failed: '字段配置不符合要求，请检查标红项目',
     key_conflict: '字段标识已存在，归档字段的标识也不能复用',
@@ -30,7 +30,9 @@ function errorText(error: unknown, fallback: string) {
     resource_archived: '模型或字段已归档，不能继续修改',
     permission_denied: '没有执行此操作的权限',
   }
-  return `${labels[error.code] ?? error.message ?? fallback}（请求 ID：${error.requestId}）`
+  const summary = labels[error.code] ?? error.message ?? fallback
+  const details = [...new Set(error.details.map((detail) => detail.message).filter(Boolean))]
+  return `${details.length ? `${summary}：${details.join('；')}` : summary}（请求 ID：${error.requestId}）`
 }
 
 export default function ModelDesignerPage({ principal }: { principal: Principal }) {
@@ -73,8 +75,8 @@ export default function ModelDesignerPage({ principal }: { principal: Principal 
       setEditor(null)
       model.reload(true)
     } catch (error) {
-      if (error instanceof ApiError && error.code === 'validation_failed') form.setFields(validationFields(error.details, values) as Parameters<typeof form.setFields>[0])
       messageApi.error(errorText(error, '保存字段失败'))
+      if (error instanceof ApiError && error.code === 'validation_failed') form.setFields(validationFields(error.details, values) as Parameters<typeof form.setFields>[0])
     } finally {
       setSaving(false)
     }
@@ -120,7 +122,7 @@ export default function ModelDesignerPage({ principal }: { principal: Principal 
       {model.data ? <FieldList fields={model.data.fields} parentId={null} depth={0} disabled={disabled || saving || reordering} canArchive={canArchive && model.data.status === 'active'} onEdit={(field, depth) => openEditor({ field, depth })} onAddChild={(parent, depth) => openEditor({ parent, depth })} onArchive={archive} onReorder={reorder} /> : null}
     </DataState>
     <Drawer className="field-drawer" width={560} title={editor?.field ? `编辑字段 · ${editor.field.display_name}` : editor?.parent ? `添加子字段 · ${editor.parent.display_name}` : '添加根字段'} open={Boolean(editor)} maskClosable={!saving} keyboard={!saving} closable={!saving} onClose={() => { if (!saving) setEditor(null) }} extra={<Space><Button disabled={saving} onClick={() => setEditor(null)}>取消</Button><Button type="primary" loading={saving} disabled={reordering} onClick={saveField}>保存</Button></Space>}>
-      <Form form={form} layout="vertical" requiredMark="optional"><FieldConfig form={form} path={[]} depth={editor?.depth ?? 0} editing={Boolean(editor?.field)} originalType={editor?.field?.type} originalDefaultValue={editor?.field?.default_value} relationOptions={relationOptions} relationError={targetModels.error} reloadRelations={targetModels.reload} /></Form>
+      <Form form={form} layout="vertical" requiredMark="optional"><FieldConfig form={form} path={[]} watchPath={[]} depth={editor?.depth ?? 0} editing={Boolean(editor?.field)} originalType={editor?.field?.type} originalDefaultValue={editor?.field?.default_value} relationOptions={relationOptions} relationError={targetModels.error} reloadRelations={targetModels.reload} /></Form>
     </Drawer>
   </>
 }
@@ -173,15 +175,16 @@ function SortableField({ field, depth, disabled, canArchive, first, last, onMove
 }
 /* eslint-enable react-hooks/refs */
 
-function FieldConfig({ form, path, depth, editing, originalType, originalDefaultValue, relationOptions, relationError, reloadRelations }: {
-  form: ReturnType<typeof Form.useForm<FieldFormValues>>[0]; path: (string | number)[]; depth: number; editing: boolean; originalType?: FieldType
+export function FieldConfig({ form, path, watchPath, depth, editing, originalType, originalDefaultValue, relationOptions, relationError, reloadRelations }: {
+  form: ReturnType<typeof Form.useForm<FieldFormValues>>[0]; path: (string | number)[]; watchPath: (string | number)[]; depth: number; editing: boolean; originalType?: FieldType
   originalDefaultValue?: unknown
   relationOptions: Array<{ value: string; label: string; searchText: string }>; relationError?: unknown; reloadRelations: () => void
 }) {
   const name = (value: string) => [...path, value]
-  const type = Form.useWatch(name('type'), form)
-  const hasDefault = Form.useWatch(name('has_default'), form)
-  const enumOptions = Form.useWatch(name('enum_options'), form) ?? []
+  const watchName = (value: string) => [...watchPath, value]
+  const type = Form.useWatch(watchName('type'), form)
+  const hasDefault = Form.useWatch(watchName('has_default'), form)
+  const enumOptions = Form.useWatch(watchName('enum_options'), form) ?? []
   const needsInitialChildren = isContainerType(type) && (!editing || type !== originalType)
   return <>
     <Form.Item name={name('key')} label="稳定标识" rules={[{ required: true, message: '请输入稳定标识' }, { pattern: /^[a-z][a-z0-9_]{0,63}$/, message: '以小写字母开头，只能包含小写字母、数字和下划线' }]}><Input disabled={editing} placeholder="例如 article_title" /></Form.Item>
@@ -196,7 +199,7 @@ function FieldConfig({ form, path, depth, editing, originalType, originalDefault
     {isRelationType(type) ? <>{relationError ? <Alert type="error" showIcon title="目标模型加载失败" action={<Button size="small" onClick={reloadRelations}>重试</Button>} /> : null}<Form.Item name={name('target_model_id')} label="关联目标" rules={[{ required: true, message: '请选择关联目标模型' }]}><Select showSearch optionFilterProp="searchText" options={relationOptions} disabled={Boolean(relationError)} /></Form.Item></> : null}
     {depth === 0 && supportsRootProjection(type) ? <div className="projection-options"><Typography.Text strong>查询投影</Typography.Text><Typography.Text type="secondary">启用后可用于唯一性校验、筛选或排序。已有内容的模型可能需要先回填。</Typography.Text><Space wrap><Form.Item name={name('unique')} valuePropName="checked"><Checkbox>唯一</Checkbox></Form.Item><Form.Item name={name('filterable')} valuePropName="checked"><Checkbox>可筛选</Checkbox></Form.Item><Form.Item name={name('sortable')} valuePropName="checked"><Checkbox>可排序</Checkbox></Form.Item></Space></div> : null}
     {!serverForbiddenDefaultTypes.has(type) && !complexDefaultTypes.has(type) ? <div className="default-editor"><Form.Item name={name('has_default')} label="设置默认值" valuePropName="checked"><Switch /></Form.Item>{hasDefault ? <DefaultControl type={type} name={name} options={enumOptions} /> : null}</div> : serverForbiddenDefaultTypes.has(type) ? <Alert type="info" showIcon title="服务端不允许此类型设置非空默认值" /> : <Alert type="info" showIcon title={editing && type === originalType && originalDefaultValue != null ? '当前界面暂不支持编辑复杂默认值，保存时会原样保留' : '当前界面暂不支持编辑复杂默认值，新建或切换到此类型时将使用 null'} />}
-    {needsInitialChildren ? <InitialChildren form={form} path={name('initial_children')} depth={depth + 1} relationOptions={relationOptions} relationError={relationError} reloadRelations={reloadRelations} /> : null}
+    {needsInitialChildren ? <InitialChildren form={form} path={name('initial_children')} watchPath={watchName('initial_children')} depth={depth + 1} relationOptions={relationOptions} relationError={relationError} reloadRelations={reloadRelations} /> : null}
   </>
 }
 
@@ -213,9 +216,9 @@ function DefaultControl({ type, name, options }: { type?: FieldType; name: (valu
   return <Form.Item name={name(field)} label="默认值" valuePropName={type === 'boolean' ? 'checked' : 'value'} rules={[{ required: type !== 'boolean', message: '请输入默认值' }, ...(type === 'integer' ? [{ validator: (_: unknown, value: number) => Number.isSafeInteger(value) ? Promise.resolve() : Promise.reject(new Error('请输入 JavaScript 安全整数')) }] : [])]}>{control}</Form.Item>
 }
 
-function InitialChildren({ form, path, depth, relationOptions, relationError, reloadRelations }: {
-  form: ReturnType<typeof Form.useForm<FieldFormValues>>[0]; path: (string | number)[]; depth: number
+function InitialChildren({ form, path, watchPath, depth, relationOptions, relationError, reloadRelations }: {
+  form: ReturnType<typeof Form.useForm<FieldFormValues>>[0]; path: (string | number)[]; watchPath: (string | number)[]; depth: number
   relationOptions: Array<{ value: string; label: string; searchText: string }>; relationError?: unknown; reloadRelations: () => void
 }) {
-  return <Form.List name={path} rules={[{ validator: async (_, children) => { if (!children?.length) throw new Error('容器至少需要一个子字段') } }]}>{(fields, { add, remove }, { errors }) => <div className="initial-children"><Typography.Title level={5}>初始子字段</Typography.Title>{fields.map((field, index) => <div className="initial-child" key={field.key}><div className="initial-child-heading"><Typography.Text strong>子字段 {index + 1}</Typography.Text><Button danger type="text" onClick={() => remove(field.name)}>移除</Button></div><FieldConfig form={form} path={[...path, field.name]} depth={depth} editing={false} relationOptions={relationOptions} relationError={relationError} reloadRelations={reloadRelations} /></div>)}<Button icon={<PlusOutlined />} onClick={() => add({ key: '', display_name: '', type: 'single_line_text', required: false, has_default: false })}>添加初始子字段</Button><Form.ErrorList errors={errors} /></div>}</Form.List>
+  return <Form.List name={path} rules={[{ validator: async (_, children) => { if (!children?.length) throw new Error('容器至少需要一个子字段') } }]}>{(fields, { add, remove }, { errors }) => <div className="initial-children"><Typography.Title level={5}>初始子字段</Typography.Title>{fields.map((field, index) => <div className="initial-child" key={field.key}><div className="initial-child-heading"><Typography.Text strong>子字段 {index + 1}</Typography.Text><Button danger type="text" onClick={() => remove(field.name)}>移除</Button></div><FieldConfig form={form} path={[field.name]} watchPath={[...watchPath, field.name]} depth={depth} editing={false} relationOptions={relationOptions} relationError={relationError} reloadRelations={reloadRelations} /></div>)}<Button icon={<PlusOutlined />} onClick={() => add({ key: '', display_name: '', type: 'single_line_text', required: false, has_default: false })}>添加初始子字段</Button><Form.ErrorList errors={errors} /></div>}</Form.List>
 }

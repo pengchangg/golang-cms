@@ -2,7 +2,7 @@ import { Button, Modal, Space, Upload, Typography, message } from 'antd'
 import type { UploadFile } from 'antd'
 import { useState } from 'react'
 
-import { adminDownloadUrl, api } from '../api/client'
+import { adminDownloadUrl, api, apiErrorMessage } from '../api/client'
 import type { ExportCSVQuery, Principal } from '../api/types'
 import { hasModelPermission } from '../auth/permissions'
 
@@ -28,7 +28,7 @@ export function TransferActions({ principal, modelId, exportQuery, onImported }:
       setFiles([])
       onImported()
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'CSV 导入失败')
+      message.error(apiErrorMessage(error, 'CSV 导入失败'))
     } finally { setImporting(false) }
   }
 
@@ -46,7 +46,7 @@ export function TransferActions({ principal, modelId, exportQuery, onImported }:
         URL.revokeObjectURL(url)
       }
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'CSV 导出失败')
+      message.error(apiErrorMessage(error, 'CSV 导出失败'))
     } finally { setExporting(false) }
   }
 

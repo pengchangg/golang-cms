@@ -121,6 +121,24 @@ button, a { touch-action: manipulation; }
 .dynamic-field > label { display: flex; align-items: center; gap: 8px; }
 .required-mark { color: #a63a32; font-size: 12px; }
 .dynamic-field .dynamic-form { padding: 8px 0 0 16px; border-left: 2px solid rgb(37 107 85 / 20%); }
+.rich-text-editor, .json-editor { overflow: hidden; border: 1px solid var(--line); background: #fffef9; }
+.rich-text-editor:focus-within, .json-editor:focus-within { border-color: var(--green); box-shadow: 0 0 0 2px rgb(37 107 85 / 12%); }
+.rich-text-editor.is-disabled { background: #f3f3eb; }
+.rich-text-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); background: rgb(244 243 238 / 75%); }
+.rich-text-editor .tiptap { min-height: 220px; padding: 16px 18px; outline: 0; }
+.rich-text-editor .tiptap > :first-child { margin-top: 0; }
+.rich-text-editor .tiptap > :last-child { margin-bottom: 0; }
+.rich-text-editor .tiptap blockquote { margin-inline: 0; padding-left: 14px; border-left: 3px solid var(--green); color: var(--muted); }
+.rich-text-editor .tiptap pre { overflow-x: auto; padding: 14px; background: #242b28; color: #f7f4e8; }
+.rich-text-editor .tiptap code { padding: 1px 4px; background: rgb(37 107 85 / 10%); }
+.json-editor-actions { display: flex; justify-content: flex-end; padding: 8px; border-bottom: 1px solid var(--line); background: rgb(244 243 238 / 75%); }
+.json-editor .cm-editor { min-height: 180px; font-size: 13px; }
+.json-editor .cm-scroller { overflow: auto; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+.json-editor .ant-alert { border-width: 1px 0 0; border-radius: 0; }
+.relation-picker { display: grid; gap: 8px; }
+.relation-picker .ant-select { width: 100%; }
+.relation-picker-state { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px; border-top: 1px solid var(--line); }
+.editor-loading { min-height: 96px; padding: 24px; border: 1px solid var(--line); background: #f3f3eb; color: var(--muted); }
 .audit-detail { max-width: 900px; margin-top: 32px; }
 .audit-detail pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .audit-primary { display: grid; gap: 3px; }

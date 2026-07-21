@@ -1,9 +1,9 @@
 import { LogoutOutlined, MenuOutlined, UserOutlined } from '@ant-design/icons'
-import { Avatar, Button, Drawer, Dropdown, Layout, Menu, Typography } from 'antd'
+import { Avatar, Button, Drawer, Dropdown, Layout, Menu, Typography, message } from 'antd'
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 
-import { api } from '../api/client'
+import { api, apiErrorMessage } from '../api/client'
 import type { ModelPermission } from '../api/types'
 import { visibleNavigation } from '../auth/permissions'
 import { authStore, useAuthState } from '../auth/store'
@@ -54,6 +54,8 @@ export default function AppShell() {
     try {
       await api.logout()
       authStore.clear()
+    } catch (error) {
+      message.error(apiErrorMessage(error, '退出登录失败'))
     } finally {
       setLoggingOut(false)
     }

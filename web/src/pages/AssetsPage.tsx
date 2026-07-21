@@ -1,7 +1,7 @@
 import { Button, Input, Modal, Select, Space, Table, Tag, Typography, message } from 'antd'
 import { useState } from 'react'
 
-import { adminDownloadUrl, api } from '../api/client'
+import { adminDownloadUrl, api, apiErrorMessage } from '../api/client'
 import type { Asset, AssetStatus, Principal } from '../api/types'
 import { hasSystemPermission } from '../auth/permissions'
 import { DataState, PageHeader, PendingApiNotice, useApiData } from '../components/Page'
@@ -20,9 +20,14 @@ export default function AssetsPage({ principal }: { principal: Principal }) {
   const canArchive = hasSystemPermission(principal, 'assets.archive')
 
   async function archive(asset: Asset) {
-    await api.archiveAsset(asset.id)
-    message.success('素材已归档，历史发布引用仍可下载')
-    assets.reload()
+    try {
+      await api.archiveAsset(asset.id)
+      message.success('素材已归档，历史发布引用仍可下载')
+      assets.reload()
+    } catch (error) {
+      message.error(apiErrorMessage(error, '归档素材失败'))
+      throw error
+    }
   }
 
   return <><PageHeader eyebrow="素材工作区" title="素材库" description="浏览器直传私有对象存储，确认完整性后才允许进入内容版本。" extra={<Button type="primary" disabled={!canUpload} onClick={() => setUploadOpen(true)}>上传素材</Button>} /><PendingApiNotice />

@@ -2,7 +2,7 @@ import { Modal, Typography, Upload, message } from 'antd'
 import type { UploadFile } from 'antd'
 import { useState } from 'react'
 
-import { ASSET_MAX_BYTES, ASSET_MAX_LABEL, uploadAssetFile } from '../api/client'
+import { ASSET_MAX_BYTES, ASSET_MAX_LABEL, apiErrorMessage, uploadAssetFile } from '../api/client'
 import type { Asset } from '../api/types'
 
 export function AssetUploadModal({ open, onCancel, onUploaded, disabled = false }: { open: boolean; onCancel: () => void; onUploaded: (asset: Asset) => void; disabled?: boolean }) {
@@ -19,7 +19,7 @@ export function AssetUploadModal({ open, onCancel, onUploaded, disabled = false 
       setFiles([])
       onUploaded(asset)
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '素材上传失败')
+      message.error(apiErrorMessage(error, '素材上传失败'))
     } finally {
       setUploading(false)
     }

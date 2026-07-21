@@ -1,7 +1,7 @@
 import { Button, Checkbox, Form, Input, List, Modal, Typography, message } from 'antd'
 import { useState } from 'react'
 
-import { api } from '../api/client'
+import { api, apiErrorMessage } from '../api/client'
 import { modelPermissionCodes, systemPermissionCodes, type ModelPermission, type Principal, type Role, type SystemPermission } from '../api/types'
 import { hasSystemPermission } from '../auth/permissions'
 import { DataState, PageHeader, PendingApiNotice, useApiData } from '../components/Page'
@@ -13,13 +13,17 @@ export default function RolesPage({ principal }: { principal: Principal }) {
   const canManage = hasSystemPermission(principal, 'roles.manage')
   async function saveSystem() {
     if (!selected) return
-    setSelected(await api.replaceSystemPermissions(selected.id, selected.system_permissions))
-    roles.reload(); message.success('系统权限已原子替换')
+    try {
+      setSelected(await api.replaceSystemPermissions(selected.id, selected.system_permissions))
+      roles.reload(); message.success('系统权限已原子替换')
+    } catch (error) { message.error(apiErrorMessage(error, '保存系统权限失败')) }
   }
   async function saveModels() {
     if (!selected) return
-    setSelected(await api.replaceModelPermissions(selected.id, selected.model_permissions))
-    roles.reload(); message.success('模型权限已原子替换')
+    try {
+      setSelected(await api.replaceModelPermissions(selected.id, selected.model_permissions))
+      roles.reload(); message.success('模型权限已原子替换')
+    } catch (error) { message.error(apiErrorMessage(error, '保存模型权限失败')) }
   }
   function setGrant(modelId: string, permissions: ModelPermission[]) {
     if (!selected) return
@@ -33,5 +37,5 @@ export default function RolesPage({ principal }: { principal: Principal }) {
 function CreateRoleButton({ disabled, onCreated }: { disabled: boolean; onCreated: () => void }) {
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()
-  return <><Button className="floating-action" type="primary" disabled={disabled} onClick={() => setOpen(true)}>新建角色</Button><Modal title="新建无授权角色" open={open} onCancel={() => setOpen(false)} onOk={() => form.validateFields().then(api.createRole).then(() => { setOpen(false); form.resetFields(); onCreated() })}><Form form={form} layout="vertical"><Form.Item name="key" label="稳定标识" rules={[{ required: true }, { pattern: /^[a-z][a-z0-9_]{0,63}$/ }]}><Input /></Form.Item><Form.Item name="display_name" label="显示名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="description" label="说明"><Input.TextArea /></Form.Item></Form></Modal></>
+  return <><Button className="floating-action" type="primary" disabled={disabled} onClick={() => setOpen(true)}>新建角色</Button><Modal title="新建无授权角色" open={open} onCancel={() => setOpen(false)} onOk={() => form.validateFields().then(api.createRole).then(() => { setOpen(false); form.resetFields(); onCreated() }).catch((error) => { message.error(apiErrorMessage(error, '新建角色失败')); throw error })}><Form form={form} layout="vertical"><Form.Item name="key" label="稳定标识" rules={[{ required: true }, { pattern: /^[a-z][a-z0-9_]{0,63}$/ }]}><Input /></Form.Item><Form.Item name="display_name" label="显示名称" rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="description" label="说明"><Input.TextArea /></Form.Item></Form></Modal></>
 }

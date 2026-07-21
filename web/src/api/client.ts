@@ -32,6 +32,15 @@ export class ApiError extends Error {
   }
 }
 
+export function apiErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof ApiError) {
+    const details = [...new Set(error.details.map((detail) => detail.message).filter(Boolean))]
+    const message = details.length ? `${error.message}：${details.join('；')}` : error.message
+    return `${message}（请求 ID：${error.requestId}）`
+  }
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
 function isErrorResponse(value: unknown): value is ErrorResponse {
   if (!value || typeof value !== 'object' || !('error' in value)) return false
   const error = (value as { error: unknown }).error
