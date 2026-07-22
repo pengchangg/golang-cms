@@ -1,5 +1,5 @@
 import type { NavigationItem } from '../auth/permissions'
-import { ASSETS_ENABLED } from '../config'
+import { ASSETS_ENABLED, CONTENT_API_EXPLORER_ENABLED } from '../config'
 
 export const rolePagePermissions = ['roles.view', 'roles.manage'] as const
 export const apiKeyPagePermissions = ['api_keys.view', 'api_keys.create', 'api_keys.revoke'] as const
@@ -10,8 +10,13 @@ export const workspaceLinks: NavigationItem[] = ([
   { key: 'models', label: '内容模型', path: '/models', permission: 'models.view' },
   { key: 'assets', label: '素材库', path: '/assets', permission: 'assets.view' },
   { key: 'api-keys', label: 'API Keys', path: '/api-keys', permission: apiKeyPagePermissions },
+  { key: 'api-explorer', label: '客户端调试', path: '/api-explorer', permission: apiKeyPagePermissions },
   { key: 'audit', label: '审计日志', path: '/audit', permission: 'audit.view' },
-] satisfies NavigationItem[]).filter((item) => ASSETS_ENABLED || item.key !== 'assets')
+] satisfies NavigationItem[]).filter((item) => {
+  if (!ASSETS_ENABLED && item.key === 'assets') return false
+  if (!CONTENT_API_EXPLORER_ENABLED && item.key === 'api-explorer') return false
+  return true
+})
 
 export const navigation: NavigationItem[] = [
   { key: 'workspace', label: '工作台', path: '/' },

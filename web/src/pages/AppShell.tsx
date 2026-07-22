@@ -8,7 +8,7 @@ import type { ModelPermission } from '../api/types'
 import { visibleNavigation } from '../auth/permissions'
 import { authStore, useAuthState } from '../auth/store'
 import { PermissionRoute } from '../components/PermissionRoute'
-import { ASSETS_ENABLED } from '../config'
+import { ASSETS_ENABLED, CONTENT_API_EXPLORER_ENABLED } from '../config'
 import { apiKeyPagePermissions, navigation, rolePagePermissions } from './navigation'
 
 const WorkspacePage = lazy(() => import('./WorkspacePage'))
@@ -21,6 +21,10 @@ const EntriesPage = lazy(() => import('./EntriesPage'))
 const EntryEditorPage = lazy(() => import('./EntryEditorPage'))
 const AuditPage = lazy(() => import('./AuditPage'))
 const APIKeysPage = lazy(() => import('./APIKeysPage'))
+const APIExplorerPage = (
+  import.meta.env.VITE_CONTENT_API_EXPLORER_ENABLED === 'true' ||
+  (import.meta.env.VITE_CONTENT_API_EXPLORER_ENABLED === undefined && import.meta.env.DEV)
+) ? lazy(() => import('./APIExplorerPage')) : null
 const AssetsPage = lazy(() => import('./AssetsPage'))
 const { Header, Sider, Content } = Layout
 
@@ -112,6 +116,7 @@ export default function AppShell() {
               <Route path="content/:modelId/new" element={contentRoute('content.create', <EntryEditorPage principal={principal} />)} />
               <Route path="content/:modelId/:entryId" element={contentRoute('content.view', <EntryEditorPage principal={principal} />)} />
               <Route path="api-keys" element={systemRoute(apiKeyPagePermissions, <APIKeysPage principal={principal} />)} />
+              <Route path="api-explorer" element={CONTENT_API_EXPLORER_ENABLED && APIExplorerPage ? systemRoute(apiKeyPagePermissions, <APIExplorerPage />) : <Navigate to="/" replace />} />
               <Route path="assets" element={ASSETS_ENABLED ? systemRoute('assets.view', <AssetsPage principal={principal} />) : <Navigate to="/" replace />} />
               <Route path="audit" element={systemRoute('audit.view', <AuditPage principal={principal} />)} />
               <Route path="*" element={<Navigate to="/" replace />} />

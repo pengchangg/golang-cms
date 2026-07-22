@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 
-vi.mock('./config', () => ({ ASSETS_ENABLED: false, isAssetsEnabled: () => false }))
+vi.mock('./config', () => ({ ASSETS_ENABLED: false, CONTENT_API_EXPLORER_ENABLED: false, isAssetsEnabled: () => false, isContentAPIExplorerEnabled: () => false }))
 
 import App from './App'
 import type { SessionResponse } from './api/types'

@@ -41,7 +41,7 @@ describe('权限导航', () => {
     expect(rolePagePermissions).toEqual(['roles.view', 'roles.manage'])
     expect(apiKeyPagePermissions).toEqual(['api_keys.view', 'api_keys.create', 'api_keys.revoke'])
     expect(visibleNavigation(workspaceLinks, { ...principal, system_permissions: ['roles.manage'] }).map(({ key }) => key)).toEqual(['roles'])
-    expect(visibleNavigation(workspaceLinks, { ...principal, system_permissions: ['api_keys.revoke'] }).map(({ key }) => key)).toEqual(['api-keys'])
+    expect(visibleNavigation(workspaceLinks, { ...principal, system_permissions: ['api_keys.revoke'] }).map(({ key }) => key)).toEqual(['api-keys', 'api-explorer'])
   })
 
   it('模型内容权限按目标模型默认拒绝', () => {

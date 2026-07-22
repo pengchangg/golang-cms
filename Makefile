@@ -66,7 +66,7 @@ dev-web:
 			cd web && npm ci && printf '%s\n' "$$current" > node_modules/.cms-package-lock.sha256; \
 		fi
 	@test '$(DEV_ASSETS_ENABLED)' = 'true' || test '$(DEV_ASSETS_ENABLED)' = 'false' || { printf '%s\n' 'DEV_ASSETS_ENABLED 只能是 true 或 false'; exit 1; }
-	@cd web && VITE_ASSETS_ENABLED='$(DEV_ASSETS_ENABLED)' npm run build
+	@cd web && VITE_ASSETS_ENABLED='$(DEV_ASSETS_ENABLED)' VITE_CONTENT_API_EXPLORER_ENABLED=true npm run build
 
 dev-migrate: dev-db
 	@MYSQL_DSN='$(DEV_MYSQL_DSN)' go run ./cmd/cms migrate
