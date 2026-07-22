@@ -9,6 +9,9 @@ const (
 	KindNotFound
 	KindConflict
 	KindUnavailable
+	KindPayloadTooLarge
+	KindTooManyRequests
+	KindMethodNotAllowed
 	KindInternal
 )
 

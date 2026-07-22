@@ -16,6 +16,7 @@ type UserSummary struct {
 	PhoneMasked    *string      `json:"phone_masked"`
 	AuthMethods    []AuthMethod `json:"auth_methods"`
 	EmergencyAdmin bool         `json:"is_emergency_admin"`
+	HighRiskRole   bool         `json:"has_high_risk_role"`
 	Status         UserStatus   `json:"status"`
 	CreatedAt      time.Time    `json:"created_at"`
 	UpdatedAt      time.Time    `json:"updated_at"`
@@ -25,6 +26,11 @@ type User struct {
 	UserSummary
 	Phone   *string  `json:"phone"`
 	RoleIDs []string `json:"role_ids"`
+}
+
+func (u User) VisibleTo(Principal) User {
+	u.Phone = nil
+	return u
 }
 
 type CreateUserRequest struct {

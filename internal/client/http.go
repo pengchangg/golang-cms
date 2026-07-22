@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -120,12 +119,17 @@ func (h *AdminHandler) rotate(w http.ResponseWriter, r *http.Request) {
 }
 
 type ContentHandler struct {
-	service *Service
-	reader  content.PublishedContentReader
+	service    *Service
+	reader     content.PublishedContentReader
+	protection *Protection
 }
 
-func NewContentHandler(service *Service, reader content.PublishedContentReader) *ContentHandler {
-	return &ContentHandler{service, reader}
+func NewContentHandler(service *Service, reader content.PublishedContentReader, protections ...*Protection) *ContentHandler {
+	protection := NewProtection()
+	if len(protections) == 1 && protections[0] != nil {
+		protection = protections[0]
+	}
+	return &ContentHandler{service: service, reader: reader, protection: protection}
 }
 func (h *ContentHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/content/v1/models", h.listModels)
@@ -133,33 +137,45 @@ func (h *ContentHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/content/v1/models/{model_key}/entries", h.listEntries)
 	mux.HandleFunc("GET /api/content/v1/models/{model_key}/entries/{entry_id}", h.getEntry)
 }
-func (h *ContentHandler) key(w http.ResponseWriter, r *http.Request) (AuthenticatedKey, bool) {
+func ParseBearerToken(r *http.Request) (string, error) {
 	values := r.Header.Values("Authorization")
 	if len(values) == 0 {
-		httpx.WriteError(w, r, appError(apperror.KindUnauthenticated, "api_key_required", "缺少 API Key"))
-		return AuthenticatedKey{}, false
+		return "", appError(apperror.KindUnauthenticated, "api_key_required", "缺少 API Key")
 	}
 	if len(values) != 1 || strings.Contains(values[0], ",") {
-		httpx.WriteError(w, r, invalidAPIKey())
-		return AuthenticatedKey{}, false
+		return "", invalidAPIKey()
 	}
 	parts := strings.Split(values[0], " ")
 	if len(parts) != 2 || parts[0] != "Bearer" || parts[1] == "" {
-		httpx.WriteError(w, r, invalidAPIKey())
-		return AuthenticatedKey{}, false
+		return "", invalidAPIKey()
 	}
-	key, err := h.service.Authenticate(r.Context(), parts[1])
+	return parts[1], nil
+}
+
+func (h *ContentHandler) key(w http.ResponseWriter, r *http.Request) (AuthenticatedKey, func(), bool) {
+	raw, err := ParseBearerToken(r)
 	if err != nil {
 		httpx.WriteError(w, r, err)
-		return key, false
+		return AuthenticatedKey{}, nil, false
 	}
-	return key, true
+	key, err := h.service.Authenticate(r.Context(), raw)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return key, nil, false
+	}
+	release, retry, err := h.protection.Acquire(key.ID, httpx.ClientIPFromRequest(r))
+	if err != nil {
+		WriteProtectionError(w, r, retry, err)
+		return key, nil, false
+	}
+	return key, release, true
 }
 func (h *ContentHandler) listModels(w http.ResponseWriter, r *http.Request) {
-	key, ok := h.key(w, r)
+	key, release, ok := h.key(w, r)
 	if !ok {
 		return
 	}
+	defer release()
 	if len(r.URL.Query()) != 0 {
 		httpx.WriteError(w, r, invalidQuery())
 		return
@@ -181,10 +197,11 @@ func (h *ContentHandler) listModels(w http.ResponseWriter, r *http.Request) {
 	}{summaries}, err)
 }
 func (h *ContentHandler) getModel(w http.ResponseWriter, r *http.Request) {
-	key, ok := h.key(w, r)
+	key, release, ok := h.key(w, r)
 	if !ok {
 		return
 	}
+	defer release()
 	if len(r.URL.Query()) != 0 {
 		httpx.WriteError(w, r, invalidQuery())
 		return
@@ -193,10 +210,11 @@ func (h *ContentHandler) getModel(w http.ResponseWriter, r *http.Request) {
 	h.respond(w, r, item, err)
 }
 func (h *ContentHandler) listEntries(w http.ResponseWriter, r *http.Request) {
-	key, ok := h.key(w, r)
+	key, release, ok := h.key(w, r)
 	if !ok {
 		return
 	}
+	defer release()
 	query, err := parsePublishedQuery(r.URL.Query())
 	if err != nil {
 		httpx.WriteError(w, r, err)
@@ -206,10 +224,11 @@ func (h *ContentHandler) listEntries(w http.ResponseWriter, r *http.Request) {
 	h.respond(w, r, item, err)
 }
 func (h *ContentHandler) getEntry(w http.ResponseWriter, r *http.Request) {
-	key, ok := h.key(w, r)
+	key, release, ok := h.key(w, r)
 	if !ok {
 		return
 	}
+	defer release()
 	for name, values := range r.URL.Query() {
 		if name != "expand" || len(values) != 1 {
 			httpx.WriteError(w, r, invalidQuery())
@@ -284,19 +303,12 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, value any, er
 	_ = json.NewEncoder(w).Encode(value)
 }
 func requestMeta(r *http.Request) RequestMeta {
-	ip := strings.TrimSpace(r.RemoteAddr)
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		ip = host
-	}
-	if parsed := net.ParseIP(ip); parsed != nil {
-		ip = parsed.String()
-	}
 	ua := r.UserAgent()
 	for utf8.RuneCountInString(ua) > 512 {
 		_, size := utf8.DecodeLastRuneInString(ua)
 		ua = ua[:len(ua)-size]
 	}
-	return RequestMeta{httpx.RequestIDFromContext(r.Context()), ip, ua}
+	return RequestMeta{httpx.RequestIDFromContext(r.Context()), httpx.ClientIPFromRequest(r), ua}
 }
 
 type Module struct {

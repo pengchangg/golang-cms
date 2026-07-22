@@ -1,4 +1,24 @@
 x-integration-status: integrated
+x-rate-limited: &rateLimited
+  description: API Key 或 Key/IP 组合超过频率或并发额度，error.code 为 content_rate_limited 或 content_concurrency_limited。
+  headers:
+    Retry-After:
+      required: true
+      schema: { type: integer, minimum: 1 }
+  content:
+    application/json:
+      schema:
+        $ref: ../shared/error.yaml#/$defs/ErrorResponse
+x-content-busy: &contentBusy
+  description: 内容 API 全进程并发已达上限，error.code 为 content_api_busy。
+  headers:
+    Retry-After:
+      required: true
+      schema: { type: integer, minimum: 1 }
+  content:
+    application/json:
+      schema:
+        $ref: ../shared/error.yaml#/$defs/ErrorResponse
 /models:
   get:
     x-integration-status: integrated
@@ -42,6 +62,8 @@ x-integration-status: integrated
           application/json:
             schema:
               $ref: ../shared/error.yaml#/$defs/ErrorResponse
+      "429": *rateLimited
+      "503": *contentBusy
 /models/{model_key}:
   parameters: &modelKey
     - name: model_key
@@ -69,6 +91,8 @@ x-integration-status: integrated
           application/json:
             schema:
               $ref: ../shared/error.yaml#/$defs/ErrorResponse
+      "429": *rateLimited
+      "503": *contentBusy
 /models/{model_key}/entries:
   parameters: *modelKey
   get:
@@ -120,6 +144,8 @@ x-integration-status: integrated
               $ref: ../shared/error.yaml#/$defs/ErrorResponse
       "401": *unauthenticated
       "404": *modelNotFound
+      "429": *rateLimited
+      "503": *contentBusy
 /models/{model_key}/entries/{entry_id}:
   parameters:
     - name: model_key
@@ -152,3 +178,5 @@ x-integration-status: integrated
           application/json:
             schema:
               $ref: ../shared/error.yaml#/$defs/ErrorResponse
+      "429": *rateLimited
+      "503": *contentBusy

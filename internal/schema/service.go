@@ -18,7 +18,7 @@ import (
 )
 
 type ContentExistenceChecker interface {
-	HasAnyContent(context.Context, string) (bool, error)
+	HasAnyContent(context.Context, database.Querier, string) (bool, error)
 }
 
 type TransactionRunner interface {
@@ -156,12 +156,36 @@ func (s *Service) ArchiveModel(ctx context.Context, principal identity.Principal
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, permission.ModelsArchive); err != nil {
 			return err
 		}
-		model, err := s.repository.LockModel(ctx, q, id)
+		sourceIDs, err := s.repository.InboundRelationModelIDs(ctx, q, id, false)
 		if err != nil {
 			return err
 		}
+		modelSet := map[string]bool{id: true}
+		for _, sourceID := range sourceIDs {
+			modelSet[sourceID] = true
+		}
+		modelIDs := make([]string, 0, len(modelSet))
+		for modelID := range modelSet {
+			modelIDs = append(modelIDs, modelID)
+		}
+		sort.Strings(modelIDs)
+		models, err := s.repository.LockModels(ctx, q, modelIDs)
+		if err != nil {
+			return err
+		}
+		model, ok := models[id]
+		if !ok {
+			return notFound("模型")
+		}
 		if model.Status == StatusArchived {
 			return conflict("resource_archived", "模型已归档")
+		}
+		inbound, err := s.repository.InboundRelationModelIDs(ctx, q, id, true)
+		if err != nil {
+			return err
+		}
+		if len(inbound) > 0 {
+			return conflict("model_referenced", "模型仍被活动关联字段引用")
 		}
 		model.Status = StatusArchived
 		model.UpdatedAt = s.now()
@@ -409,30 +433,31 @@ func (s *Service) UpdateField(ctx context.Context, principal identity.Principal,
 					return err
 				}
 			}
-			childrenTypeChanged := patch.Children != nil && childTypeChanged(field.Children, input.Children)
-			if typeChanged || childrenTypeChanged {
-				if s.content == nil {
-					return fmt.Errorf("ContentExistenceChecker 未装配")
-				}
-				exists, err := s.content.HasAnyContent(ctx, modelID)
-				if err != nil {
+			if patch.Children != nil {
+				if err := validateChildEnumStability(field.Children, input.Children); err != nil {
 					return err
-				}
-				if exists {
-					return conflict("field_type_locked", "模型已有内容，字段类型不可修改")
 				}
 			}
+			childrenTypeChanged := patch.Children != nil && childTypeChanged(field.Children, input.Children)
+			schemaTightened := fieldSchemaTightened(field, input)
 			projectionEnabled := !field.Constraints.Unique && input.Constraints.Unique || !field.Constraints.Filterable && input.Constraints.Filterable || !field.Constraints.Sortable && input.Constraints.Sortable
-			if projectionEnabled {
+			if typeChanged || childrenTypeChanged || schemaTightened || projectionEnabled {
 				if s.content == nil {
 					return fmt.Errorf("ContentExistenceChecker 未装配")
 				}
-				exists, err := s.content.HasAnyContent(ctx, modelID)
+				exists, err := s.content.HasAnyContent(ctx, q, modelID)
 				if err != nil {
 					return err
 				}
 				if exists {
-					return conflict("field_projection_backfill_required", "模型已有内容，启用查询能力需要受控回填")
+					switch {
+					case typeChanged || childrenTypeChanged:
+						return conflict("field_type_locked", "模型已有内容，字段类型不可修改")
+					case schemaTightened:
+						return conflict("field_schema_migration_required", "模型已有内容，收紧字段约束前必须先迁移数据")
+					default:
+						return conflict("field_projection_backfill_required", "模型已有内容，启用查询能力需要受控回填")
+					}
 				}
 			}
 			now := s.now()
@@ -694,10 +719,94 @@ func childTypeChanged(existing []ContentField, inputs []ContentFieldInput) bool 
 	return false
 }
 
+func fieldSchemaTightened(existing ContentField, updated ContentFieldInput) bool {
+	if !existing.Required && updated.Required || lowerBoundTightened(existing.Constraints.MinLength, updated.Constraints.MinLength) || upperBoundTightened(existing.Constraints.MaxLength, updated.Constraints.MaxLength) || numericLowerBoundTightened(existing.Constraints.Minimum, updated.Constraints.Minimum) || numericUpperBoundTightened(existing.Constraints.Maximum, updated.Constraints.Maximum) {
+		return true
+	}
+	if existing.Constraints.TargetModelID != nil && updated.Constraints.TargetModelID != nil && *existing.Constraints.TargetModelID != *updated.Constraints.TargetModelID {
+		return true
+	}
+	updatedChildren := make(map[string]ContentFieldInput, len(updated.Children))
+	for _, child := range updated.Children {
+		updatedChildren[child.Key] = child
+	}
+	for _, child := range existing.Children {
+		if child.Status != StatusActive {
+			continue
+		}
+		updatedChild, ok := updatedChildren[child.Key]
+		if !ok || fieldSchemaTightened(child, updatedChild) {
+			return true
+		}
+		delete(updatedChildren, child.Key)
+	}
+	for _, child := range updatedChildren {
+		if child.Required {
+			return true
+		}
+	}
+	return false
+}
+
+func lowerBoundTightened(old, updated *int) bool {
+	return updated != nil && (old == nil && *updated > 0 || old != nil && *updated > *old)
+}
+
+func upperBoundTightened(old, updated *int) bool {
+	return updated != nil && (old == nil || *updated < *old)
+}
+
+func numericLowerBoundTightened(old, updated *string) bool {
+	if updated == nil {
+		return false
+	}
+	if old == nil {
+		return true
+	}
+	oldValue, oldOK := decimalRat(*old)
+	updatedValue, updatedOK := decimalRat(*updated)
+	return oldOK && updatedOK && updatedValue.Cmp(oldValue) > 0
+}
+
+func numericUpperBoundTightened(old, updated *string) bool {
+	if updated == nil {
+		return false
+	}
+	if old == nil {
+		return true
+	}
+	oldValue, oldOK := decimalRat(*old)
+	updatedValue, updatedOK := decimalRat(*updated)
+	return oldOK && updatedOK && updatedValue.Cmp(oldValue) < 0
+}
+
 func validateEnumStability(old, updated FieldConstraints) error {
 	for _, option := range old.EnumOptions {
 		if !enumContains(updated.EnumOptions, option.Value) {
 			return conflict("enum_value_immutable", "已有枚举 value 不可修改或删除")
+		}
+	}
+	return nil
+}
+
+func validateChildEnumStability(existing []ContentField, updated []ContentFieldInput) error {
+	updatedByKey := make(map[string]ContentFieldInput, len(updated))
+	for _, child := range updated {
+		updatedByKey[child.Key] = child
+	}
+	for _, child := range existing {
+		if child.Status != StatusActive {
+			continue
+		}
+		updatedChild, ok := updatedByKey[child.Key]
+		if !ok {
+			continue
+		}
+		if err := validateEnumStability(child.Constraints, updatedChild.Constraints); err != nil {
+			return err
+		}
+		if err := validateChildEnumStability(child.Children, updatedChild.Children); err != nil {
+			return err
 		}
 	}
 	return nil

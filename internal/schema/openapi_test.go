@@ -99,3 +99,22 @@ func TestOpenAPIExposesAtomicChildFieldCreation(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIWorkflowActionsReturnContentEntry(t *testing.T) {
+	data, err := os.ReadFile("../../api/openapi/fragments/admin/content/workflow-paths.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Count(text, "$ref: ./schemas.yaml#/$defs/ContentEntry") != 1 {
+		t.Fatalf("工作流共享成功响应必须统一引用 ContentEntry: %s", text)
+	}
+	if strings.Contains(text, "$ref: ./workflow-schemas.yaml#/$defs/WorkflowEntry") {
+		t.Fatal("工作流响应仍引用不完整的 WorkflowEntry")
+	}
+	for _, operation := range []string{"submitAdminContentRevision", "approveAdminContentRevision", "rejectAdminContentRevision", "unpublishAdminContentRevision"} {
+		if !strings.Contains(text, "operationId: "+operation) {
+			t.Fatalf("缺少工作流操作 %s", operation)
+		}
+	}
+}

@@ -45,6 +45,12 @@ export function useApiData<T>(load: () => Promise<T>, dependencies: readonly unk
       dataRef.current = data
       setState({ data, loading: false })
     },
+    invalidate: () => {
+      generationRef.current += 1
+      dataRef.current = undefined
+      setState({ loading: true })
+      setAttempt((value) => ({ id: value.id + 1, background: false }))
+    },
   }
 }
 

@@ -3,7 +3,7 @@ import { basicSetup, EditorView } from 'codemirror'
 import { Alert, Button } from 'antd'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 
-export function JsonEditor({ value, onChange, label, disabled, onValidityChange }: { value: unknown; onChange: (value: unknown) => void; label: string; disabled: boolean; onValidityChange?: (valid: boolean) => void }) {
+export function JsonEditor({ value, onChange, label, disabled, onValidityChange, labelledBy, describedBy }: { value: unknown; onChange: (value: unknown) => void; label: string; disabled: boolean; onValidityChange?: (valid: boolean) => void; labelledBy?: string; describedBy?: string }) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView>(null)
   const initialText = value == null ? '' : JSON.stringify(value, null, 2)
@@ -19,7 +19,7 @@ export function JsonEditor({ value, onChange, label, disabled, onValidityChange 
     const view = new EditorView({
       doc: textRef.current,
       parent: hostRef.current,
-      extensions: [basicSetup, json(), EditorView.lineWrapping, EditorView.contentAttributes.of({ 'aria-label': `${label} JSON 编辑器` }), EditorView.editable.of(!disabled), EditorView.updateListener.of((update) => {
+      extensions: [basicSetup, json(), EditorView.lineWrapping, EditorView.contentAttributes.of(labelledBy ? { 'aria-labelledby': labelledBy, ...(describedBy ? { 'aria-describedby': describedBy } : {}) } : { 'aria-label': `${label} JSON 编辑器` }), EditorView.editable.of(!disabled), EditorView.updateListener.of((update) => {
         if (!update.docChanged) return
         const text = update.state.doc.toString()
         textRef.current = text
@@ -38,7 +38,7 @@ export function JsonEditor({ value, onChange, label, disabled, onValidityChange 
     })
     viewRef.current = view
     return () => { view.destroy(); viewRef.current = null }
-  }, [disabled, label])
+  }, [describedBy, disabled, label, labelledBy])
 
   useEffect(() => {
     const serialized = value == null ? '' : JSON.stringify(value, null, 2)

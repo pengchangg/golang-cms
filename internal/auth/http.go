@@ -76,12 +76,19 @@ func NewModule(service *Service, baseURL string, localLoginEnabled bool) (*Modul
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST "+routePrefix+"/captcha/challenges", m.createCaptcha)
-	mux.HandleFunc("POST "+routePrefix+"/sms/challenges", m.createSMSChallenge)
-	mux.HandleFunc("POST "+routePrefix+"/sms/challenges/{challenge_id}/verify", m.verifySMSChallenge)
-	mux.HandleFunc("POST "+routePrefix+"/local/login", m.localLogin)
-	mux.HandleFunc("GET "+routePrefix+"/session", m.session)
-	mux.HandleFunc("POST "+routePrefix+"/logout", m.logout)
+	mux.Handle("POST "+routePrefix+"/captcha/challenges", m.noStore(http.HandlerFunc(m.createCaptcha)))
+	mux.Handle("POST "+routePrefix+"/sms/challenges", m.noStore(http.HandlerFunc(m.createSMSChallenge)))
+	mux.Handle("POST "+routePrefix+"/sms/challenges/{challenge_id}/verify", m.noStore(http.HandlerFunc(m.verifySMSChallenge)))
+	mux.Handle("POST "+routePrefix+"/local/login", m.noStore(http.HandlerFunc(m.localLogin)))
+	mux.Handle("GET "+routePrefix+"/session", m.noStore(http.HandlerFunc(m.session)))
+	mux.Handle("POST "+routePrefix+"/logout", m.noStore(http.HandlerFunc(m.logout)))
+}
+
+func (m *Module) noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (m *Module) createCaptcha(w http.ResponseWriter, r *http.Request) {
@@ -301,18 +308,11 @@ func sessionCookie(r *http.Request) (string, error) {
 }
 
 func requestMeta(r *http.Request) RequestMeta {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		host = ip.String()
-	}
 	ua := r.UserAgent()
 	if len(ua) > 512 {
 		ua = ua[:512]
 	}
-	return RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: host, UserAgent: ua}
+	return RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: httpx.ClientIPFromRequest(r), UserAgent: ua}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

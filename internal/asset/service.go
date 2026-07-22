@@ -14,6 +14,7 @@ import (
 	"mime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -72,7 +73,15 @@ type Service struct {
 	mimeTypes  map[string]struct{}
 	now        func() time.Time
 	random     func([]byte) error
+	confirmMu  sync.Mutex
+	confirms   int
+	users      map[string]struct{}
 }
+
+const (
+	maxAssetSize          = int64(100 << 20)
+	maxConcurrentConfirms = 2
+)
 
 type RequestMeta struct{ RequestID, IP, UserAgent string }
 
@@ -80,8 +89,8 @@ func NewService(deps Dependencies) (*Service, error) {
 	if deps.DB == nil || deps.Transactor == nil || deps.Repository == nil || deps.Store == nil || deps.Audit == nil {
 		return nil, errors.New("素材服务依赖未完整装配")
 	}
-	if deps.Config.MaxSize < 1 || deps.Config.MaxSize > 5*1024*1024*1024 {
-		return nil, errors.New("素材大小上限必须在 1 字节至 5 GiB")
+	if deps.Config.MaxSize < 1 || deps.Config.MaxSize > maxAssetSize {
+		return nil, errors.New("素材大小上限必须在 1 字节至 100 MiB")
 	}
 	if deps.Config.UploadTTL < time.Minute || deps.Config.UploadTTL > 30*time.Minute || deps.Config.DownloadTTL < time.Minute || deps.Config.DownloadTTL > 15*time.Minute {
 		return nil, errors.New("素材签名有效期超出冻结范围")
@@ -97,7 +106,26 @@ func NewService(deps Dependencies) (*Service, error) {
 	if len(types) == 0 {
 		return nil, errors.New("素材 MIME 允许列表不能为空")
 	}
-	return &Service{db: deps.DB, tx: deps.Transactor, repository: deps.Repository, store: deps.Store, audit: deps.Audit, config: deps.Config, mimeTypes: types, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, random: func(p []byte) error { _, err := rand.Read(p); return err }}, nil
+	return &Service{db: deps.DB, tx: deps.Transactor, repository: deps.Repository, store: deps.Store, audit: deps.Audit, config: deps.Config, mimeTypes: types, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, random: func(p []byte) error { _, err := rand.Read(p); return err }, users: make(map[string]struct{})}, nil
+}
+
+func (s *Service) acquireConfirm(userID string) (func(), error) {
+	s.confirmMu.Lock()
+	defer s.confirmMu.Unlock()
+	if s.confirms >= maxConcurrentConfirms {
+		return nil, appError(apperror.KindTooManyRequests, "asset_confirm_concurrency_limit", "素材确认并发数已达上限")
+	}
+	if _, exists := s.users[userID]; exists {
+		return nil, appError(apperror.KindTooManyRequests, "asset_confirm_concurrency_limit", "素材确认并发数已达上限")
+	}
+	s.confirms++
+	s.users[userID] = struct{}{}
+	return func() {
+		s.confirmMu.Lock()
+		s.confirms--
+		delete(s.users, userID)
+		s.confirmMu.Unlock()
+	}, nil
 }
 
 func (s *Service) CreateUpload(ctx context.Context, principal identity.Principal, meta RequestMeta, input CreateUploadRequest) (Upload, error) {
@@ -145,6 +173,25 @@ func (s *Service) Confirm(ctx context.Context, principal identity.Principal, met
 	}
 	if value.Status == StatusQuarantined && !s.now().Before(value.UploadUntil) {
 		return Asset{}, appError(apperror.KindConflict, "asset_upload_expired", "素材上传申请已过期")
+	}
+	if value.Status == StatusQuarantined && value.Size > maxAssetSize {
+		return Asset{}, appError(apperror.KindPayloadTooLarge, "asset_confirmation_too_large", "素材超过同步确认大小上限")
+	}
+	release, err := s.acquireConfirm(principal.UserID)
+	if err != nil {
+		return Asset{}, err
+	}
+	defer release()
+	if value.Status == StatusAvailable && value.Size > maxAssetSize {
+		metadata, err := s.store.Head(ctx, value.ObjectKey)
+		if err != nil {
+			return Asset{}, storeError(err)
+		}
+		if value.ETag == nil || *value.ETag != metadata.ETag || !metadataMatches(value, metadata) {
+			return Asset{}, metadataMismatch()
+		}
+		decorateAsset(&value)
+		return value, nil
 	}
 	metadata, err := s.store.Head(ctx, value.ObjectKey)
 	if err != nil {
@@ -422,10 +469,11 @@ func (s *Service) Archive(ctx context.Context, principal identity.Principal, met
 	})
 }
 
-func (s *Service) PublishedDownload(ctx context.Context, scope PublishedDownloadScope, id string) (SignedRequest, error) {
+// ResolvePublishedDownload 使用调用方事务解析已授权素材，不执行对象存储操作。
+func (s *Service) ResolvePublishedDownload(ctx context.Context, q database.Querier, scope PublishedDownloadScope, id string) (PublishedDownload, error) {
 	modelIDs := uniqueSorted(scope.AllowedModelIDs)
 	if len(modelIDs) == 0 {
-		return SignedRequest{}, publishedAssetNotFound()
+		return PublishedDownload{}, publishedAssetNotFound()
 	}
 	query := `SELECT a.object_key,a.filename FROM assets a JOIN asset_references ar ON ar.asset_id=a.id JOIN content_published_pointers pp ON pp.revision_id=ar.revision_id AND pp.entry_id=ar.entry_id AND pp.model_id=ar.model_id WHERE a.id=? AND a.status IN ('available','archived') AND ar.model_id IN (` + placeholders(len(modelIDs)) + `) LIMIT 1`
 	args := []any{id}
@@ -433,12 +481,17 @@ func (s *Service) PublishedDownload(ctx context.Context, scope PublishedDownload
 		args = append(args, modelID)
 	}
 	var objectKey, filename string
-	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&objectKey, &filename); errors.Is(err, sql.ErrNoRows) {
-		return SignedRequest{}, publishedAssetNotFound()
+	if err := q.QueryRowContext(ctx, query, args...).Scan(&objectKey, &filename); errors.Is(err, sql.ErrNoRows) {
+		return PublishedDownload{}, publishedAssetNotFound()
 	} else if err != nil {
-		return SignedRequest{}, fmt.Errorf("检查已发布素材授权: %w", err)
+		return PublishedDownload{}, fmt.Errorf("检查已发布素材授权: %w", err)
 	}
-	signed, err := s.store.SignGet(ctx, SignGetRequest{ObjectKey: objectKey, DownloadFilename: filename, Disposition: DispositionAttachment, ExpiresAt: s.now().Add(s.config.DownloadTTL)})
+	return PublishedDownload{ObjectKey: objectKey, Filename: filename}, nil
+}
+
+// SignPublishedDownload 在数据库事务提交后签发短时下载地址。
+func (s *Service) SignPublishedDownload(ctx context.Context, download PublishedDownload) (SignedRequest, error) {
+	signed, err := s.store.SignGet(ctx, SignGetRequest{ObjectKey: download.ObjectKey, DownloadFilename: download.Filename, Disposition: DispositionAttachment, ExpiresAt: s.now().Add(s.config.DownloadTTL)})
 	if err != nil {
 		return SignedRequest{}, storeError(err)
 	}

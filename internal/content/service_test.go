@@ -307,6 +307,9 @@ func (m memoryModels) LockModel(context.Context, database.Querier, string) (sche
 	}
 	return m.model.ContentModelSummary, nil
 }
+func (m memoryModels) LockModelSchema(ctx context.Context, q database.Querier, id string) (schema.ContentModel, error) {
+	return m.GetModel(ctx, q, id)
+}
 func (m memoryModels) LockModels(_ context.Context, _ database.Querier, ids []string) (map[string]schema.ContentModelSummary, error) {
 	if m.lockEvents != nil {
 		*m.lockEvents = append(*m.lockEvents, "model")
@@ -493,7 +496,7 @@ func TestUniqueValueConflictAndArchiveRelease(t *testing.T) {
 
 func TestPermissionDefaultsToDenyAndSystemPermissionCannotSubstitute(t *testing.T) {
 	service, _, _, _ := testService()
-	principal := identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, []string{"models.create"}, nil)
+	principal := identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, identity.PermissionSet{System: []string{"models.create"}})
 	_, err := service.CreateEntry(context.Background(), principal, testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"内容"}`)})
 	assertApplicationCode(t, err, "permission_denied")
 }
@@ -508,7 +511,7 @@ func TestWorkflowPublishEditAndUnpublish(t *testing.T) {
 	if _, err = service.Submit(context.Background(), creator, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID}); err != nil {
 		t.Fatal(err)
 	}
-	reviewer := identity.NewPrincipal("usr_2", "审核人", nil, identity.AuthMethodSMS, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{permissionReview, permissionPublish, permissionUnpublish}}})
+	reviewer := identity.NewPrincipal("usr_2", "审核人", nil, identity.AuthMethodSMS, identity.PermissionSet{Models: []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{permissionReview, permissionPublish, permissionUnpublish}}}})
 	published, err := service.Approve(context.Background(), reviewer, testMeta(), "mdl_1", created.ID, RevisionConditionRequest{RevisionID: created.CurrentDraftRevisionID})
 	if err != nil {
 		t.Fatal(err)
@@ -693,10 +696,10 @@ func TestListEntriesRequiresViewPermissionForEveryExpandedTarget(t *testing.T) {
 		t.Fatalf("目标模型授权失败前不应查询或展开条目: list=%d expand=%d", repository.listCalls, repository.expandCalls)
 	}
 
-	principal = identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, nil, []identity.ModelPermissions{
+	principal = identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, identity.PermissionSet{Models: []identity.ModelPermissions{
 		{ModelID: "mdl_1", Permissions: []string{permissionView}},
 		{ModelID: targetModelID, Permissions: []string{permissionView}},
-	})
+	}})
 	if _, err = service.ListEntries(context.Background(), principal, "mdl_1", AdminEntryQuery{Status: StatusDraft, Limit: 20, Expand: []string{"related"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -736,18 +739,34 @@ func TestListEntriesReturnsDraftContentAndActiveRootFieldDefinitions(t *testing.
 	}
 }
 
-func TestPublishedContentUsesOnlyActiveRootFields(t *testing.T) {
+func TestPublishedContentUsesOnlyActiveFieldTree(t *testing.T) {
 	fields := []schema.ContentField{
 		{Key: "title", Status: schema.StatusActive},
 		{Key: "old", Status: schema.StatusArchived},
-		{Key: "group", Status: schema.StatusActive, Children: []schema.ContentField{{Key: "old_child", Status: schema.StatusArchived}}},
+		{Key: "group", Type: schema.FieldTypeObject, Status: schema.StatusActive, Children: []schema.ContentField{
+			{Key: "visible_child", Status: schema.StatusActive},
+			{Key: "old_child", Status: schema.StatusArchived},
+			{Key: "nested", Type: schema.FieldTypeObject, Status: schema.StatusActive, Children: []schema.ContentField{{Key: "visible_nested", Status: schema.StatusActive}, {Key: "old_nested", Status: schema.StatusArchived}}},
+		}},
+		{Key: "items", Type: schema.FieldTypeRepeatableGroup, Status: schema.StatusActive, Children: []schema.ContentField{{Key: "visible_item", Status: schema.StatusActive}, {Key: "old_item", Status: schema.StatusArchived}}},
 	}
-	content, err := activeRootContent(json.RawMessage(`{"title":"可见","old":"归档","group":{"old_child":"仍保留"},"unknown":true}`), fields)
+	content, err := activeRootContent(json.RawMessage(`{"title":"可见","old":"归档","group":{"visible_child":"保留","old_child":"裁剪","nested":{"visible_nested":true,"old_nested":false},"unknown_child":true},"items":[{"visible_item":1,"old_item":2},{"visible_item":3,"unknown_item":4}],"unknown":true}`), fields)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(content) != `{"group":{"old_child":"仍保留"},"title":"可见"}` {
-		t.Fatalf("发布 content 未按 active 根字段裁剪: %s", content)
+	if string(content) != `{"group":{"nested":{"visible_nested":true},"visible_child":"保留"},"items":[{"visible_item":1},{"visible_item":3}],"title":"可见"}` {
+		t.Fatalf("发布 content 未按 active 字段树递归裁剪: %s", content)
+	}
+}
+
+func TestPublishedContentPreservesNullRepeatableGroupItem(t *testing.T) {
+	fields := []schema.ContentField{{Key: "items", Type: schema.FieldTypeRepeatableGroup, Status: schema.StatusActive, Children: []schema.ContentField{{Key: "value", Status: schema.StatusActive}}}}
+	content, err := activeRootContent(json.RawMessage(`{"items":[null,{"value":"保留","old":"裁剪"}]}`), fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != `{"items":[null,{"value":"保留"}]}` {
+		t.Fatalf("重复组 null 被错误改写: %s", content)
 	}
 }
 
@@ -801,6 +820,22 @@ func TestCreateLocksSourceAndRelationModelsBeforeValidatingTargets(t *testing.T)
 	}
 	if strings.Join(lockedIDs, ",") != "mdl_1,mdl_target" {
 		t.Fatalf("必须先统一锁住源和目标模型，实际为 %v", lockedIDs)
+	}
+}
+
+func TestContentWriteRejectsArchivedRelationTargetModel(t *testing.T) {
+	targetModelID := "mdl_target"
+	source := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{{ID: "fld_related", Key: "related", Type: schema.FieldTypeSingleRelation, Constraints: schema.FieldConstraints{TargetModelID: &targetModelID}, Status: schema.StatusActive}}}
+	target := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: targetModelID, Status: schema.StatusArchived}}
+	repository := newMemoryRepository()
+	repository.entries["ent_target"] = EntrySummary{ID: "ent_target", ModelID: targetModelID, Status: StatusDraft}
+	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": source, targetModelID: target}}, Audit: &auditRecorder{}})
+	service.newID = func(prefix string) (string, error) { return prefix + "1", nil }
+
+	_, err := service.CreateEntry(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"related":"ent_target"}`)})
+	assertApplicationCode(t, err, "target_model_invalid")
+	if len(repository.revisions) != 0 {
+		t.Fatalf("归档关系目标不应产生 Revision: %#v", repository.revisions)
 	}
 }
 
@@ -911,6 +946,27 @@ func TestIncludeTotalCapsAtTenThousandAsEstimate(t *testing.T) {
 
 func workflowStatusPointer(value WorkflowStatus) *WorkflowStatus { return &value }
 
+func TestListRevisionsOnlyReturnsCursorWhenAnotherPageExists(t *testing.T) {
+	service, repository, _, _ := testService()
+	principal := contentPrincipal(permissionView)
+	repository.entries["ent_1"] = EntrySummary{ID: "ent_1", ModelID: "mdl_1"}
+	for _, count := range []int{1, 2, 3} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			repository.revisions["ent_1"] = nil
+			for number := 1; number <= count; number++ {
+				repository.revisions["ent_1"] = append(repository.revisions["ent_1"], Revision{ID: fmt.Sprintf("rev_%d", number), EntryID: "ent_1", ModelID: "mdl_1", Number: uint(number)})
+			}
+			result, err := service.ListRevisions(context.Background(), principal, "mdl_1", "ent_1", 2, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (result.NextCursor != nil) != (count > 2) {
+				t.Fatalf("count=%d cursor=%v", count, result.NextCursor)
+			}
+		})
+	}
+}
+
 func testService() (*Service, *memoryRepository, *directTx, *auditRecorder) {
 	repository, tx, audits := newMemoryRepository(), &directTx{}, &auditRecorder{}
 	model := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{{ID: "fld_title", Key: "title", Type: schema.FieldTypeSingleLineText, Required: true, DefaultValue: json.RawMessage("null"), Status: schema.StatusActive}}}
@@ -925,7 +981,7 @@ func testService() (*Service, *memoryRepository, *directTx, *auditRecorder) {
 }
 
 func contentPrincipal(permissions ...string) identity.Principal {
-	return identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, nil, []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: permissions}})
+	return identity.NewPrincipal("usr_1", "用户", nil, identity.AuthMethodSMS, identity.PermissionSet{Models: []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: permissions}}})
 }
 
 func testMeta() RequestMeta { return RequestMeta{RequestID: "req_1", IP: "127.0.0.1"} }

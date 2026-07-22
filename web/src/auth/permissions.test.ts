@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Principal } from '../api/types'
-import { hasModelPermission, hasSystemPermission, visibleNavigation } from './permissions'
+import { apiKeyPagePermissions, rolePagePermissions, workspaceLinks } from '../pages/navigation'
+import { canDelegateRole, hasModelPermission, hasSystemPermission, visibleNavigation } from './permissions'
 
 const principal: Principal = {
   user_id: 'usr_permissions',
   display_name: '权限测试用户',
   email: null,
   auth_method: 'sms',
+  is_emergency_admin: false,
+  has_high_risk_role: false,
   system_permissions: ['models.view'],
   model_permissions: [],
 }
@@ -26,6 +29,19 @@ describe('权限导航', () => {
         principal,
       ).map(({ key }) => key),
     ).toEqual(['session', 'models'])
+  })
+
+  it('普通主体只能委派自己的权限子集', () => {
+    expect(canDelegateRole(principal, { system_permissions: ['models.view'], model_permissions: [] })).toBe(true)
+    expect(canDelegateRole(principal, { system_permissions: ['audit.view'], model_permissions: [] })).toBe(false)
+    expect(canDelegateRole({ ...principal, has_high_risk_role: true }, { system_permissions: ['audit.view'], model_permissions: [] })).toBe(true)
+  })
+
+  it('导航项支持任一相关系统权限', () => {
+    expect(rolePagePermissions).toEqual(['roles.view', 'roles.manage'])
+    expect(apiKeyPagePermissions).toEqual(['api_keys.view', 'api_keys.create', 'api_keys.revoke'])
+    expect(visibleNavigation(workspaceLinks, { ...principal, system_permissions: ['roles.manage'] }).map(({ key }) => key)).toEqual(['roles'])
+    expect(visibleNavigation(workspaceLinks, { ...principal, system_permissions: ['api_keys.revoke'] }).map(({ key }) => key)).toEqual(['api-keys'])
   })
 
   it('模型内容权限按目标模型默认拒绝', () => {

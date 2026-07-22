@@ -1,0 +1,1 @@
+ALTER TABLE sessions ADD KEY idx_sessions_revoked_cleanup (revoked_at, id_hash), ADD KEY idx_sessions_absolute_cleanup (revoked_at, expires_at, id_hash), ADD KEY idx_sessions_idle_cleanup (revoked_at, idle_expires_at, id_hash);

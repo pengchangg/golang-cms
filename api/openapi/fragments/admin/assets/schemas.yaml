@@ -34,7 +34,7 @@ $defs:
     properties:
       filename: { type: string, minLength: 1, maxLength: 255 }
       mime_type: { type: string, minLength: 1, maxLength: 255 }
-      size: { type: integer, minimum: 1, maximum: 5368709120 }
+      size: { type: integer, minimum: 1, maximum: 104857600 }
       sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
   SignedUpload:
     type: object

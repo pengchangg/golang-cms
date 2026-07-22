@@ -20,7 +20,9 @@ type Repository interface {
 	ListModels(context.Context, database.Querier, *ResourceStatus) ([]ContentModelSummary, error)
 	GetModel(context.Context, database.Querier, string) (ContentModel, error)
 	LockModel(context.Context, database.Querier, string) (ContentModelSummary, error)
+	LockModelSchema(context.Context, database.Querier, string) (ContentModel, error)
 	LockModels(context.Context, database.Querier, []string) (map[string]ContentModelSummary, error)
+	InboundRelationModelIDs(context.Context, database.Querier, string, bool) ([]string, error)
 	CreateModel(context.Context, database.Querier, ContentModelSummary) error
 	UpdateModel(context.Context, database.Querier, ContentModelSummary) error
 	GetField(context.Context, database.Querier, string, string) (ContentField, error)
@@ -95,6 +97,18 @@ func (SQLRepository) LockModel(ctx context.Context, q database.Querier, id strin
 	return model, nil
 }
 
+func (r SQLRepository) LockModelSchema(ctx context.Context, q database.Querier, id string) (ContentModel, error) {
+	model, err := r.LockModel(ctx, q, id)
+	if err != nil {
+		return ContentModel{}, err
+	}
+	fields, err := r.listFields(ctx, q, id, true)
+	if err != nil {
+		return ContentModel{}, err
+	}
+	return ContentModel{ContentModelSummary: model, Fields: fields}, nil
+}
+
 func (SQLRepository) LockModels(ctx context.Context, q database.Querier, ids []string) (map[string]ContentModelSummary, error) {
 	ids = append([]string(nil), ids...)
 	sort.Strings(ids)
@@ -122,6 +136,34 @@ func (SQLRepository) LockModels(ctx context.Context, q database.Querier, ids []s
 		return nil, fmt.Errorf("读取锁定模型: %w", err)
 	}
 	return models, nil
+}
+
+func (SQLRepository) InboundRelationModelIDs(ctx context.Context, q database.Querier, targetModelID string, lock bool) ([]string, error) {
+	query := `SELECT model_id FROM content_fields WHERE status='active' AND field_type IN ('single_relation','multi_relation') AND constraints->>'$.target_model_id'=? ORDER BY model_id,id`
+	if lock {
+		query += ` FOR UPDATE`
+	}
+	rows, err := q.QueryContext(ctx, query, targetModelID)
+	if err != nil {
+		return nil, fmt.Errorf("查询模型入站关联: %w", err)
+	}
+	defer rows.Close()
+	ids := []string{}
+	seen := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("读取模型入站关联: %w", err)
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("读取模型入站关联: %w", err)
+	}
+	return ids, nil
 }
 
 func (SQLRepository) CreateModel(ctx context.Context, q database.Querier, model ContentModelSummary) error {

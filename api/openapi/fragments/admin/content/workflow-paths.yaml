@@ -39,13 +39,19 @@ x-integration-status: integrated
         content:
           application/json:
             schema:
-              $ref: ./workflow-schemas.yaml#/$defs/WorkflowEntry
+              $ref: ./schemas.yaml#/$defs/ContentEntry
       "400": &badRequest
         description: 请求体校验失败，error.code 为 validation_failed。
         content:
           application/json:
             schema:
               $ref: ../identity/schemas.yaml#/$defs/ValidationErrorResponse
+      "413":
+        description: JSON 请求体超过 1 MiB，error.code 为 request_body_too_large。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "401": &unauthenticated
         description: 管理会话无效。
         content:

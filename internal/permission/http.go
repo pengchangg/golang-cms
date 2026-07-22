@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
-	"strings"
 
 	"cms/internal/identity"
 	"cms/internal/platform/apperror"
@@ -194,18 +192,11 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 func requestMeta(r *http.Request) RequestMeta {
-	ip := strings.TrimSpace(r.RemoteAddr)
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		ip = host
-	}
-	if parsed := net.ParseIP(ip); parsed != nil {
-		ip = parsed.String()
-	}
 	agent := []rune(r.UserAgent())
 	if len(agent) > 512 {
 		agent = agent[:512]
 	}
-	return RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: ip, UserAgent: string(agent)}
+	return RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: httpx.ClientIPFromRequest(r), UserAgent: string(agent)}
 }
 
 type Module struct{ handler *Handler }

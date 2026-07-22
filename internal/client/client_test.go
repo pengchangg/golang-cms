@@ -38,6 +38,15 @@ func (allow) RequireSystemPermission(_ context.Context, p identity.Principal, re
 	}
 	return appError(apperror.KindPermissionDenied, "permission_denied", "权限不足")
 }
+func (allow) CurrentPrincipal(_ context.Context, _ database.Querier, principal identity.Principal) (identity.Principal, error) {
+	return principal, nil
+}
+
+type revokedAuthorizer struct{ allow }
+
+func (revokedAuthorizer) CurrentPrincipal(context.Context, database.Querier, identity.Principal) (identity.Principal, error) {
+	return identity.Principal{}, nil
+}
 
 type auditLog struct{ events []audit.Event }
 
@@ -78,7 +87,7 @@ func (m *memoryRepository) Get(_ context.Context, _ database.Querier, id string,
 	key.Status = statusAt(key, now)
 	return cloneKey(key), nil
 }
-func (m *memoryRepository) FindByPrefix(_ context.Context, _ database.Querier, prefix string, now time.Time) (APIKey, error) {
+func (m *memoryRepository) FindByPrefix(_ context.Context, _ database.Querier, prefix string, _ bool, now time.Time) (APIKey, error) {
 	for _, key := range m.keys {
 		if key.Prefix == prefix {
 			key.Status = statusAt(key, now)
@@ -157,7 +166,7 @@ func testService() (*Service, *memoryRepository, *auditLog) {
 	return service, repository, audits
 }
 func adminPrincipal() identity.Principal {
-	return identity.Principal{UserID: "user-1", SystemPermissions: []string{"api_keys.create", "api_keys.revoke", "api_keys.view"}}
+	return identity.Principal{UserID: "user-1", SystemPermissions: []string{"api_keys.create", "api_keys.revoke", "api_keys.view"}, ModelPermissions: []identity.ModelPermissions{{ModelID: "model-a", Permissions: []string{"content.view"}}, {ModelID: "model-b", Permissions: []string{"content.view"}}}}
 }
 
 func TestAPIKeyLifecycleFormatHashRotationAndAudit(t *testing.T) {
@@ -209,6 +218,15 @@ func TestAPIKeyValidationPermissionExpirationAndRevocation(t *testing.T) {
 	assertCode(t, err, "validation_failed")
 	_, err = service.Create(context.Background(), identity.Principal{}, RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}})
 	assertCode(t, err, "permission_denied")
+	_, err = service.Create(context.Background(), identity.Principal{UserID: "limited", SystemPermissions: []string{"api_keys.create"}}, RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}})
+	assertCode(t, err, "permission_denied")
+	limited := identity.Principal{UserID: "limited", SystemPermissions: []string{"api_keys.create"}, ModelPermissions: []identity.ModelPermissions{{ModelID: "model-a", Permissions: []string{"content.view"}}}}
+	createdForLimited, err := service.Create(context.Background(), limited, RequestMeta{}, CreateAPIKeyRequest{Name: "limited", ModelIDs: []string{"model-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Rotate(context.Background(), limited, RequestMeta{}, createdForLimited.ID, RotateAPIKeyRequest{ModelIDs: &[]string{"model-b"}})
+	assertCode(t, err, "permission_denied")
 	created, err := service.Create(context.Background(), adminPrincipal(), RequestMeta{"req", "ip", "ua"}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}})
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +238,25 @@ func TestAPIKeyValidationPermissionExpirationAndRevocation(t *testing.T) {
 	assertCode(t, authenticateError(service, "bad"), "invalid_api_key")
 	delete(repository.keys, created.ID)
 	assertCode(t, authenticateError(service, created.Key), "invalid_api_key")
+}
+
+func TestAPIKeyCreateRejectsPermissionRevokedBeforeTransaction(t *testing.T) {
+	service, _, _ := testService()
+	service.authorizer = revokedAuthorizer{}
+	_, err := service.Create(context.Background(), adminPrincipal(), RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}})
+	assertCode(t, err, "permission_denied")
+}
+
+func TestAPIKeyRotateAndRevokeRejectPermissionRevokedBeforeTransaction(t *testing.T) {
+	service, _, _ := testService()
+	created, err := service.Create(context.Background(), adminPrincipal(), RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.authorizer = revokedAuthorizer{}
+	_, err = service.Rotate(context.Background(), adminPrincipal(), RequestMeta{}, created.ID, RotateAPIKeyRequest{})
+	assertCode(t, err, "permission_denied")
+	assertCode(t, service.Revoke(context.Background(), adminPrincipal(), RequestMeta{}, created.ID), "permission_denied")
 }
 
 func TestParseRawKeyAcceptsURLSafeUnderscoreInSecret(t *testing.T) {

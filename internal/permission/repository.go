@@ -15,7 +15,7 @@ import (
 type Repository struct{}
 
 func (r Repository) ListRoles(ctx context.Context, q database.Querier) ([]Role, error) {
-	rows, err := q.QueryContext(ctx, "SELECT id, `key`, display_name, description, created_at, updated_at FROM roles ORDER BY `key`, id")
+	rows, err := q.QueryContext(ctx, "SELECT id, `key`, kind, display_name, description, created_at, updated_at FROM roles ORDER BY `key`, id")
 	if err != nil {
 		return nil, err
 	}
@@ -23,7 +23,7 @@ func (r Repository) ListRoles(ctx context.Context, q database.Querier) ([]Role, 
 	roles := []Role{}
 	for rows.Next() {
 		var role Role
-		if err := rows.Scan(&role.ID, &role.Key, &role.DisplayName, &role.Description, &role.CreatedAt, &role.UpdatedAt); err != nil {
+		if err := rows.Scan(&role.ID, &role.Key, &role.Kind, &role.DisplayName, &role.Description, &role.CreatedAt, &role.UpdatedAt); err != nil {
 			return nil, err
 		}
 		roles = append(roles, role)
@@ -40,26 +40,26 @@ func (r Repository) ListRoles(ctx context.Context, q database.Querier) ([]Role, 
 }
 
 func (r Repository) GetRole(ctx context.Context, q database.Querier, id string, lock bool) (Role, error) {
-	query := "SELECT id, `key`, display_name, description, created_at, updated_at FROM roles WHERE id=?"
+	query := "SELECT id, `key`, kind, display_name, description, created_at, updated_at FROM roles WHERE id=?"
 	if lock {
 		query += " FOR UPDATE"
 	}
 	var role Role
-	err := q.QueryRowContext(ctx, query, id).Scan(&role.ID, &role.Key, &role.DisplayName, &role.Description, &role.CreatedAt, &role.UpdatedAt)
+	err := q.QueryRowContext(ctx, query, id).Scan(&role.ID, &role.Key, &role.Kind, &role.DisplayName, &role.Description, &role.CreatedAt, &role.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Role{}, roleNotFound()
 	}
 	if err != nil {
 		return Role{}, err
 	}
-	if err := r.loadGrants(ctx, q, &role); err != nil {
+	if err := r.loadGrants(ctx, q, &role, lock); err != nil {
 		return Role{}, err
 	}
 	return role, nil
 }
 
 func (Repository) CreateRole(ctx context.Context, q database.Querier, role Role) error {
-	_, err := q.ExecContext(ctx, "INSERT INTO roles (id, `key`, display_name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", role.ID, role.Key, role.DisplayName, role.Description, role.CreatedAt, role.UpdatedAt)
+	_, err := q.ExecContext(ctx, "INSERT INTO roles (id, `key`, kind, display_name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", role.ID, role.Key, role.Kind, role.DisplayName, role.Description, role.CreatedAt, role.UpdatedAt)
 	return err
 }
 func (Repository) UpdateRole(ctx context.Context, q database.Querier, role Role) error {
@@ -71,20 +71,55 @@ func (Repository) DeleteRole(ctx context.Context, q database.Querier, id string)
 	return err
 }
 
-func (Repository) LockRoleIDs(ctx context.Context, q database.Querier, ids []string) (int, error) {
-	count := 0
-	for _, id := range ids {
-		var found string
-		err := q.QueryRowContext(ctx, "SELECT id FROM roles WHERE id=? FOR UPDATE", id).Scan(&found)
-		if errors.Is(err, sql.ErrNoRows) {
+func (r Repository) LockRoleTransition(ctx context.Context, q database.Querier, currentIDs, requestedIDs []string) (identity.LockedRoleSelection, identity.LockedRoleSelection, error) {
+	currentSet := make(map[string]struct{}, len(currentIDs))
+	requestedSet := make(map[string]struct{}, len(requestedIDs))
+	allSet := make(map[string]struct{}, len(currentIDs)+len(requestedIDs))
+	for _, id := range currentIDs {
+		currentSet[id] = struct{}{}
+		allSet[id] = struct{}{}
+	}
+	for _, id := range requestedIDs {
+		requestedSet[id] = struct{}{}
+		allSet[id] = struct{}{}
+	}
+	allIDs := make([]string, 0, len(allSet))
+	for id := range allSet {
+		allIDs = append(allIDs, id)
+	}
+	sort.Strings(allIDs)
+	current := identity.LockedRoleSelection{Permissions: identity.PermissionSet{System: []string{}, Models: []identity.ModelPermissions{}}}
+	requested := identity.LockedRoleSelection{Permissions: identity.PermissionSet{System: []string{}, Models: []identity.ModelPermissions{}}}
+	for _, id := range allIDs {
+		role, err := r.GetRole(ctx, q, id, true)
+		var appError *apperror.Error
+		if errors.As(err, &appError) && appError.Kind == apperror.KindNotFound {
 			continue
 		}
 		if err != nil {
-			return 0, err
+			return identity.LockedRoleSelection{}, identity.LockedRoleSelection{}, err
 		}
-		count++
+		if _, ok := currentSet[id]; ok {
+			appendRoleSelection(&current, role)
+		}
+		if _, ok := requestedSet[id]; ok {
+			appendRoleSelection(&requested, role)
+		}
 	}
-	return count, nil
+	return current, requested, nil
+}
+
+func appendRoleSelection(selection *identity.LockedRoleSelection, role Role) {
+	selection.Count++
+	selection.HighRisk = selection.HighRisk || role.Kind == RoleKindHighRisk
+	selection.Permissions.System = append(selection.Permissions.System, role.SystemPermissions...)
+	selection.Permissions.Models = append(selection.Permissions.Models, role.ModelPermissions...)
+}
+
+func (Repository) IsRoleAssignedToUser(ctx context.Context, q database.Querier, roleID, userID string) (bool, error) {
+	var assigned bool
+	err := q.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM user_roles WHERE role_id=? AND user_id=?)", roleID, userID).Scan(&assigned)
+	return assigned, err
 }
 
 func (Repository) ReplaceUserRoles(ctx context.Context, q database.Querier, userID string, roleIDs []string, now time.Time) error {
@@ -130,9 +165,13 @@ func (Repository) TouchRole(ctx context.Context, q database.Querier, roleID stri
 	return err
 }
 
-func (Repository) loadGrants(ctx context.Context, q database.Querier, role *Role) error {
+func (Repository) loadGrants(ctx context.Context, q database.Querier, role *Role, locked ...bool) error {
+	lockSuffix := ""
+	if len(locked) != 0 && locked[0] {
+		lockSuffix = " FOR SHARE"
+	}
 	role.SystemPermissions = []string{}
-	rows, err := q.QueryContext(ctx, "SELECT permission FROM role_system_permissions WHERE role_id=? ORDER BY permission", role.ID)
+	rows, err := q.QueryContext(ctx, "SELECT permission FROM role_system_permissions WHERE role_id=? ORDER BY permission"+lockSuffix, role.ID)
 	if err != nil {
 		return err
 	}
@@ -144,11 +183,15 @@ func (Repository) loadGrants(ctx context.Context, q database.Querier, role *Role
 		}
 		role.SystemPermissions = append(role.SystemPermissions, code)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
 	role.ModelPermissions = []identity.ModelPermissions{}
-	rows, err = q.QueryContext(ctx, "SELECT model_id, permission FROM role_model_permissions WHERE role_id=? ORDER BY model_id, permission", role.ID)
+	rows, err = q.QueryContext(ctx, "SELECT model_id, permission FROM role_model_permissions WHERE role_id=? ORDER BY model_id, permission"+lockSuffix, role.ID)
 	if err != nil {
 		return err
 	}

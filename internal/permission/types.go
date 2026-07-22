@@ -6,9 +6,17 @@ import (
 	"cms/internal/identity"
 )
 
+type RoleKind string
+
+const (
+	RoleKindCustom   RoleKind = "custom"
+	RoleKindHighRisk RoleKind = "high_risk"
+)
+
 type Role struct {
 	ID                string                      `json:"id"`
 	Key               string                      `json:"key"`
+	Kind              RoleKind                    `json:"kind"`
 	DisplayName       string                      `json:"display_name"`
 	Description       string                      `json:"description"`
 	SystemPermissions []string                    `json:"system_permissions"`

@@ -176,6 +176,18 @@ x-integration-status: integrated
       "403": *forbidden
       "404": *notFound
       "409": *assetConflict
+      "413":
+        description: 历史素材超过 100 MiB 同步确认上限，error.code 为 asset_confirmation_too_large。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "429":
+        description: 全进程或当前用户素材确认并发数已达上限，error.code 为 asset_confirm_concurrency_limit。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "503": *storeUnavailable
 /assets/{asset_id}/download:
   parameters: *assetId

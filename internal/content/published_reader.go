@@ -1,6 +1,7 @@
 package content
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -412,11 +413,67 @@ func activeRootContent(content json.RawMessage, fields []schema.ContentField) (j
 	for _, field := range fields {
 		if field.Status == schema.StatusActive {
 			if value, ok := source[field.Key]; ok {
-				trimmed[field.Key] = value
+				projected, err := activeFieldValue(value, field)
+				if err != nil {
+					return nil, err
+				}
+				trimmed[field.Key] = projected
 			}
 		}
 	}
 	return json.Marshal(trimmed)
+}
+
+func activeFieldValue(value json.RawMessage, field schema.ContentField) (json.RawMessage, error) {
+	if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return value, nil
+	}
+	switch field.Type {
+	case schema.FieldTypeObject:
+		return activeObjectValue(value, field.Children)
+	case schema.FieldTypeRepeatableGroup:
+		var groups []json.RawMessage
+		if err := json.Unmarshal(value, &groups); err != nil {
+			return nil, err
+		}
+		projected := make([]json.RawMessage, len(groups))
+		for i, group := range groups {
+			item, err := activeObjectValue(group, field.Children)
+			if err != nil {
+				return nil, err
+			}
+			projected[i] = item
+		}
+		return json.Marshal(projected)
+	default:
+		return value, nil
+	}
+}
+
+func activeObjectValue(value json.RawMessage, fields []schema.ContentField) (json.RawMessage, error) {
+	if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return value, nil
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(value, &source); err != nil {
+		return nil, err
+	}
+	projected := make(map[string]json.RawMessage)
+	for _, field := range fields {
+		if field.Status != schema.StatusActive {
+			continue
+		}
+		item, ok := source[field.Key]
+		if !ok {
+			continue
+		}
+		value, err := activeFieldValue(item, field)
+		if err != nil {
+			return nil, err
+		}
+		projected[field.Key] = value
+	}
+	return json.Marshal(projected)
 }
 
 func validatePublishedQuery(fields []schema.ContentField, query PublishedQuery) (map[string]schema.ContentField, error) {

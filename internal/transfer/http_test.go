@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -82,6 +83,18 @@ func TestExportFailureOnLaterPageReturnsJSONError(t *testing.T) {
 	mux.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Header().Get("Content-Type"), "application/json") || strings.HasPrefix(response.Body.String(), "\xef\xbb\xbf") {
 		t.Fatalf("response=%d content-type=%q body=%q", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+}
+
+func TestExportSetsContentLength(t *testing.T) {
+	service := NewService(Dependencies{Models: staticModelReader{}, Entries: &pagedEntries{}})
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/models/mdl_1/exports.csv", nil)
+	response := httptest.NewRecorder()
+	mux := http.NewServeMux()
+	NewHandler(service, func(*http.Request) (identity.Principal, error) { return transferPrincipal("content.view"), nil }).RegisterRoutes(mux)
+	mux.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Length") != strconv.Itoa(response.Body.Len()) {
+		t.Fatalf("status=%d length=%q body=%d", response.Code, response.Header().Get("Content-Length"), response.Body.Len())
 	}
 }
 

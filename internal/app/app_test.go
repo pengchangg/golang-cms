@@ -12,7 +12,7 @@ func TestSPAAndAPIIsolation(t *testing.T) {
 	handler := New(fstest.MapFS{
 		"index.html":    {Data: []byte("<main>CMS</main>")},
 		"assets/app.js": {Data: []byte("export {}")},
-	})
+	}, nil)
 
 	tests := []struct {
 		path        string
@@ -38,12 +38,15 @@ func TestSPAAndAPIIsolation(t *testing.T) {
 			if response.Header().Get("X-Request-ID") == "" {
 				t.Fatal("missing request ID")
 			}
+			if response.Header().Get("Content-Security-Policy") != "frame-ancestors 'none'" || response.Header().Get("X-Frame-Options") != "DENY" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
+				t.Fatalf("security headers = %#v", response.Header())
+			}
 		})
 	}
 }
 
 func TestSPARejectsWriteMethods(t *testing.T) {
-	handler := New(fstest.MapFS{"index.html": {Data: []byte("CMS")}})
+	handler := New(fstest.MapFS{"index.html": {Data: []byte("CMS")}}, nil)
 	request := httptest.NewRequest(http.MethodPost, "/login", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

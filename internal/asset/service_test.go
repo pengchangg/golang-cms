@@ -268,6 +268,56 @@ func TestServiceValidationAndPermission(t *testing.T) {
 	assertCode(t, err, "file_too_large")
 }
 
+func TestConfirmConcurrencyLimitsAndRelease(t *testing.T) {
+	service, _ := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: &memoryAssetRepository{values: map[string]Asset{}}, Store: NewMemoryStore(time.Minute, time.Minute), Audit: &memoryAudit{}, Config: Config{AllowedMimeTypes: []string{"image/png"}, MaxSize: 1, UploadTTL: time.Minute, DownloadTTL: time.Minute}})
+	releaseA, err := service.acquireConfirm("usr_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.acquireConfirm("usr_a"); err == nil {
+		t.Fatal("同用户第二个确认应被拒绝")
+	}
+	releaseB, err := service.acquireConfirm("usr_b")
+	if err != nil {
+		t.Fatal("同用户失败不应占用全局槽位")
+	}
+	if _, err = service.acquireConfirm("usr_c"); err == nil {
+		t.Fatal("第三个确认应被拒绝")
+	}
+	releaseA()
+	releaseC, err := service.acquireConfirm("usr_c")
+	if err != nil {
+		t.Fatal("释放后应允许确认")
+	}
+	releaseB()
+	releaseC()
+}
+
+func TestConfirmRejectsHistoricalOversizedAssetBeforeStore(t *testing.T) {
+	now := time.Now().UTC()
+	value := Asset{ID: "ast_large", Size: maxAssetSize + 1, Status: StatusQuarantined, UploadUntil: now.Add(time.Minute)}
+	store := NewMemoryStore(time.Minute, time.Minute)
+	service, _ := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: &memoryAssetRepository{values: map[string]Asset{value.ID: value}}, Store: store, Audit: &memoryAudit{}, Config: Config{AllowedMimeTypes: []string{"image/png"}, MaxSize: 1, UploadTTL: time.Minute, DownloadTTL: time.Minute}})
+	service.now = func() time.Time { return now }
+	_, err := service.Confirm(context.Background(), identity.Principal{UserID: "usr", SystemPermissions: []string{permissionUpload}}, RequestMeta{}, value.ID)
+	assertCode(t, err, "asset_confirmation_too_large")
+	if store.GetCalls.Load() != 0 {
+		t.Fatal("超大素材不应访问对象正文")
+	}
+}
+
+func TestConfirmHistoricalOversizedAvailableAssetRemainsIdempotent(t *testing.T) {
+	etag := "etag"
+	value := Asset{ID: "ast_large", ObjectKey: "assets/ast_large/key", Filename: "large.bin", MimeType: "image/png", Size: maxAssetSize + 1, SHA256: sha256Text("x"), ETag: &etag, Status: StatusAvailable}
+	store := NewMemoryStore(time.Minute, time.Minute)
+	store.objects[value.ObjectKey] = memoryObject{metadata: ObjectMetadata{ObjectKey: value.ObjectKey, Size: value.Size, ContentType: value.MimeType, SHA256: value.SHA256, ETag: etag}}
+	service, _ := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: &memoryAssetRepository{values: map[string]Asset{value.ID: value}}, Store: store, Audit: &memoryAudit{}, Config: Config{AllowedMimeTypes: []string{"image/png"}, MaxSize: 1, UploadTTL: time.Minute, DownloadTTL: time.Minute}})
+	confirmed, err := service.Confirm(context.Background(), identity.Principal{UserID: "usr", SystemPermissions: []string{permissionUpload}}, RequestMeta{}, value.ID)
+	if err != nil || confirmed.Status != StatusAvailable || store.GetCalls.Load() != 0 {
+		t.Fatalf("历史 available 素材确认 = (%+v, %v), GET=%d", confirmed, err, store.GetCalls.Load())
+	}
+}
+
 func sha256Text(value string) string {
 	digest := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(digest[:])

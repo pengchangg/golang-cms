@@ -114,10 +114,13 @@ func (s *Service) CreateSMSChallenge(ctx context.Context, phone, captchaID, bind
 	}
 	expires := now.Add(SMSExpiry)
 	challenge := SMSChallenge{Hash: s.digest("sms_challenge", id), BindingHash: s.digest("captcha_binding", binding), PhoneE164: normalized, PhoneMasked: masked, OTPHash: s.digest("sms_otp", id+"\x00"+code), AttemptsRemaining: SMSMaxAttempts, ExpiresAt: expires, CreatedAt: now}
+	user, findErr := s.store.FindPhoneUser(ctx, normalized)
+	if findErr == nil && user.Enabled {
+		challenge.UserID = &user.ID
+	}
 	if err := s.store.SaveSMSChallenge(ctx, challenge); err != nil {
 		return SMSChallengeResponse{}, fmt.Errorf("保存短信挑战: %w", err)
 	}
-	user, findErr := s.store.FindPhoneUser(ctx, normalized)
 	if findErr == nil && user.Enabled {
 		if s.sms == nil {
 			return SMSChallengeResponse{}, appError(apperror.KindUnavailable, "sms_unavailable", "短信服务暂时不可用")
@@ -139,7 +142,7 @@ func (s *Service) VerifySMSChallenge(ctx context.Context, challengeID, code, bin
 	if err := s.requireRateLimit(ctx, "sms_verify_ip", meta.IP, now, 10*time.Minute, 30); err != nil {
 		return sessionResult{}, err
 	}
-	phone, err := s.store.ConsumeSMSChallenge(ctx, s.digest("sms_challenge", challengeID), s.digest("captcha_binding", binding), s.digest("sms_otp", challengeID+"\x00"+code), now)
+	phone, challengeUserID, err := s.store.ConsumeSMSChallenge(ctx, s.digest("sms_challenge", challengeID), s.digest("captcha_binding", binding), s.digest("sms_otp", challengeID+"\x00"+code), now)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidChallenge) {
 			return sessionResult{}, s.smsFailure(ctx, meta)
@@ -147,13 +150,17 @@ func (s *Service) VerifySMSChallenge(ctx context.Context, challengeID, code, bin
 		return sessionResult{}, fmt.Errorf("校验短信挑战: %w", err)
 	}
 	user, err := s.store.FindPhoneUser(ctx, phone)
-	if err != nil || !user.Enabled {
+	if err != nil || !user.Enabled || challengeUserID == nil || user.ID != *challengeUserID {
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return sessionResult{}, fmt.Errorf("读取手机号用户: %w", err)
 		}
 		return sessionResult{}, s.smsFailure(ctx, meta)
 	}
-	return s.createSession(ctx, user, identity.AuthMethodSMS, "auth_sms_login_succeeded", meta)
+	result, err := s.createSession(ctx, user, identity.AuthMethodSMS, phone, "auth_sms_login_succeeded", meta)
+	if errors.Is(err, ErrInvalidChallenge) {
+		return sessionResult{}, s.smsFailure(ctx, meta)
+	}
+	return result, err
 }
 
 func (s *Service) LocalLogin(ctx context.Context, username, password string, meta RequestMeta) (sessionResult, error) {
@@ -187,14 +194,21 @@ func (s *Service) LocalLogin(ctx context.Context, username, password string, met
 		}
 		return sessionResult{}, appError(apperror.KindUnauthenticated, "invalid_credentials", "用户名或密码无效")
 	}
-	return s.createSession(ctx, user, identity.AuthMethodLocal, "auth_local_login_succeeded", meta)
+	result, err := s.createSession(ctx, user, identity.AuthMethodLocal, "", "auth_local_login_succeeded", meta)
+	if errors.Is(err, ErrInvalidChallenge) || errors.Is(err, ErrUserDisabled) {
+		if auditErr := s.auditFailure(ctx, "auth_local_login_failed", "invalid_credentials", meta); auditErr != nil {
+			return sessionResult{}, auditErr
+		}
+		return sessionResult{}, appError(apperror.KindUnauthenticated, "invalid_credentials", "用户名或密码无效")
+	}
+	return result, err
 }
 
 func (s *Service) CurrentSession(ctx context.Context, raw string) (SessionResponse, error) {
 	hash := s.digest("session", raw)
 	session, err := s.store.Session(ctx, hash)
 	now := s.clock.Now().UTC()
-	if err != nil || !session.Enabled || !now.Before(session.IdleExpiresAt) || !now.Before(session.ExpiresAt) {
+	if err != nil || !identity.ValidAuthMethod(session.AuthMethod) || !session.Enabled || !now.Before(session.IdleExpiresAt) || !now.Before(session.ExpiresAt) {
 		return SessionResponse{}, sessionInvalid()
 	}
 	idle := now.Add(IdleTimeout)
@@ -241,25 +255,28 @@ func (s *Service) CheckCSRF(raw, supplied string) error {
 	return nil
 }
 
-func (s *Service) ResetEmergencyAdmin(ctx context.Context, userID, username, displayName, password string, meta RequestMeta) error {
+func (s *Service) ResetEmergencyAdmin(ctx context.Context, userID, username, displayName, password string, ensure bool, meta RequestMeta) (bool, error) {
 	hash, err := HashPassword(password, s.random)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if userID == "" {
 		userID, err = s.identifier("usr", 18)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	event, err := s.event("auth_local_password_reset", "success", nil, nil, nil, meta)
 	if err != nil {
-		return err
+		return false, err
 	}
-	return s.store.UpsertEmergencyAdmin(ctx, userID, username, displayName, hash, s.clock.Now().UTC(), event)
+	return s.store.UpsertEmergencyAdmin(ctx, userID, username, displayName, hash, ensure, s.clock.Now().UTC(), event)
 }
 
-func (s *Service) createSession(ctx context.Context, user User, method identity.AuthMethod, action string, meta RequestMeta) (sessionResult, error) {
+func (s *Service) createSession(ctx context.Context, user User, method identity.AuthMethod, phoneE164, action string, meta RequestMeta) (sessionResult, error) {
+	if !identity.ValidAuthMethod(method) {
+		return sessionResult{}, ErrInvalidChallenge
+	}
 	principal, models, err := s.principalWithModels(ctx, user.ID, user.DisplayName, user.Email, method)
 	if err != nil {
 		return sessionResult{}, fmt.Errorf("读取当前权限: %w", err)
@@ -274,7 +291,7 @@ func (s *Service) createSession(ctx context.Context, user User, method identity.
 	if err != nil {
 		return sessionResult{}, err
 	}
-	created := NewSession{Hash: s.digest("session", raw), UserID: user.ID, AuthMethod: method, CreatedAt: now, LastSeenAt: now, IdleExpiresAt: now.Add(IdleTimeout), ExpiresAt: expires}
+	created := NewSession{Hash: s.digest("session", raw), UserID: user.ID, AuthMethod: method, CreatedAt: now, LastSeenAt: now, IdleExpiresAt: now.Add(IdleTimeout), ExpiresAt: expires, PhoneE164: phoneE164, PasswordHash: user.PasswordHash}
 	if err := s.store.CreateSession(ctx, created, event); err != nil {
 		return sessionResult{}, fmt.Errorf("创建认证会话: %w", err)
 	}
@@ -282,11 +299,11 @@ func (s *Service) createSession(ctx context.Context, user User, method identity.
 }
 
 func (s *Service) principalWithModels(ctx context.Context, userID, displayName string, email *string, method identity.AuthMethod) (identity.Principal, []SessionModelSummary, error) {
-	system, grants, err := s.permissionSet(ctx, userID)
+	permissions, err := s.permissionSet(ctx, userID)
 	if err != nil {
 		return identity.Principal{}, nil, err
 	}
-	principal := identity.NewPrincipal(userID, displayName, email, method, system, grants)
+	principal := identity.NewPrincipal(userID, displayName, email, method, permissions)
 	ids := make([]string, len(principal.ModelPermissions))
 	for i, grant := range principal.ModelPermissions {
 		ids[i] = grant.ModelID
@@ -304,9 +321,9 @@ func (s *Service) principalWithModels(ctx context.Context, userID, displayName s
 	return principal, models, nil
 }
 
-func (s *Service) permissionSet(ctx context.Context, userID string) ([]string, []identity.ModelPermissions, error) {
+func (s *Service) permissionSet(ctx context.Context, userID string) (identity.PermissionSet, error) {
 	if s.permissions == nil {
-		return []string{}, []identity.ModelPermissions{}, nil
+		return identity.PermissionSet{}, nil
 	}
 	return s.permissions.Permissions(ctx, userID)
 }

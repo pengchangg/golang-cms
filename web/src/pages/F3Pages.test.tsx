@@ -6,7 +6,7 @@ import * as client from '../api/client'
 import type { Principal } from '../api/types'
 import AssetsPage from './AssetsPage'
 
-const principal: Principal = { user_id: 'usr_1', display_name: '测试用户', email: null, auth_method: 'local', system_permissions: ['assets.view', 'assets.upload', 'assets.archive'], model_permissions: [{ model_id: 'mdl_1', permissions: ['content.view', 'content.create'] }] }
+const principal: Principal = { user_id: 'usr_1', display_name: '测试用户', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: ['assets.view', 'assets.upload', 'assets.archive'], model_permissions: [{ model_id: 'mdl_1', permissions: ['content.view', 'content.create'] }] }
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 

@@ -137,7 +137,7 @@ type PublishedDownloadScope struct {
 	AllowedModelIDs []string
 }
 
-// PublishedDownloader 由客户端认证集成层传入已授权模型范围，不解析 Bearer。
-type PublishedDownloader interface {
-	PublishedDownload(context.Context, PublishedDownloadScope, string) (SignedRequest, error)
+type PublishedDownload struct {
+	ObjectKey string
+	Filename  string
 }

@@ -20,10 +20,15 @@ import (
 type TransactionRunner interface {
 	WithinTx(context.Context, *sql.TxOptions, func(database.Querier) error) error
 }
+type RoleAuthorizer interface {
+	Authorizer
+	CurrentPrincipal(context.Context, database.Querier, identity.Principal) (identity.Principal, error)
+}
 type UserAccessor interface {
 	GetWith(context.Context, database.Querier, string, bool) (identity.User, error)
 }
 type ModelValidator interface {
+	ActiveModelIDs(context.Context) ([]string, error)
 	ValidateActiveModels(context.Context, database.Querier, []string) error
 }
 
@@ -33,7 +38,7 @@ type Service struct {
 	db         database.Querier
 	tx         TransactionRunner
 	repository Repository
-	authorizer Authorizer
+	authorizer RoleAuthorizer
 	audit      audit.Writer
 	users      UserAccessor
 	models     ModelValidator
@@ -43,7 +48,7 @@ type Service struct {
 type Dependencies struct {
 	DB         database.Querier
 	Transactor TransactionRunner
-	Authorizer Authorizer
+	Authorizer RoleAuthorizer
 	Audit      audit.Writer
 	Users      UserAccessor
 	Models     ModelValidator
@@ -57,13 +62,28 @@ func (s *Service) ListRoles(ctx context.Context, principal identity.Principal) (
 	if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesView); err != nil {
 		return nil, err
 	}
-	return s.repository.ListRoles(ctx, s.db)
+	roles, err := s.repository.ListRoles(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.populateHighRiskGrants(ctx, roles); err != nil {
+		return nil, err
+	}
+	return roles, nil
 }
 func (s *Service) GetRole(ctx context.Context, principal identity.Principal, id string) (Role, error) {
 	if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesView); err != nil {
 		return Role{}, err
 	}
-	return s.repository.GetRole(ctx, s.db, id, false)
+	role, err := s.repository.GetRole(ctx, s.db, id, false)
+	if err != nil {
+		return Role{}, err
+	}
+	roles := []Role{role}
+	if err := s.populateHighRiskGrants(ctx, roles); err != nil {
+		return Role{}, err
+	}
+	return roles[0], nil
 }
 
 func (s *Service) CreateRole(ctx context.Context, principal identity.Principal, meta RequestMeta, request CreateRoleRequest) (Role, error) {
@@ -75,8 +95,13 @@ func (s *Service) CreateRole(ctx context.Context, principal identity.Principal, 
 		return Role{}, err
 	}
 	now := s.now()
-	role := Role{ID: id, Key: request.Key, DisplayName: request.DisplayName, Description: request.Description, SystemPermissions: []string{}, ModelPermissions: []identity.ModelPermissions{}, CreatedAt: now, UpdatedAt: now}
+	role := Role{ID: id, Key: request.Key, Kind: RoleKindCustom, DisplayName: request.DisplayName, Description: request.Description, SystemPermissions: []string{}, ModelPermissions: []identity.ModelPermissions{}, CreatedAt: now, UpdatedAt: now}
 	err = s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesManage); err != nil {
 			return err
 		}
@@ -98,12 +123,20 @@ func (s *Service) UpdateRole(ctx context.Context, principal identity.Principal, 
 	}
 	var result Role
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesManage); err != nil {
 			return err
 		}
 		role, err := s.repository.GetRole(ctx, q, id, true)
 		if err != nil {
 			return err
+		}
+		if role.Kind == RoleKindHighRisk {
+			return builtinRoleImmutable()
 		}
 		changes := map[string]any{}
 		if request.DisplayName != nil {
@@ -135,11 +168,30 @@ func (s *Service) UpdateRole(ctx context.Context, principal identity.Principal, 
 
 func (s *Service) DeleteRole(ctx context.Context, principal identity.Principal, meta RequestMeta, id string) error {
 	return s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesManage); err != nil {
 			return err
 		}
-		if _, err := s.repository.GetRole(ctx, q, id, true); err != nil {
+		role, err := s.repository.GetRole(ctx, q, id, true)
+		if err != nil {
 			return err
+		}
+		if role.Kind == RoleKindHighRisk {
+			return builtinRoleImmutable()
+		}
+		if !principal.CanManageSecurityTier() {
+			assigned, err := s.repository.IsRoleAssignedToUser(ctx, q, role.ID, principal.UserID)
+			if err != nil {
+				return err
+			}
+			current := identity.PermissionSet{System: role.SystemPermissions, Models: role.ModelPermissions}
+			if !canReplaceRoleGrants(principal, assigned, current, current) {
+				return permissionDenied()
+			}
 		}
 		if err := s.repository.DeleteRole(ctx, q, id); err != nil {
 			return err
@@ -155,6 +207,11 @@ func (s *Service) ReplaceUserRoles(ctx context.Context, principal identity.Princ
 	roleIDs = sorted(roleIDs)
 	var result identity.User
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesManage); err != nil {
 			return err
 		}
@@ -165,23 +222,26 @@ func (s *Service) ReplaceUserRoles(ctx context.Context, principal identity.Princ
 		if err != nil {
 			return err
 		}
-		count, err := s.repository.LockRoleIDs(ctx, q, roleIDs)
+		currentRoles, requestedRoles, err := s.repository.LockRoleTransition(ctx, q, user.RoleIDs, roleIDs)
 		if err != nil {
 			return err
 		}
-		if count != len(roleIDs) {
+		if requestedRoles.Count != len(roleIDs) {
 			return validation([]map[string]any{detail("/role_ids", "unknown_role", "包含不存在的角色")})
+		}
+		if err := authorizeRoleReplacement(principal, user, currentRoles, requestedRoles); err != nil {
+			return err
 		}
 		if err := s.repository.ReplaceUserRoles(ctx, q, userID, roleIDs, s.now()); err != nil {
 			return err
 		}
-		if err := s.appendAudit(ctx, q, principal, meta, "user_roles_replaced", "user", userID, map[string]any{"role_ids": map[string]any{"from": user.RoleIDs, "to": roleIDs}}); err != nil {
+		if err := s.appendAudit(ctx, q, principal, meta, "user_roles_replaced", "user", userID, map[string]any{"role_ids": map[string]any{"from": user.RoleIDs, "to": roleIDs}, "high_risk_role": map[string]any{"from": user.HighRiskRole, "to": requestedRoles.HighRisk}}); err != nil {
 			return err
 		}
 		result, err = s.users.GetWith(ctx, q, userID, false)
 		return err
 	})
-	return result, err
+	return result.VisibleTo(principal), err
 }
 
 func (s *Service) ReplaceSystemPermissions(ctx context.Context, principal identity.Principal, meta RequestMeta, roleID string, values []string) (Role, error) {
@@ -191,11 +251,22 @@ func (s *Service) ReplaceSystemPermissions(ctx context.Context, principal identi
 	values = sorted(values)
 	var result Role
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesManage); err != nil {
 			return err
 		}
 		role, err := s.repository.GetRole(ctx, q, roleID, true)
 		if err != nil {
+			return err
+		}
+		if role.Kind == RoleKindHighRisk {
+			return builtinRoleImmutable()
+		}
+		if err := s.authorizeRoleGrantReplacement(ctx, q, principal, role, identity.PermissionSet{System: values, Models: role.ModelPermissions}); err != nil {
 			return err
 		}
 		now := s.now()
@@ -232,11 +303,22 @@ func (s *Service) ReplaceModelPermissions(ctx context.Context, principal identit
 	sort.Strings(modelIDs)
 	var result Role
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesManage); err != nil {
 			return err
 		}
 		role, err := s.repository.GetRole(ctx, q, roleID, true)
 		if err != nil {
+			return err
+		}
+		if role.Kind == RoleKindHighRisk {
+			return builtinRoleImmutable()
+		}
+		if err := s.authorizeRoleGrantReplacement(ctx, q, principal, role, identity.PermissionSet{System: role.SystemPermissions, Models: grants}); err != nil {
 			return err
 		}
 		if len(modelIDs) != 0 {
@@ -264,6 +346,75 @@ func (s *Service) ReplaceModelPermissions(ctx context.Context, principal identit
 		return err
 	})
 	return result, err
+}
+
+func (s *Service) populateHighRiskGrants(ctx context.Context, roles []Role) error {
+	var highRisk *Role
+	for i := range roles {
+		if roles[i].Kind == RoleKindHighRisk {
+			highRisk = &roles[i]
+			break
+		}
+	}
+	if highRisk == nil {
+		return nil
+	}
+	if s.models == nil {
+		return &apperror.Error{Kind: apperror.KindInternal, Code: "internal_error", Message: "模型验证器未装配"}
+	}
+	modelIDs, err := s.models.ActiveModelIDs(ctx)
+	if err != nil {
+		return err
+	}
+	highRisk.SystemPermissions, highRisk.ModelPermissions = emergencyPermissions(modelIDs)
+	return nil
+}
+
+func canManageHighRiskRole(principal identity.Principal) bool {
+	return principal.EmergencyAdmin || principal.HighRiskRole
+}
+
+func authorizeRoleReplacement(principal identity.Principal, target identity.User, currentRoles, requestedRoles identity.LockedRoleSelection) error {
+	if target.EmergencyAdmin && !principal.EmergencyAdmin {
+		return permissionDenied()
+	}
+	if principal.UserID == target.ID && !principal.CanManageSecurityTier() {
+		return permissionDenied()
+	}
+	if (target.HighRiskRole || currentRoles.HighRisk || requestedRoles.HighRisk) && !canManageHighRiskRole(principal) {
+		return permissionDenied()
+	}
+	if !principal.CanDelegate(currentRoles.Permissions) || !principal.CanDelegate(requestedRoles.Permissions) {
+		return permissionDenied()
+	}
+	return nil
+}
+
+func (s *Service) authorizeRoleGrantReplacement(ctx context.Context, q database.Querier, principal identity.Principal, role Role, permissions identity.PermissionSet) error {
+	if principal.CanManageSecurityTier() {
+		return nil
+	}
+	assigned, err := s.repository.IsRoleAssignedToUser(ctx, q, role.ID, principal.UserID)
+	if err != nil {
+		return err
+	}
+	current := identity.PermissionSet{System: role.SystemPermissions, Models: role.ModelPermissions}
+	if !canReplaceRoleGrants(principal, assigned, current, permissions) {
+		return permissionDenied()
+	}
+	return nil
+}
+
+func canReplaceRoleGrants(principal identity.Principal, assigned bool, current, requested identity.PermissionSet) bool {
+	return principal.CanManageSecurityTier() || !assigned && principal.CanDelegate(current) && principal.CanDelegate(requested)
+}
+
+func builtinRoleImmutable() error {
+	return &apperror.Error{Kind: apperror.KindConflict, Code: "builtin_role_immutable", Message: "内置高危角色不可修改或删除"}
+}
+
+func permissionDenied() error {
+	return &apperror.Error{Kind: apperror.KindPermissionDenied, Code: "permission_denied", Message: "权限不足"}
 }
 
 var roleKey = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)

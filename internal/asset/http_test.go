@@ -54,6 +54,15 @@ func TestWritePreviewStreamsTextWithSafeHeaders(t *testing.T) {
 	}
 }
 
+func TestWritePreviewSandboxesSVGAndForbidsFraming(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/assets/ast_1/preview", nil)
+	response := httptest.NewRecorder()
+	writePreview(response, request, Preview{Kind: PreviewImage, MimeType: "image/svg+xml", Size: 6, Body: io.NopCloser(strings.NewReader("<svg/>"))}, nil)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Security-Policy") != "sandbox; frame-ancestors 'none'" {
+		t.Fatalf("SVG 预览 CSP 错误: code=%d headers=%#v", response.Code, response.Header())
+	}
+}
+
 func TestWritePreviewStreamsImageInline(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/assets/ast_1/preview", nil)
 	response := httptest.NewRecorder()

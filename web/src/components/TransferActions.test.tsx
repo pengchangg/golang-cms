@@ -7,7 +7,7 @@ import type { Principal } from '../api/types'
 import { TransferActions } from './TransferActions'
 
 const principal: Principal = {
-  user_id: 'usr_1', display_name: '内容编辑', email: null, auth_method: 'local', system_permissions: [],
+  user_id: 'usr_1', display_name: '内容编辑', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: [],
   model_permissions: [{ model_id: 'mdl_1', permissions: ['content.view', 'content.create'] }],
 }
 
@@ -47,6 +47,8 @@ describe('同步 CSV 操作', () => {
 
     expect(importCSV).not.toHaveBeenCalled()
     expect(within(dialog).getByRole('button', { name: '直接导入' })).toBeDisabled()
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
   it('按当前筛选同步导出并释放临时下载地址', async () => {

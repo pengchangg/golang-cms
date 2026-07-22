@@ -15,7 +15,7 @@ function assetUrls(id: string) {
   }
 }
 
-export function AssetPicker({ multiple, value, onChange, disabled, canUpload = false, knownAssets = {} }: { multiple: boolean; value: string | string[] | null; onChange: (value: string | string[] | null) => void; disabled?: boolean; canUpload?: boolean; knownAssets?: Record<string, ReferencedAsset> }) {
+export function AssetPicker({ multiple, value, onChange, disabled, canUpload = false, knownAssets = {}, labelledBy, describedBy }: { multiple: boolean; value: string | string[] | null; onChange: (value: string | string[] | null) => void; disabled?: boolean; canUpload?: boolean; knownAssets?: Record<string, ReferencedAsset>; labelledBy?: string; describedBy?: string }) {
   const [open, setOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined])
@@ -23,6 +23,7 @@ export function AssetPicker({ multiple, value, onChange, disabled, canUpload = f
   const assets = useApiData(() => open ? api.listAssets({ status: 'available', cursor: cursors.at(-1), limit: 20 }) : Promise.resolve({ items: [], next_cursor: null }), [open, cursors.at(-1)])
   const selected = multiple ? (Array.isArray(value) ? value : []) : (typeof value === 'string' ? [value] : [])
   const assetByID: Record<string, ReferencedAsset> = { ...knownAssets, ...selectedAssets }
+  const actionID = labelledBy ? `${labelledBy}-asset-action` : undefined
 
   function choose(asset: Asset) {
     if (disabled) return
@@ -45,10 +46,10 @@ export function AssetPicker({ multiple, value, onChange, disabled, canUpload = f
   }
 
   return <div className="asset-picker"><Space wrap>
-    <Button onClick={() => setOpen(true)} disabled={disabled}>{multiple ? '选择素材' : selected.length ? '更换素材' : '选择素材'}</Button>
+    <Button aria-labelledby={labelledBy && actionID ? `${labelledBy} ${actionID}` : undefined} aria-describedby={describedBy} onClick={() => setOpen(true)} disabled={disabled}><span id={actionID}>{multiple ? '选择素材' : selected.length ? '更换素材' : '选择素材'}</span></Button>
     {selected.length ? <Typography.Text type="secondary">已选 {selected.length}{multiple ? ' / 50' : ''}</Typography.Text> : <Typography.Text type="secondary">未选择</Typography.Text>}
   </Space>
-  <div className="asset-selection" aria-label="已选素材">
+  <div className="asset-selection" aria-label="已选素材" aria-describedby={describedBy}>
     {selected.map((id, index) => <div className="asset-selection-item" key={id}>{assetByID[id] ? <AssetPreview asset={assetByID[id]} {...assetUrls(id)} compact /> : <Typography.Text type="secondary"><code>{id}</code></Typography.Text>}<Button size="small" danger disabled={disabled} aria-label={`移除素材 ${index + 1}`} onClick={() => onChange(multiple ? selected.filter((item) => item !== id) : null)}>移除</Button></div>)}
   </div>
   <Modal width={760} title={multiple ? '选择多个可用素材' : '选择可用素材'} open={open && !disabled} footer={null} onCancel={() => setOpen(false)}>

@@ -126,7 +126,7 @@ func TestSessionDoesNotCreateCookie(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/auth/session", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized || response.Header().Get("Set-Cookie") != "" || errorCode(t, response) != "session_invalid" {
+	if response.Code != http.StatusUnauthorized || response.Header().Get("Set-Cookie") != "" || response.Header().Get("Cache-Control") != "private, no-store" || errorCode(t, response) != "session_invalid" {
 		t.Fatalf("session response = %d %s", response.Code, response.Body.String())
 	}
 }
@@ -136,14 +136,14 @@ func TestCaptchaRequiresOriginAndSetsBrowserBinding(t *testing.T) {
 	start := httptest.NewRequest(http.MethodPost, routePrefix+"/captcha/challenges", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, start)
-	if response.Code != http.StatusForbidden || errorCode(t, response) != "origin_required" {
+	if response.Code != http.StatusForbidden || response.Header().Get("Cache-Control") != "private, no-store" || errorCode(t, response) != "origin_required" {
 		t.Fatalf("missing origin = %d %s", response.Code, response.Body.String())
 	}
 	start = httptest.NewRequest(http.MethodPost, routePrefix+"/captcha/challenges", nil)
 	start.Header.Set("Origin", "https://cms.example.com")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, start)
-	if response.Code != http.StatusCreated {
+	if response.Code != http.StatusCreated || response.Header().Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("captcha response = %d %s", response.Code, response.Body.String())
 	}
 	cookies := response.Result().Cookies()

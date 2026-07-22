@@ -82,6 +82,36 @@ func TestHTTPValidationEnvelopeAndUnknownFields(t *testing.T) {
 	assertHTTPError(t, response, http.StatusBadRequest, "validation_failed", "req_validation")
 }
 
+func TestHTTPJSONRequestBodyExactLimitAndOneByteOver(t *testing.T) {
+	valid := `{"key":"articles","display_name":"Articles"}`
+	exact := valid + strings.Repeat(" ", int(maxJSONRequestBytes)-len(valid))
+	crossingSecondValue := valid + strings.Repeat(" ", int(maxJSONRequestBytes)-len(valid)-1) + `{}`
+	for _, test := range []struct {
+		name, body, code string
+		status           int
+	}{
+		{name: "exact limit", body: exact, status: http.StatusCreated},
+		{name: "one byte over", body: exact + "x", status: http.StatusRequestEntityTooLarge, code: "request_body_too_large"},
+		{name: "two values within limit", body: valid + ` {}`, status: http.StatusBadRequest, code: "validation_failed"},
+		{name: "second value crosses limit", body: crossingSecondValue, status: http.StatusRequestEntityTooLarge, code: "request_body_too_large"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := testService(&memoryRepository{}, &transactionState{})
+			handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) { return testPrincipal(), nil })
+			request := httptest.NewRequest(http.MethodPost, "/api/admin/v1/models", strings.NewReader(test.body))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if test.code == "" {
+				if response.Code != test.status {
+					t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+				}
+				return
+			}
+			assertHTTPError(t, response, test.status, test.code, response.Header().Get(httpx.RequestIDHeader))
+		})
+	}
+}
+
 func TestHTTPRejectsUnauthenticatedRequest(t *testing.T) {
 	service := testService(&memoryRepository{}, &transactionState{})
 	handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) {

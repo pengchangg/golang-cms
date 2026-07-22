@@ -129,7 +129,8 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	if err != nil {
 		return err
 	}
-	authService, err := auth.NewService(auth.NewSQLStore(db, auditWriter), permissionProvider, integration.AuthModelSummaryProvider{DB: db}, smsProvider, auth.NewGoCaptchaGenerator(), auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
+	authStore := auth.NewSQLStore(db, auditWriter)
+	authService, err := auth.NewService(authStore, permissionProvider, integration.AuthModelSummaryProvider{DB: db}, smsProvider, auth.NewGoCaptchaGenerator(), auth.SystemClock{}, rand.Reader, cfg.SessionSecret)
 	if err != nil {
 		return err
 	}
@@ -138,9 +139,10 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		return err
 	}
 	transactor := database.NewTransactor(db)
-	authorizer := permission.PrincipalAuthorizer{}
-	userService := identity.NewUserService(identity.UserDependencies{DB: db, Transactor: transactor, Authorizer: authorizer, Audit: auditWriter})
-	roleService := permission.NewService(permission.Dependencies{DB: db, Transactor: transactor, Authorizer: authorizer, Audit: auditWriter, Users: userService, Models: modelAdapter})
+	securityTransactor := database.RetryDeadlocks(transactor)
+	authorizer := permission.PrincipalAuthorizer{Provider: permissionProvider}
+	userService := identity.NewUserService(identity.UserDependencies{DB: db, Transactor: securityTransactor, Authorizer: authorizer, Audit: auditWriter})
+	roleService := permission.NewService(permission.Dependencies{DB: db, Transactor: securityTransactor, Authorizer: authorizer, Audit: auditWriter, Users: userService, Models: modelAdapter})
 	var media content.MediaReferenceManager
 	var assetResolver content.ReferencedAssetResolver
 	var assetService *asset.Service
@@ -180,19 +182,21 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	content.NewModule(contentService, principalFromRequest).RegisterRoutes(adminMux)
 	client.NewAdminHandler(clientService, principalFromRequest).RegisterRoutes(adminMux)
 	contentMux := http.NewServeMux()
-	client.NewContentHandler(clientService, publishedReader).RegisterRoutes(contentMux)
+	contentProtection := client.NewProtection()
+	client.NewContentHandler(clientService, publishedReader, contentProtection).RegisterRoutes(contentMux)
 	if cfg.AssetsEnabled {
 		asset.NewHandler(assetService, principalFromRequest).RegisterRoutes(adminMux)
-		integration.ClientAssetHandler{DB: db, Client: clientService, Assets: assetService}.RegisterRoutes(contentMux)
+		integration.ClientAssetHandler{Tx: transactor, Client: clientService, Assets: assetService, Protection: contentProtection}.RegisterRoutes(contentMux)
 	}
 	modelReader := integration.ModelReader{DB: db, Repository: schemaRepository}
 	transferService := transfer.NewService(transfer.Dependencies{DB: db, Models: modelReader, Importer: contentService, Entries: contentService})
 	transfer.NewModule(transferService, principalFromRequest).RegisterRoutes(adminMux)
 	handler := app.New(
 		web,
+		cfg.TrustedProxyCIDRs,
 		authModule,
 		app.HandlerModule(authModule.Protect(adminMux), "/api/admin/v1/"),
-		app.HandlerModule(contentMux, "/api/content/v1/"),
+		app.HandlerModule(contentProtection.Global(contentMux), "/api/content/v1/"),
 	)
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -205,7 +209,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	services := []func(context.Context) error{func(context.Context) error {
 		logger.Info("HTTP 服务启动", "address", cfg.ListenAddr)
 		return server.ListenAndServe()
-	}}
+	}, auth.NewCleaner(authStore, logger).Run}
 	return runParallel(ctx, func() error {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer shutdownCancel()
@@ -307,7 +311,8 @@ func runAdmin(username, displayName string, ensure bool, logger *slog.Logger) er
 	}
 	if ensure {
 		var exists bool
-		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM local_credentials lc JOIN users u ON u.id = lc.user_id WHERE lc.username = ? AND lc.emergency_admin = TRUE AND u.enabled = TRUE)`, username).Scan(&exists); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM local_credentials lc JOIN users u ON u.id=lc.user_id
+			WHERE lc.username=? AND lc.emergency_admin=TRUE AND u.enabled=TRUE)`, username).Scan(&exists); err != nil {
 			return fmt.Errorf("检查应急管理员: %w", err)
 		}
 		if exists {
@@ -342,8 +347,13 @@ func runAdmin(username, displayName string, ensure bool, logger *slog.Logger) er
 		return err
 	}
 	meta := auth.RequestMeta{RequestID: "cmd_admin_reset_password", IP: "local", UserAgent: "cms-cli"}
-	if err := service.ResetEmergencyAdmin(ctx, "", username, displayName, password, meta); err != nil {
+	changed, err := service.ResetEmergencyAdmin(ctx, "", username, displayName, password, ensure, meta)
+	if err != nil {
 		return err
+	}
+	if !changed {
+		logger.Info("应急管理员已存在，跳过初始化", "username", username)
+		return nil
 	}
 	logger.Info("应急管理员已创建或重置", "username", username)
 	return nil

@@ -43,6 +43,7 @@ type SMSChallenge struct {
 	BindingHash       []byte
 	PhoneE164         string
 	PhoneMasked       string
+	UserID            *string
 	OTPHash           []byte
 	AttemptsRemaining int
 	ExpiresAt         time.Time
@@ -75,13 +76,15 @@ type NewSession struct {
 	LastSeenAt    time.Time
 	IdleExpiresAt time.Time
 	ExpiresAt     time.Time
+	PhoneE164     string
+	PasswordHash  string
 }
 
 type Store interface {
 	SaveCaptchaChallenge(context.Context, CaptchaChallenge) error
 	VerifyCaptchaChallenge(context.Context, []byte, []byte, int, int, int, time.Time) error
 	SaveSMSChallenge(context.Context, SMSChallenge) error
-	ConsumeSMSChallenge(context.Context, []byte, []byte, []byte, time.Time) (string, error)
+	ConsumeSMSChallenge(context.Context, []byte, []byte, []byte, time.Time) (string, *string, error)
 	AllowRateLimit(context.Context, string, []byte, time.Time, time.Duration, int) (bool, error)
 	FindLocalUser(context.Context, string) (User, error)
 	FindPhoneUser(context.Context, string) (User, error)
@@ -90,7 +93,7 @@ type Store interface {
 	TouchSession(context.Context, []byte, time.Time, time.Time) error
 	RevokeSession(context.Context, []byte, time.Time, audit.Event) error
 	AppendFailure(context.Context, audit.Event) error
-	UpsertEmergencyAdmin(context.Context, string, string, string, string, time.Time, audit.Event) error
+	UpsertEmergencyAdmin(context.Context, string, string, string, string, bool, time.Time, audit.Event) (bool, error)
 }
 
 type RequestMeta struct {

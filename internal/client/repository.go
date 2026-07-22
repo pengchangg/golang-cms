@@ -20,7 +20,7 @@ type APIKeyCursor struct {
 type Repository interface {
 	List(context.Context, database.Querier, APIKeyStatus, int, *APIKeyCursor, time.Time) ([]APIKey, error)
 	Get(context.Context, database.Querier, string, bool, time.Time) (APIKey, error)
-	FindByPrefix(context.Context, database.Querier, string, time.Time) (APIKey, error)
+	FindByPrefix(context.Context, database.Querier, string, bool, time.Time) (APIKey, error)
 	ValidateActiveModels(context.Context, database.Querier, []string) error
 	Create(context.Context, database.Querier, APIKey) error
 	Revoke(context.Context, database.Querier, string, string, time.Time) error
@@ -94,8 +94,12 @@ func (SQLRepository) Get(ctx context.Context, q database.Querier, id string, loc
 	return item, err
 }
 
-func (SQLRepository) FindByPrefix(ctx context.Context, q database.Querier, prefix string, now time.Time) (APIKey, error) {
-	item, err := scanAPIKey(q.QueryRowContext(ctx, `SELECT id,name,prefix,expires_at,revoked_at,last_used_at,rotated_from_id,replaced_by_id,created_by,created_at,salt,secret_hash FROM api_keys WHERE prefix=?`, prefix), now, true)
+func (SQLRepository) FindByPrefix(ctx context.Context, q database.Querier, prefix string, lock bool, now time.Time) (APIKey, error) {
+	query := `SELECT id,name,prefix,expires_at,revoked_at,last_used_at,rotated_from_id,replaced_by_id,created_by,created_at,salt,secret_hash FROM api_keys WHERE prefix=?`
+	if lock {
+		query += ` FOR UPDATE`
+	}
+	item, err := scanAPIKey(q.QueryRowContext(ctx, query, prefix), now, true)
 	if err != nil {
 		return item, err
 	}

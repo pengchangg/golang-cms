@@ -64,6 +64,7 @@ func (Repository) List(ctx context.Context, q database.Querier, filter UserFilte
 	rows, err := q.QueryContext(ctx, `SELECT u.id, u.display_name, u.email, u.enabled, u.created_at, u.updated_at,
 		EXISTS(SELECT 1 FROM local_credentials lc WHERE lc.user_id=u.id),
 		EXISTS(SELECT 1 FROM local_credentials lc WHERE lc.user_id=u.id AND lc.emergency_admin=TRUE),
+		EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.kind='high_risk'),
 		EXISTS(SELECT 1 FROM sms_credentials sc WHERE sc.user_id=u.id),
 		(SELECT sc.phone_masked FROM sms_credentials sc WHERE sc.user_id=u.id)
 		FROM users u WHERE `+strings.Join(where, " AND ")+` ORDER BY u.updated_at DESC, u.id DESC LIMIT ?`, args...)
@@ -76,7 +77,7 @@ func (Repository) List(ctx context.Context, q database.Querier, filter UserFilte
 		var user UserSummary
 		var enabled, local, sms bool
 		var phoneMasked sql.NullString
-		if err := rows.Scan(&user.ID, &user.DisplayName, &user.Email, &enabled, &user.CreatedAt, &user.UpdatedAt, &local, &user.EmergencyAdmin, &sms, &phoneMasked); err != nil {
+		if err := rows.Scan(&user.ID, &user.DisplayName, &user.Email, &enabled, &user.CreatedAt, &user.UpdatedAt, &local, &user.EmergencyAdmin, &user.HighRiskRole, &sms, &phoneMasked); err != nil {
 			return UserList{}, err
 		}
 		if phoneMasked.Valid {
@@ -115,6 +116,7 @@ func (r Repository) Get(ctx context.Context, q database.Querier, id string, lock
 	query := `SELECT u.id, u.display_name, u.email, u.enabled, u.created_at, u.updated_at,
 		EXISTS(SELECT 1 FROM local_credentials lc WHERE lc.user_id=u.id),
 		EXISTS(SELECT 1 FROM local_credentials lc WHERE lc.user_id=u.id AND lc.emergency_admin=TRUE),
+		EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.kind='high_risk'),
 		EXISTS(SELECT 1 FROM sms_credentials sc WHERE sc.user_id=u.id),
 		(SELECT sc.phone_e164 FROM sms_credentials sc WHERE sc.user_id=u.id),
 		(SELECT sc.phone_masked FROM sms_credentials sc WHERE sc.user_id=u.id) FROM users u WHERE u.id=?`
@@ -124,7 +126,7 @@ func (r Repository) Get(ctx context.Context, q database.Querier, id string, lock
 	var user User
 	var enabled, local, sms bool
 	var phone, phoneMasked sql.NullString
-	err := q.QueryRowContext(ctx, query, id).Scan(&user.ID, &user.DisplayName, &user.Email, &enabled, &user.CreatedAt, &user.UpdatedAt, &local, &user.EmergencyAdmin, &sms, &phone, &phoneMasked)
+	err := q.QueryRowContext(ctx, query, id).Scan(&user.ID, &user.DisplayName, &user.Email, &enabled, &user.CreatedAt, &user.UpdatedAt, &local, &user.EmergencyAdmin, &user.HighRiskRole, &sms, &phone, &phoneMasked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, notFound("用户不存在")
 	}
@@ -164,20 +166,60 @@ func (r Repository) Get(ctx context.Context, q database.Querier, id string, lock
 	return user, rows.Err()
 }
 
-func (Repository) LockRoleIDs(ctx context.Context, q database.Querier, ids []string) (int, error) {
-	count := 0
+func (Repository) LockRoleIDs(ctx context.Context, q database.Querier, ids []string) (LockedRoleSelection, error) {
+	result := LockedRoleSelection{Permissions: PermissionSet{System: []string{}, Models: []ModelPermissions{}}}
 	for _, id := range ids {
 		var found string
-		err := q.QueryRowContext(ctx, "SELECT id FROM roles WHERE id=? FOR UPDATE", id).Scan(&found)
+		var kind string
+		err := q.QueryRowContext(ctx, "SELECT id, kind FROM roles WHERE id=? FOR UPDATE", id).Scan(&found, &kind)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
 		if err != nil {
-			return 0, err
+			return LockedRoleSelection{}, err
 		}
-		count++
+		result.Count++
+		result.HighRisk = result.HighRisk || kind == "high_risk"
+		systemRows, err := q.QueryContext(ctx, "SELECT permission FROM role_system_permissions WHERE role_id=? ORDER BY permission FOR SHARE", id)
+		if err != nil {
+			return LockedRoleSelection{}, err
+		}
+		for systemRows.Next() {
+			var code string
+			if err := systemRows.Scan(&code); err != nil {
+				systemRows.Close()
+				return LockedRoleSelection{}, err
+			}
+			result.Permissions.System = append(result.Permissions.System, code)
+		}
+		if err := systemRows.Err(); err != nil {
+			systemRows.Close()
+			return LockedRoleSelection{}, err
+		}
+		if err := systemRows.Close(); err != nil {
+			return LockedRoleSelection{}, err
+		}
+		modelRows, err := q.QueryContext(ctx, "SELECT model_id, permission FROM role_model_permissions WHERE role_id=? ORDER BY model_id, permission FOR SHARE", id)
+		if err != nil {
+			return LockedRoleSelection{}, err
+		}
+		for modelRows.Next() {
+			var modelID, code string
+			if err := modelRows.Scan(&modelID, &code); err != nil {
+				modelRows.Close()
+				return LockedRoleSelection{}, err
+			}
+			result.Permissions.Models = append(result.Permissions.Models, ModelPermissions{ModelID: modelID, Permissions: []string{code}})
+		}
+		if err := modelRows.Err(); err != nil {
+			modelRows.Close()
+			return LockedRoleSelection{}, err
+		}
+		if err := modelRows.Close(); err != nil {
+			return LockedRoleSelection{}, err
+		}
 	}
-	return count, nil
+	return result, nil
 }
 
 func (Repository) CreateSMSUser(ctx context.Context, q database.Querier, user User, phoneE164, phoneMasked string, now time.Time) error {

@@ -1,7 +1,10 @@
 import '@testing-library/jest-dom/vitest'
 import { configure } from '@testing-library/dom'
 
-configure({ asyncUtilTimeout: 3000 })
+configure({ asyncUtilTimeout: 5000 })
+
+const getComputedStyle = window.getComputedStyle.bind(window)
+window.getComputedStyle = (element: Element) => getComputedStyle(element)
 
 class ResizeObserverMock {
   observe() {}

@@ -58,7 +58,7 @@ func TestUpdateFieldTypeIsLockedAfterContent(t *testing.T) {
 	state := &transactionState{}
 	repository := seededRepository()
 	service := testService(repository, state)
-	service.content = contentChecker{exists: true}
+	service.content = &contentChecker{exists: true}
 	newType := FieldTypeInteger
 	defaultValue := json.RawMessage(`null`)
 	constraints := FieldConstraints{}
@@ -67,6 +67,265 @@ func TestUpdateFieldTypeIsLockedAfterContent(t *testing.T) {
 	assertErrorCode(t, err, "field_type_locked")
 	if repository.fields["fld_1"].Type != FieldTypeSingleLineText || state.rollbacks != 1 {
 		t.Fatalf("field/state = %#v/%#v", repository.fields["fld_1"], state)
+	}
+}
+
+func TestUpdateFieldContentCheckUsesCurrentTransactionQuerier(t *testing.T) {
+	q := &fakeQuerier{}
+	state := &transactionState{q: q}
+	service := testService(seededRepository(), state)
+	service.content = &contentChecker{wantQ: q}
+	newType := FieldTypeInteger
+	defaultValue := json.RawMessage(`null`)
+	constraints := FieldConstraints{}
+	children := []ContentFieldInput{}
+
+	if _, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", "fld_1", ContentFieldPatch{Type: &newType, DefaultValue: &defaultValue, Constraints: &constraints, Children: &children}); err != nil {
+		t.Fatalf("UpdateField() error = %v", err)
+	}
+}
+
+func TestUpdateFieldRejectsSchemaTighteningAfterContent(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*ContentField)
+		patch func(ContentField) ContentFieldPatch
+	}{
+		{
+			name: "required",
+			patch: func(ContentField) ContentFieldPatch {
+				required := true
+				return ContentFieldPatch{Required: &required}
+			},
+		},
+		{
+			name: "min_length",
+			setup: func(field *ContentField) {
+				minimum := 1
+				field.Constraints.MinLength = &minimum
+			},
+			patch: func(field ContentField) ContentFieldPatch {
+				constraints := field.Constraints
+				minimum := 2
+				constraints.MinLength = &minimum
+				return ContentFieldPatch{Constraints: &constraints}
+			},
+		},
+		{
+			name: "max_length",
+			setup: func(field *ContentField) {
+				maximum := 20
+				field.Constraints.MaxLength = &maximum
+			},
+			patch: func(field ContentField) ContentFieldPatch {
+				constraints := field.Constraints
+				maximum := 10
+				constraints.MaxLength = &maximum
+				return ContentFieldPatch{Constraints: &constraints}
+			},
+		},
+		{
+			name: "minimum",
+			setup: func(field *ContentField) {
+				field.Type = FieldTypeDecimal
+				minimum := "1.5"
+				field.Constraints.Minimum = &minimum
+			},
+			patch: func(field ContentField) ContentFieldPatch {
+				constraints := field.Constraints
+				minimum := "2.0"
+				constraints.Minimum = &minimum
+				return ContentFieldPatch{Constraints: &constraints}
+			},
+		},
+		{
+			name: "maximum",
+			setup: func(field *ContentField) {
+				field.Type = FieldTypeInteger
+				maximum := "20"
+				field.Constraints.Maximum = &maximum
+			},
+			patch: func(field ContentField) ContentFieldPatch {
+				constraints := field.Constraints
+				maximum := "10"
+				constraints.Maximum = &maximum
+				return ContentFieldPatch{Constraints: &constraints}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := seededRepository()
+			field := repository.fields["fld_1"]
+			if test.setup != nil {
+				test.setup(&field)
+			}
+			repository.fields[field.ID] = field
+			state := &transactionState{}
+			service := testService(repository, state)
+			service.content = &contentChecker{exists: true}
+			_, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", field.ID, test.patch(field))
+			assertErrorCode(t, err, "field_schema_migration_required")
+			if state.rollbacks != 1 {
+				t.Fatalf("transaction state = %#v", state)
+			}
+		})
+	}
+}
+
+func TestUpdateFieldAllowsSchemaRelaxationAndDisplayChangesAfterContent(t *testing.T) {
+	minimum, maximum := 2, 10
+	repository := seededRepository()
+	field := repository.fields["fld_1"]
+	field.Required = true
+	field.Constraints.MinLength = &minimum
+	field.Constraints.MaxLength = &maximum
+	repository.fields[field.ID] = field
+	service := testService(repository, &transactionState{})
+	service.content = &contentChecker{exists: true}
+
+	relaxedMinimum, relaxedMaximum := 1, 20
+	constraints := field.Constraints
+	constraints.MinLength = &relaxedMinimum
+	constraints.MaxLength = &relaxedMaximum
+	required := false
+	displayName := "新标题"
+	result, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", field.ID, ContentFieldPatch{DisplayName: &displayName, Required: &required, Constraints: &constraints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Required || result.DisplayName != displayName || *result.Constraints.MinLength != relaxedMinimum || *result.Constraints.MaxLength != relaxedMaximum {
+		t.Fatalf("updated field = %#v", result)
+	}
+}
+
+func TestUpdateFieldAllowsSchemaTighteningBeforeContent(t *testing.T) {
+	repository := seededRepository()
+	service := testService(repository, &transactionState{})
+	service.content = &contentChecker{exists: false}
+	required := true
+	maximum := 10
+	constraints := FieldConstraints{MaxLength: &maximum}
+	result, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", "fld_1", ContentFieldPatch{Required: &required, Constraints: &constraints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Required || result.Constraints.MaxLength == nil || *result.Constraints.MaxLength != maximum {
+		t.Fatalf("updated field = %#v", result)
+	}
+}
+
+func TestUpdateFieldTreatsEquivalentNumericBoundsAsCompatible(t *testing.T) {
+	repository := seededRepository()
+	field := repository.fields["fld_1"]
+	field.Type = FieldTypeDecimal
+	minimum := "1.0"
+	field.Constraints.Minimum = &minimum
+	repository.fields[field.ID] = field
+	updatedMinimum := "1.00"
+	constraints := field.Constraints
+	constraints.Minimum = &updatedMinimum
+	service := testService(repository, &transactionState{})
+	service.content = &contentChecker{exists: true}
+	if _, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", field.ID, ContentFieldPatch{Constraints: &constraints}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateFieldChecksContentOnceForCombinedRestrictions(t *testing.T) {
+	repository := seededRepository()
+	required := true
+	constraints := FieldConstraints{Filterable: true}
+	checker := &contentChecker{exists: true}
+	service := testService(repository, &transactionState{})
+	service.content = checker
+	_, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", "fld_1", ContentFieldPatch{Required: &required, Constraints: &constraints})
+	assertErrorCode(t, err, "field_schema_migration_required")
+	if checker.calls != 1 {
+		t.Fatalf("内容存在性查询次数 = %d", checker.calls)
+	}
+}
+
+func TestUpdateFieldRejectsIncompatibleChildChangesAfterContent(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		children []ContentFieldInput
+	}{
+		{name: "remove existing child", children: []ContentFieldInput{
+			{Key: "replacement", DisplayName: "Replacement", Type: FieldTypeBoolean, DefaultValue: json.RawMessage(`null`), Children: []ContentFieldInput{}},
+		}},
+		{name: "add required child", children: []ContentFieldInput{
+			{Key: "existing", DisplayName: "Existing", Type: FieldTypeSingleLineText, DefaultValue: json.RawMessage(`null`), Children: []ContentFieldInput{}},
+			{Key: "required", DisplayName: "Required", Type: FieldTypeBoolean, Required: true, DefaultValue: json.RawMessage(`null`), Children: []ContentFieldInput{}},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := seededRepository()
+			parent := repository.fields["fld_1"]
+			parent.Type = FieldTypeObject
+			parent.Children = []ContentField{{ID: "fld_child", Key: "existing", DisplayName: "Existing", Type: FieldTypeSingleLineText, DefaultValue: json.RawMessage(`null`), Children: []ContentField{}, Status: StatusActive, Depth: 1}}
+			repository.fields[parent.ID] = parent
+			repository.fields["fld_child"] = parent.Children[0]
+			service := testService(repository, &transactionState{})
+			service.content = &contentChecker{exists: true}
+			_, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", parent.ID, ContentFieldPatch{Children: &test.children})
+			assertErrorCode(t, err, "field_schema_migration_required")
+		})
+	}
+}
+
+func TestUpdateFieldAllowsOptionalChildAfterContent(t *testing.T) {
+	repository := seededRepository()
+	parent := repository.fields["fld_1"]
+	parent.Type = FieldTypeObject
+	parent.Children = []ContentField{{ID: "fld_child", Key: "existing", DisplayName: "Existing", Type: FieldTypeSingleLineText, DefaultValue: json.RawMessage(`null`), Children: []ContentField{}, Status: StatusActive, Depth: 1}}
+	repository.fields[parent.ID] = parent
+	repository.fields["fld_child"] = parent.Children[0]
+	children := []ContentFieldInput{
+		{Key: "existing", DisplayName: "Existing", Type: FieldTypeSingleLineText, DefaultValue: json.RawMessage(`null`), Children: []ContentFieldInput{}},
+		{Key: "optional", DisplayName: "Optional", Type: FieldTypeBoolean, DefaultValue: json.RawMessage(`null`), Children: []ContentFieldInput{}},
+	}
+	service := testService(repository, &transactionState{})
+	service.content = &contentChecker{exists: true}
+	service.newID = func(string) (string, error) { return "fld_optional", nil }
+	if _, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", parent.ID, ContentFieldPatch{Children: &children}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpdateFieldChecksNestedEnumStabilityBeforeContent(t *testing.T) {
+	repository := seededRepository()
+	parent := repository.fields["fld_1"]
+	parent.Type = FieldTypeObject
+	parent.Children = []ContentField{{ID: "fld_child", Key: "kind", DisplayName: "Kind", Type: FieldTypeSingleSelect, DefaultValue: json.RawMessage(`null`), Constraints: FieldConstraints{EnumOptions: []EnumOption{{Value: "stable", Label: "Old"}}}, Children: []ContentField{}, Status: StatusActive, Depth: 1}}
+	repository.fields[parent.ID] = parent
+	repository.fields["fld_child"] = parent.Children[0]
+	children := []ContentFieldInput{{Key: "kind", DisplayName: "Kind", Type: FieldTypeSingleSelect, Required: true, DefaultValue: json.RawMessage(`null`), Constraints: FieldConstraints{EnumOptions: []EnumOption{{Value: "replacement", Label: "New"}}}, Children: []ContentFieldInput{}}}
+	checker := &contentChecker{exists: true}
+	service := testService(repository, &transactionState{})
+	service.content = checker
+	_, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", parent.ID, ContentFieldPatch{Children: &children})
+	assertErrorCode(t, err, "enum_value_immutable")
+	if checker.calls != 0 {
+		t.Fatalf("非法枚举修改不应查询内容，calls = %d", checker.calls)
+	}
+}
+
+func TestUpdateFieldAllowsCompatibleEnumChangesAfterContent(t *testing.T) {
+	repository := seededRepository()
+	field := repository.fields["fld_1"]
+	field.Type = FieldTypeSingleSelect
+	field.Constraints.EnumOptions = []EnumOption{{Value: "stable", Label: "Old"}}
+	repository.fields[field.ID] = field
+	constraints := field.Constraints
+	constraints.EnumOptions = []EnumOption{{Value: "stable", Label: "New label"}, {Value: "added", Label: "Added"}}
+	checker := &contentChecker{exists: true}
+	service := testService(repository, &transactionState{})
+	service.content = checker
+	if _, err := service.UpdateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", field.ID, ContentFieldPatch{Constraints: &constraints}); err != nil {
+		t.Fatal(err)
+	}
+	if checker.calls != 0 {
+		t.Fatalf("兼容枚举修改不应查询内容，calls = %d", checker.calls)
 	}
 }
 
@@ -91,6 +350,31 @@ func TestArchivedResourcesCannotBeChangedOrArchivedTwice(t *testing.T) {
 	assertErrorCode(t, err, "resource_archived")
 	_, err = service.CreateField(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1", fieldInput(FieldTypeBoolean, `null`, FieldConstraints{}))
 	assertErrorCode(t, err, "resource_archived")
+}
+
+func TestArchiveModelRejectsActiveInboundRelation(t *testing.T) {
+	state := &transactionState{}
+	repository := seededRepository()
+	repository.models["mdl_source"] = ContentModelSummary{ID: "mdl_source", Status: StatusActive}
+	repository.inboundIDs = []string{"mdl_source"}
+	err := testService(repository, state).ArchiveModel(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1")
+	assertErrorCode(t, err, "model_referenced")
+	if repository.models["mdl_1"].Status != StatusActive || state.rollbacks != 1 {
+		t.Fatalf("model/state = %#v/%#v", repository.models["mdl_1"], state)
+	}
+	if !reflect.DeepEqual(repository.lockedIDs, []string{"mdl_1", "mdl_source"}) {
+		t.Fatalf("归档锁定模型顺序 = %#v", repository.lockedIDs)
+	}
+}
+
+func TestArchiveModelAllowsNoInboundRelation(t *testing.T) {
+	repository := seededRepository()
+	if err := testService(repository, &transactionState{}).ArchiveModel(context.Background(), testPrincipal(), RequestMeta{}, "mdl_1"); err != nil {
+		t.Fatal(err)
+	}
+	if repository.models["mdl_1"].Status != StatusArchived {
+		t.Fatalf("model = %#v", repository.models["mdl_1"])
+	}
 }
 
 func TestArchiveFieldArchivesChildren(t *testing.T) {
@@ -354,12 +638,17 @@ type transactionState struct {
 	auditErr                          error
 	authorizeErr                      error
 	requiredPermission                string
+	q                                 database.Querier
 }
 type fakeTransactor struct{ state *transactionState }
 
 func (f fakeTransactor) WithinTx(_ context.Context, _ *sql.TxOptions, fn func(database.Querier) error) error {
 	f.state.active = true
-	err := fn(fakeQuerier{})
+	q := f.state.q
+	if q == nil {
+		q = fakeQuerier{}
+	}
+	err := fn(q)
 	f.state.active = false
 	if err != nil {
 		f.state.rollbacks++
@@ -399,15 +688,24 @@ func (f fakeAudit) Append(context.Context, database.Querier, audit.Event) error 
 type contentChecker struct {
 	exists bool
 	err    error
+	wantQ  database.Querier
+	calls  int
 }
 
-func (c contentChecker) HasAnyContent(context.Context, string) (bool, error) { return c.exists, c.err }
+func (c *contentChecker) HasAnyContent(_ context.Context, q database.Querier, _ string) (bool, error) {
+	c.calls++
+	if c.wantQ != nil && q != c.wantQ {
+		return false, errors.New("内容存在性查询未使用当前事务")
+	}
+	return c.exists, c.err
+}
 
 type memoryRepository struct {
 	models        map[string]ContentModelSummary
 	fields        map[string]ContentField
 	lockedIDs     []string
 	lockModelsErr error
+	inboundIDs    []string
 	parents       map[string]*string
 	positions     map[string]int
 }
@@ -447,6 +745,9 @@ func (m *memoryRepository) LockModel(ctx context.Context, q database.Querier, id
 	model, err := m.GetModel(ctx, q, id)
 	return model.ContentModelSummary, err
 }
+func (m *memoryRepository) LockModelSchema(ctx context.Context, q database.Querier, id string) (ContentModel, error) {
+	return m.GetModel(ctx, q, id)
+}
 func (m *memoryRepository) LockModels(_ context.Context, _ database.Querier, ids []string) (map[string]ContentModelSummary, error) {
 	if m.lockModelsErr != nil {
 		return nil, m.lockModelsErr
@@ -460,6 +761,9 @@ func (m *memoryRepository) LockModels(_ context.Context, _ database.Querier, ids
 		}
 	}
 	return models, nil
+}
+func (m *memoryRepository) InboundRelationModelIDs(_ context.Context, _ database.Querier, _ string, _ bool) ([]string, error) {
+	return append([]string(nil), m.inboundIDs...), nil
 }
 func (m *memoryRepository) CreateModel(_ context.Context, _ database.Querier, model ContentModelSummary) error {
 	m.ensure()
@@ -558,7 +862,7 @@ func (m *memoryRepository) ArchiveFieldTree(_ context.Context, _ database.Querie
 
 func testService(repository Repository, state *transactionState) *Service {
 	sequence := map[string]int{}
-	return &Service{db: fakeQuerier{}, tx: fakeTransactor{state}, repository: repository, authorizer: fakeAuthorizer{state}, audit: fakeAudit{state}, content: contentChecker{}, now: func() time.Time { return time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC) }, newID: func(prefix string) (string, error) { sequence[prefix]++; return prefix + "1", nil }}
+	return &Service{db: fakeQuerier{}, tx: fakeTransactor{state}, repository: repository, authorizer: fakeAuthorizer{state}, audit: fakeAudit{state}, content: &contentChecker{}, now: func() time.Time { return time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC) }, newID: func(prefix string) (string, error) { sequence[prefix]++; return prefix + "1", nil }}
 }
 func seededRepository() *memoryRepository {
 	repository := &memoryRepository{}

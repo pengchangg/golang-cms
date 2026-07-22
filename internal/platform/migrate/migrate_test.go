@@ -37,6 +37,22 @@ func TestLoadRejectsNonSnakeCaseName(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsMissingFirstAndIntermediateVersions(t *testing.T) {
+	for name, files := range map[string]fstest.MapFS{
+		"missing first": {"000002_second.up.sql": {Data: []byte("SELECT 2;")}},
+		"missing intermediate": {
+			"000001_first.up.sql": {Data: []byte("SELECT 1;")},
+			"000003_third.up.sql": {Data: []byte("SELECT 3;")},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(files); err == nil {
+				t.Fatal("Load() expected an error")
+			}
+		})
+	}
+}
+
 func TestValidateAppliedRejectsUnknownVersion(t *testing.T) {
 	err := validateApplied(map[uint64]appliedMigration{
 		2: {name: "000002_unknown.up.sql", checksum: "checksum"},

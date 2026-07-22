@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -61,6 +63,45 @@ func TestExportValidatesBeforeWriting(t *testing.T) {
 	if err == nil || output.Len() != 0 {
 		t.Fatalf("err=%v output=%q", err, output.String())
 	}
+}
+
+func TestExportEnforcesRowAndByteLimits(t *testing.T) {
+	service := NewService(Dependencies{Models: staticModelReader{}, Entries: &boundaryPagedEntries{total: maxExportRows + 1}})
+	err := service.Export(context.Background(), transferPrincipal("content.view"), "mdl_1", ExportRequest{}, &bytes.Buffer{})
+	assertTransferCode(t, err, "export_row_limit_exceeded")
+	service = NewService(Dependencies{Models: staticModelReader{}, Entries: &boundaryPagedEntries{total: maxExportRows}})
+	if err = service.Export(context.Background(), transferPrincipal("content.view"), "mdl_1", ExportRequest{}, io.Discard); err != nil {
+		t.Fatalf("恰好 10,000 行应成功: %v", err)
+	}
+
+	writer := &exportWriter{ctx: context.Background(), writer: &bytes.Buffer{}, written: maxExportBytes - 1}
+	_, err = writer.Write([]byte("xx"))
+	assertTransferCode(t, err, "export_size_limit_exceeded")
+}
+
+func TestExportConcurrencyLimitsAreAtomicAndRelease(t *testing.T) {
+	service := NewService(Dependencies{})
+	releaseA, err := service.acquireExport("usr_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.acquireExport("usr_a"); err == nil {
+		t.Fatal("同一用户第二个导出应被拒绝")
+	}
+	releaseB, err := service.acquireExport("usr_b")
+	if err != nil {
+		t.Fatal("同用户失败不应占用全局槽位")
+	}
+	if _, err = service.acquireExport("usr_c"); err == nil {
+		t.Fatal("第三个并发导出应被拒绝")
+	}
+	releaseA()
+	releaseC, err := service.acquireExport("usr_c")
+	if err != nil {
+		t.Fatal("释放后应能再次导出")
+	}
+	releaseB()
+	releaseC()
 }
 
 func TestImportAndExportRequireModelPermissions(t *testing.T) {
@@ -131,6 +172,31 @@ type pagedEntries struct {
 	queries []content.AdminEntryQuery
 	err     error
 	failAt  int
+}
+
+type boundaryPagedEntries struct{ total, offset int }
+
+func (e *boundaryPagedEntries) ListEntries(_ context.Context, _ identity.Principal, _ string, query content.AdminEntryQuery) (content.EntryList, error) {
+	count := min(query.Limit, e.total-e.offset)
+	items := make([]content.EntrySummary, count)
+	for i := range items {
+		items[i].CurrentDraftContent = json.RawMessage(`{"title":"值"}`)
+	}
+	e.offset += count
+	var next *string
+	if e.offset < e.total {
+		cursor := fmt.Sprint(e.offset)
+		next = &cursor
+	}
+	return content.EntryList{Items: items, NextCursor: next}, nil
+}
+
+func assertTransferCode(t *testing.T, err error, code string) {
+	t.Helper()
+	var application *apperror.Error
+	if !errors.As(err, &application) || application.Code != code {
+		t.Fatalf("error = %v, want %s", err, code)
+	}
 }
 
 func (e *pagedEntries) ListEntries(_ context.Context, _ identity.Principal, _ string, query content.AdminEntryQuery) (content.EntryList, error) {

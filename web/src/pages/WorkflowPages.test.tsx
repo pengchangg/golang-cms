@@ -1,7 +1,7 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from 'react-router-dom'
 
 import { api } from '../api/client'
 import type { ContentEntry, ContentModel, Principal } from '../api/types'
@@ -22,11 +22,18 @@ const entry: ContentEntry = {
 }
 
 function principal(system: Principal['system_permissions'], permissions: Principal['model_permissions'][number]['permissions']): Principal {
-  return { user_id: 'usr_2', display_name: '审核人', email: null, auth_method: 'sms', system_permissions: system, model_permissions: [{ model_id: model.id, permissions }] }
+  return { user_id: 'usr_2', display_name: '审核人', email: null, auth_method: 'sms', is_emergency_admin: false, has_high_risk_role: false, system_permissions: system, model_permissions: [{ model_id: model.id, permissions }] }
 }
 
 function renderEntry(value: Principal) {
-  return render(<MemoryRouter initialEntries={['/content/mdl_1/ent_1']}><Routes><Route path="/content/:modelId/:entryId" element={<EntryEditorPage principal={value} />} /></Routes></MemoryRouter>)
+  const router = createMemoryRouter([{ path: '/content/:modelId/:entryId', element: <EntryEditorPage principal={value} /> }], { initialEntries: ['/content/mdl_1/ent_1'] })
+  return { ...render(<RouterProvider router={router} />), router }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
 }
 
 afterEach(() => {
@@ -49,6 +56,99 @@ describe('工作流页面行为', () => {
     expect(screen.getByRole('button', { name: '提交审核' })).toBeDisabled()
     expect(screen.getByText('有未保存的修改')).toBeVisible()
     expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('条目切换会隔离草稿、字段状态和工作流状态', async () => {
+    const second = { ...entry, id: 'ent_2', current_draft_revision_id: 'rev_2', current_draft_content: { title: '第二篇' }, current_draft_revision: { ...entry.current_draft_revision, id: 'rev_2', entry_id: 'ent_2', content: { title: '第二篇' } } }
+    vi.spyOn(api, 'getModel').mockResolvedValue(model)
+    vi.spyOn(api, 'getEntry').mockImplementation(async (_modelId, entryId) => entryId === 'ent_2' ? second : entry)
+    vi.spyOn(api, 'listWorkflowEvents').mockResolvedValue({ items: [], next_cursor: null })
+    const value = principal(['models.view'], ['content.view', 'content.update'])
+    const router = createMemoryRouter([{ path: '/content/:modelId/:entryId', element: <EntryEditorPage principal={value} /> }], { initialEntries: ['/content/mdl_1/ent_1'] })
+    render(<RouterProvider router={router} />)
+
+    const title = await screen.findByRole('textbox')
+    await userEvent.clear(title)
+    await userEvent.type(title, '第一篇未保存')
+    void router.navigate('/content/mdl_1/ent_2')
+    await userEvent.click(await screen.findByRole('button', { name: '放弃并离开' }))
+
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue('第二篇'))
+    expect(screen.queryByText('有未保存的修改')).not.toBeInTheDocument()
+  })
+
+  it('保存使用同步防重入锁并与工作流动作互斥', async () => {
+    vi.spyOn(api, 'getModel').mockResolvedValue(model)
+    vi.spyOn(api, 'getEntry').mockResolvedValue(entry)
+    vi.spyOn(api, 'listWorkflowEvents').mockResolvedValue({ items: [], next_cursor: null })
+    const pending = deferred<ContentEntry>()
+    const update = vi.spyOn(api, 'updateEntry').mockReturnValue(pending.promise)
+    renderEntry(principal(['models.view'], ['content.view', 'content.update', 'content.submit']))
+
+    const save = await screen.findByRole('button', { name: '保存草稿' })
+    fireEvent.click(save)
+    fireEvent.click(save)
+
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '提交审核' })).toBeDisabled()
+    expect(screen.getByRole('textbox')).toBeDisabled()
+    pending.resolve(entry)
+    await waitFor(() => expect(save).not.toHaveClass('ant-btn-loading'))
+  })
+
+  it('未保存修改阻止浏览器卸载', async () => {
+    vi.spyOn(api, 'getModel').mockResolvedValue(model)
+    vi.spyOn(api, 'getEntry').mockResolvedValue(entry)
+    vi.spyOn(api, 'listWorkflowEvents').mockResolvedValue({ items: [], next_cursor: null })
+    renderEntry(principal(['models.view'], ['content.view', 'content.update']))
+    const title = await screen.findByRole('textbox')
+    await userEvent.type(title, '修改')
+
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('返回按钮和浏览器 POP 导航都可取消或确认', async () => {
+    vi.spyOn(api, 'getModel').mockResolvedValue(model)
+    vi.spyOn(api, 'getEntry').mockResolvedValue(entry)
+    vi.spyOn(api, 'listWorkflowEvents').mockResolvedValue({ items: [], next_cursor: null })
+    const value = principal(['models.view'], ['content.view', 'content.update'])
+    const router = createMemoryRouter([
+      { path: '/content/:modelId/:entryId', element: <EntryEditorPage principal={value} /> },
+      { path: '/content/:modelId', element: <div>内容列表</div> },
+    ], { initialEntries: ['/content/mdl_1', '/content/mdl_1/ent_1'], initialIndex: 1 })
+    render(<RouterProvider router={router} />)
+    await userEvent.type(await screen.findByRole('textbox'), '修改')
+
+    await userEvent.click(screen.getByRole('button', { name: '返回列表' }))
+    await userEvent.click(await screen.findByRole('button', { name: '继续编辑' }))
+    expect(router.state.location.pathname).toBe('/content/mdl_1/ent_1')
+
+    void router.navigate(-1)
+    await userEvent.click(await screen.findByRole('button', { name: '放弃并离开' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/content/mdl_1'))
+    expect(await screen.findByText('内容列表')).toBeVisible()
+  })
+
+  it('保存成功后解除导航保护', async () => {
+    vi.spyOn(api, 'getModel').mockResolvedValue(model)
+    vi.spyOn(api, 'getEntry').mockResolvedValue(entry)
+    vi.spyOn(api, 'listWorkflowEvents').mockResolvedValue({ items: [], next_cursor: null })
+    vi.spyOn(api, 'updateEntry').mockResolvedValue({ ...entry, current_draft_revision_id: 'rev_2' })
+    const value = principal(['models.view'], ['content.view', 'content.update'])
+    const router = createMemoryRouter([
+      { path: '/content/:modelId/:entryId', element: <EntryEditorPage principal={value} /> },
+      { path: '/content/:modelId', element: <div>内容列表</div> },
+    ], { initialEntries: ['/content/mdl_1/ent_1'] })
+    render(<RouterProvider router={router} />)
+    await userEvent.type(await screen.findByRole('textbox'), '修改')
+    await userEvent.click(screen.getByRole('button', { name: '保存草稿' }))
+    await waitFor(() => expect(screen.queryByText('有未保存的修改')).not.toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('button', { name: '返回列表' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/content/mdl_1'))
+    expect(screen.queryByText('放弃未保存的修改？')).not.toBeInTheDocument()
   })
 
   it('没有 models.view 时仍展示审核内容并可执行工作流', async () => {

@@ -4,6 +4,8 @@ const mockSession = {
     display_name: '开发预览用户',
     email: 'preview@local.invalid',
     auth_method: 'sms',
+    is_emergency_admin: false,
+    has_high_risk_role: false,
     system_permissions: ['users.view', 'users.manage', 'roles.view', 'roles.manage', 'models.view', 'models.create', 'models.update', 'api_keys.view', 'api_keys.create', 'api_keys.revoke', 'audit.view'],
     model_permissions: [{ model_id: 'mdl_articles', permissions: ['content.view', 'content.create', 'content.update', 'content.submit', 'content.review', 'content.publish', 'content.unpublish'] }],
   },

@@ -12,9 +12,26 @@ const (
 	AuthMethodSMS   AuthMethod = "sms"
 )
 
+func ValidAuthMethod(method AuthMethod) bool {
+	return method == AuthMethodLocal || method == AuthMethodSMS
+}
+
 type ModelPermissions struct {
 	ModelID     string   `json:"model_id"`
 	Permissions []string `json:"permissions"`
+}
+
+type PermissionSet struct {
+	System         []string
+	Models         []ModelPermissions
+	EmergencyAdmin bool
+	HighRiskRole   bool
+}
+
+type LockedRoleSelection struct {
+	Count       int
+	HighRisk    bool
+	Permissions PermissionSet
 }
 
 type Principal struct {
@@ -22,12 +39,51 @@ type Principal struct {
 	DisplayName       string             `json:"display_name"`
 	Email             *string            `json:"email"`
 	AuthMethod        AuthMethod         `json:"auth_method"`
+	EmergencyAdmin    bool               `json:"is_emergency_admin"`
+	HighRiskRole      bool               `json:"has_high_risk_role"`
 	SystemPermissions []string           `json:"system_permissions"`
 	ModelPermissions  []ModelPermissions `json:"model_permissions"`
 }
 
 type PermissionProvider interface {
-	Permissions(context.Context, string) ([]string, []ModelPermissions, error)
+	Permissions(context.Context, string) (PermissionSet, error)
+}
+
+func (p Principal) CanManageSecurityTier() bool {
+	return p.EmergencyAdmin || p.HighRiskRole
+}
+
+func (p Principal) CanDelegate(permissions PermissionSet) bool {
+	if p.CanManageSecurityTier() {
+		return true
+	}
+	system := stringSet(p.SystemPermissions)
+	for _, code := range permissions.System {
+		if _, ok := system[code]; !ok {
+			return false
+		}
+	}
+	models := make(map[string]map[string]struct{}, len(p.ModelPermissions))
+	for _, grant := range p.ModelPermissions {
+		models[grant.ModelID] = stringSet(grant.Permissions)
+	}
+	for _, grant := range permissions.Models {
+		allowed := models[grant.ModelID]
+		for _, code := range grant.Permissions {
+			if _, ok := allowed[code]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func stringSet(values []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[value] = struct{}{}
+	}
+	return result
 }
 
 var systemPermissionCodes = map[string]struct{}{
@@ -43,14 +99,16 @@ var modelPermissionCodes = map[string]struct{}{
 }
 
 // NewPrincipal 规范化外部权限提供者返回的权限并集，不在身份模块内伪造 RBAC。
-func NewPrincipal(userID, displayName string, email *string, method AuthMethod, system []string, models []ModelPermissions) Principal {
+func NewPrincipal(userID, displayName string, email *string, method AuthMethod, permissions PermissionSet) Principal {
 	return Principal{
 		UserID:            userID,
 		DisplayName:       displayName,
 		Email:             email,
 		AuthMethod:        method,
-		SystemPermissions: validUniqueSorted(system, systemPermissionCodes),
-		ModelPermissions:  normalizeModels(models),
+		EmergencyAdmin:    permissions.EmergencyAdmin,
+		HighRiskRole:      permissions.HighRiskRole,
+		SystemPermissions: validUniqueSorted(permissions.System, systemPermissionCodes),
+		ModelPermissions:  normalizeModels(permissions.Models),
 	}
 }
 

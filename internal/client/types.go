@@ -95,7 +95,8 @@ type RotateAPIKeyRequest struct {
 type RequestMeta struct{ RequestID, IP, UserAgent string }
 
 type AuthenticatedKey struct {
-	ID       string
-	Prefix   string
-	ModelIDs []string
+	ID                 string
+	Prefix             string
+	ModelIDs           []string
+	ShouldTouchLastUse bool
 }

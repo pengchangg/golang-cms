@@ -18,6 +18,7 @@ import (
 
 type SystemAuthorizer interface {
 	RequireSystemPermission(context.Context, Principal, string) error
+	CurrentPrincipal(context.Context, database.Querier, Principal) (Principal, error)
 }
 type TransactionRunner interface {
 	WithinTx(context.Context, *sql.TxOptions, func(database.Querier) error) error
@@ -28,7 +29,7 @@ type UserRepository interface {
 	SetStatus(context.Context, database.Querier, string, UserStatus, time.Time) error
 	RevokeSessions(context.Context, database.Querier, string, time.Time) error
 	LockEnabledEmergencyAdmins(context.Context, database.Querier) (int, error)
-	LockRoleIDs(context.Context, database.Querier, []string) (int, error)
+	LockRoleIDs(context.Context, database.Querier, []string) (LockedRoleSelection, error)
 	CreateSMSUser(context.Context, database.Querier, User, string, string, time.Time) error
 	UpdatePhone(context.Context, database.Querier, string, string, string, time.Time) error
 }
@@ -74,7 +75,8 @@ func (s *UserService) Get(ctx context.Context, principal Principal, id string) (
 	if err := s.authorizer.RequireSystemPermission(ctx, principal, "roles.view"); err != nil {
 		return User{}, err
 	}
-	return s.repository.Get(ctx, s.db, id, false)
+	user, err := s.repository.Get(ctx, s.db, id, false)
+	return user.VisibleTo(principal), err
 }
 
 func (s *UserService) Create(ctx context.Context, principal Principal, meta RequestMeta, request CreateUserRequest) (User, error) {
@@ -90,18 +92,29 @@ func (s *UserService) Create(ctx context.Context, principal Principal, meta Requ
 	sort.Strings(roleIDs)
 	var result User
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, "users.manage"); err != nil {
 			return err
 		}
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, "roles.manage"); err != nil {
 			return err
 		}
-		count, err := s.repository.LockRoleIDs(ctx, q, roleIDs)
+		roles, err := s.repository.LockRoleIDs(ctx, q, roleIDs)
 		if err != nil {
 			return err
 		}
-		if count != len(roleIDs) {
+		if roles.Count != len(roleIDs) {
 			return validationFailed([]map[string]any{{"path": "/role_ids", "code": "unknown_role", "message": "包含不存在的角色"}})
+		}
+		if roles.HighRisk && !principal.CanManageSecurityTier() {
+			return &apperror.Error{Kind: apperror.KindPermissionDenied, Code: "permission_denied", Message: "权限不足"}
+		}
+		if !principal.CanDelegate(roles.Permissions) {
+			return &apperror.Error{Kind: apperror.KindPermissionDenied, Code: "permission_denied", Message: "权限不足"}
 		}
 		id, err := s.newUserID()
 		if err != nil {
@@ -121,7 +134,7 @@ func (s *UserService) Create(ctx context.Context, principal Principal, meta Requ
 		result, err = s.repository.Get(ctx, q, id, false)
 		return err
 	})
-	return result, err
+	return result.VisibleTo(principal), err
 }
 
 func (s *UserService) UpdatePhone(ctx context.Context, principal Principal, meta RequestMeta, id string, request UpdatePhoneRequest) (User, error) {
@@ -131,6 +144,11 @@ func (s *UserService) UpdatePhone(ctx context.Context, principal Principal, meta
 	}
 	var result User
 	err = s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, refreshErr := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if refreshErr != nil {
+			return refreshErr
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, "users.manage"); err != nil {
 			return err
 		}
@@ -141,8 +159,14 @@ func (s *UserService) UpdatePhone(ctx context.Context, principal Principal, meta
 		if err != nil {
 			return err
 		}
+		if user.EmergencyAdmin {
+			return &apperror.Error{Kind: apperror.KindPermissionDenied, Code: "permission_denied", Message: "权限不足"}
+		}
 		if user.Phone == nil {
 			return &apperror.Error{Kind: apperror.KindConflict, Code: "sms_credential_required", Message: "用户不是手机号账户"}
+		}
+		if !principal.CanManageSecurityTier() {
+			return &apperror.Error{Kind: apperror.KindPermissionDenied, Code: "permission_denied", Message: "权限不足"}
 		}
 		oldMasked := ""
 		if user.PhoneMasked != nil {
@@ -168,7 +192,7 @@ func (s *UserService) UpdatePhone(ctx context.Context, principal Principal, meta
 		result, err = s.repository.Get(ctx, q, id, false)
 		return err
 	})
-	return result, err
+	return result.VisibleTo(principal), err
 }
 
 func (s *UserService) SetStatus(ctx context.Context, principal Principal, meta RequestMeta, id string, status UserStatus) (User, error) {
@@ -177,6 +201,11 @@ func (s *UserService) SetStatus(ctx context.Context, principal Principal, meta R
 	}
 	var result User
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		principal = refreshed
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, "users.manage"); err != nil {
 			return err
 		}
@@ -186,6 +215,9 @@ func (s *UserService) SetStatus(ctx context.Context, principal Principal, meta R
 		user, err := s.repository.Get(ctx, q, id, false)
 		if err != nil {
 			return err
+		}
+		if user.EmergencyAdmin && !principal.EmergencyAdmin {
+			return &apperror.Error{Kind: apperror.KindPermissionDenied, Code: "permission_denied", Message: "权限不足"}
 		}
 		if status == UserDisabled && user.Status == UserEnabled && user.EmergencyAdmin {
 			// 按固定顺序先锁定全部应急管理员，防止并发禁用分别通过计数检查或形成交叉锁。
@@ -229,7 +261,7 @@ func (s *UserService) SetStatus(ctx context.Context, principal Principal, meta R
 		result, err = s.repository.Get(ctx, q, id, false)
 		return err
 	})
-	return result, err
+	return result.VisibleTo(principal), err
 }
 
 func (s *UserService) GetWith(ctx context.Context, q database.Querier, id string, lock bool) (User, error) {

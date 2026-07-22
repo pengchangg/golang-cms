@@ -17,7 +17,7 @@ function PollingHarness({ load }: { load: () => Promise<string> }) {
 
 function MutationHarness({ load }: { load: () => Promise<string> }) {
   const result = useApiData(load)
-  return <><div>{result.data ?? '加载中'}</div><button onClick={() => result.setData('乐观数据')}>更新</button><button onClick={() => result.reload(true)}>刷新</button></>
+  return <><div>{result.data ?? '加载中'}</div><button onClick={() => result.setData('乐观数据')}>更新</button><button onClick={() => result.reload(true)}>刷新</button><button onClick={result.invalidate}>失效</button></>
 }
 
 afterEach(() => {
@@ -65,5 +65,21 @@ describe('useApiData 背景刷新', () => {
     expect(screen.getByText('乐观数据')).toBeInTheDocument()
     await act(async () => resolveThird('最新刷新'))
     expect(screen.getByText('最新刷新')).toBeInTheDocument()
+  })
+
+  it('invalidate 在依赖不变时也会重新请求并拒绝旧响应', async () => {
+    let resolveFirst!: (value: string) => void
+    let resolveSecond!: (value: string) => void
+    const load = vi.fn()
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveFirst = resolve }))
+      .mockReturnValueOnce(new Promise<string>((resolve) => { resolveSecond = resolve }))
+    render(<MutationHarness load={load} />)
+    screen.getByText('失效').click()
+    await act(async () => {})
+    expect(load).toHaveBeenCalledTimes(2)
+    await act(async () => resolveFirst('过期数据'))
+    expect(screen.getByText('加载中')).toBeInTheDocument()
+    await act(async () => resolveSecond('新数据'))
+    expect(screen.getByText('新数据')).toBeInTheDocument()
   })
 })

@@ -113,6 +113,7 @@
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound
+      "409": *conflict
   delete:
     operationId: deleteAdminRole
     summary: 删除角色及其绑定和授权

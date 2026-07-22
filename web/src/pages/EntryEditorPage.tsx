@@ -1,6 +1,6 @@
 import { Alert, Button, Descriptions, Input, Modal, Space, Tag, Timeline, Tooltip, Typography, message } from 'antd'
-import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useRef, useState } from 'react'
+import { useBeforeUnload, useBlocker, useNavigate, useParams } from 'react-router-dom'
 
 import { ApiError, api, apiErrorMessage } from '../api/client'
 import type { ContentEntry, Principal, WorkflowEvent, WorkflowStatus } from '../api/types'
@@ -13,6 +13,10 @@ const eventLabels: Record<WorkflowEvent['type'], string> = { submitted: '提交�
 
 export default function EntryEditorPage({ principal }: { principal: Principal }) {
   const { modelId = '', entryId } = useParams()
+  return <EntryEditor key={`${modelId}:${entryId ?? 'new'}`} principal={principal} modelId={modelId} entryId={entryId} />
+}
+
+function EntryEditor({ principal, modelId, entryId }: { principal: Principal; modelId: string; entryId?: string }) {
   const navigate = useNavigate()
   const canViewModel = hasSystemPermission(principal, 'models.view')
   const model = useApiData(() => canViewModel ? api.getModel(modelId) : Promise.resolve(undefined), [modelId, canViewModel])
@@ -24,7 +28,10 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
   const [reasonOpen, setReasonOpen] = useState(false)
   const [reason, setReason] = useState('')
   const [acting, setActing] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [fieldValidity, setFieldValidity] = useState<Record<string, boolean>>({})
+  const writeLock = useRef(false)
+  const allowNavigation = useRef(false)
   const content = draft ?? entry.data?.current_draft_revision.content ?? {}
   const workflowStatus = entry.data?.workflow_status
   const canWrite = hasModelPermission(principal, modelId, entryId ? 'content.update' : 'content.create')
@@ -36,7 +43,14 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
   const hasFields = Boolean(model.data?.fields.length)
   const canEditStructure = canViewModel && hasFields
   const hasUnsavedChanges = draft !== undefined
+  const writing = saving || acting
   const formValid = Object.values(fieldValidity).every(Boolean)
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => hasUnsavedChanges && !allowNavigation.current && `${currentLocation.pathname}${currentLocation.search}${currentLocation.hash}` !== `${nextLocation.pathname}${nextLocation.search}${nextLocation.hash}`)
+  useBeforeUnload((event) => {
+    if (!hasUnsavedChanges) return
+    event.preventDefault()
+    event.returnValue = ''
+  })
 
   function reloadEvents() {
     setEventCursors([undefined])
@@ -51,6 +65,8 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
   }
 
   async function action(run: () => Promise<ContentEntry>, success: string) {
+    if (writeLock.current) return false
+    writeLock.current = true
     setActing(true)
     try {
       applyResult(await run(), success)
@@ -61,15 +77,22 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
       return false
     } finally {
       setActing(false)
+      writeLock.current = false
     }
   }
 
   async function save() {
+    if (writeLock.current) return
+    writeLock.current = true
+    setSaving(true)
     try {
       const result = entryId && entry.data ? await api.updateEntry(modelId, entryId, entry.data.current_draft_revision_id, content) : await api.createEntry(modelId, content)
       message.success('草稿已保存为新 Revision')
       setDraft(undefined)
-      if (!entryId) navigate(`/content/${modelId}/${result.id}`, { replace: true })
+      if (!entryId) {
+        allowNavigation.current = true
+        navigate(`/content/${modelId}/${result.id}`, { replace: true })
+      }
       else {
         entry.setData(result)
         reloadEvents()
@@ -77,19 +100,22 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
     } catch (error) {
       if (error instanceof ApiError && error.code === 'draft_revision_conflict') message.error('草稿已被其他人更新，请重新载入后再编辑')
       else message.error(apiErrorMessage(error, '保存草稿失败'))
+    } finally {
+      setSaving(false)
+      writeLock.current = false
     }
   }
 
   const revisionId = entry.data?.current_draft_revision_id ?? ''
   const actionButtons = entryId && entry.data ? <Space wrap className="workflow-actions">
-    {workflowStatus === 'draft' && canSubmit ? <Tooltip title={hasUnsavedChanges ? '请先保存当前修改，生成新 Revision 后再提交审核' : undefined}><span><Button type="primary" loading={acting} disabled={hasUnsavedChanges} onClick={() => action(() => api.submitEntry(modelId, entryId, revisionId), '已提交审核')}>提交审核</Button></span></Tooltip> : null}
-    {workflowStatus === 'pending_review' && canReview ? <Button danger loading={acting} onClick={() => setReasonOpen(true)}>驳回</Button> : null}
-    {workflowStatus === 'pending_review' && canReview && canPublish ? <Button type="primary" loading={acting} onClick={() => action(() => api.approveEntry(modelId, entryId, revisionId), '已审核通过并发布')}>通过并发布</Button> : null}
-    {workflowStatus === 'published' && canUnpublish && entry.data.current_published_revision_id ? <Button danger loading={acting} onClick={() => action(() => api.unpublishEntry(modelId, entryId, entry.data!.current_published_revision_id!), '内容已下线')}>下线</Button> : null}
+    {workflowStatus === 'draft' && canSubmit ? <Tooltip title={hasUnsavedChanges ? '请先保存当前修改，生成新 Revision 后再提交审核' : undefined}><span><Button type="primary" loading={acting} disabled={hasUnsavedChanges || writing} onClick={() => action(() => api.submitEntry(modelId, entryId, revisionId), '已提交审核')}>提交审核</Button></span></Tooltip> : null}
+    {workflowStatus === 'pending_review' && canReview ? <Button danger loading={acting} disabled={writing} onClick={() => setReasonOpen(true)}>驳回</Button> : null}
+    {workflowStatus === 'pending_review' && canReview && canPublish ? <Button type="primary" loading={acting} disabled={writing} onClick={() => action(() => api.approveEntry(modelId, entryId, revisionId), '已审核通过并发布')}>通过并发布</Button> : null}
+    {workflowStatus === 'published' && canUnpublish && entry.data.current_published_revision_id ? <Button danger loading={acting} disabled={writing} onClick={() => action(() => api.unpublishEntry(modelId, entryId, entry.data!.current_published_revision_id!), '内容已下线')}>下线</Button> : null}
   </Space> : null
 
   return <>
-    <PageHeader eyebrow="版本工作流" title={entryId ? '内容与审核' : '新建草稿'} description="每个动作锁定明确 Revision，工作流事件不可变并保留驳回理由。" extra={<Space wrap><Button onClick={() => navigate(`/content/${modelId}`)}>返回列表</Button>{actionButtons}<Button type="primary" disabled={!canWrite || !canEditStructure || !editable || !formValid || entry.data?.status === 'archived'} onClick={save}>保存草稿</Button></Space>} />
+    <PageHeader eyebrow="版本工作流" title={entryId ? '内容与审核' : '新建草稿'} description="每个动作锁定明确 Revision，工作流事件不可变并保留驳回理由。" extra={<Space wrap><Button disabled={writing} onClick={() => navigate(`/content/${modelId}`)}>返回列表</Button>{actionButtons}<Button type="primary" loading={saving} disabled={writing || !canWrite || !canEditStructure || !editable || !formValid || entry.data?.status === 'archived'} onClick={save}>保存草稿</Button></Space>} />
     <PendingApiNotice />
     {workflowStatus ? <div className="workflow-state"><Tag>{labels[workflowStatus]}</Tag><Typography.Text type="secondary">工作头 <code>{revisionId}</code></Typography.Text></div> : null}
     {hasUnsavedChanges ? <Alert className="editor-notice" type="warning" showIcon title="有未保存的修改" description="请先保存为新 Revision，才能提交审核；当前已保存的旧 Revision 不会被送审。" /> : null}
@@ -100,7 +126,7 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
     {entry.data?.status === 'archived' ? <Alert type="warning" showIcon title="归档内容不可编辑" /> : null}
     <div className="entry-workspace">
       <DataState loading={entry.loading || (canViewModel && model.loading)} error={entry.error ?? (canViewModel ? model.error : undefined)} retry={() => { model.reload(); entry.reload() }}>
-        {canEditStructure ? <DynamicContentForm fields={model.data!.fields} content={content} onChange={setDraft} disabled={!canWrite || !editable || entry.data?.status === 'archived'} canSelectAssets={hasSystemPermission(principal, 'assets.view')} canUploadAssets={hasSystemPermission(principal, 'assets.view') && hasSystemPermission(principal, 'assets.upload')} referencedAssets={entry.data?.referenced_assets} canViewModel={(targetModelId) => hasModelPermission(principal, targetModelId, 'content.view')} onFieldValidityChange={(path, valid) => setFieldValidity((current) => current[path] === valid ? current : { ...current, [path]: valid })} /> : entry.data ? <pre aria-label="只读内容数据">{JSON.stringify(entry.data.current_draft_revision.content, null, 2)}</pre> : null}
+        {canEditStructure ? <DynamicContentForm fields={model.data!.fields} content={content} onChange={setDraft} disabled={writing || !canWrite || !editable || entry.data?.status === 'archived'} canSelectAssets={hasSystemPermission(principal, 'assets.view')} canUploadAssets={hasSystemPermission(principal, 'assets.view') && hasSystemPermission(principal, 'assets.upload')} referencedAssets={entry.data?.referenced_assets} canViewModel={(targetModelId) => hasModelPermission(principal, targetModelId, 'content.view')} onFieldValidityChange={(path, valid) => setFieldValidity((current) => current[path] === valid ? current : { ...current, [path]: valid })} /> : entry.data ? <pre aria-label="只读内容数据">{JSON.stringify(entry.data.current_draft_revision.content, null, 2)}</pre> : null}
       </DataState>
       {entryId ? <aside className="workflow-history" aria-label="版本工作流事件">
         <Typography.Title level={3}>版本事件</Typography.Title>
@@ -108,6 +134,7 @@ export default function EntryEditorPage({ principal }: { principal: Principal })
         <Space className="pagination-actions"><Button disabled={eventCursors.length === 1} onClick={() => setEventCursors((values) => values.slice(0, -1))}>上一页事件</Button><Button disabled={!events.data?.next_cursor} onClick={() => events.data?.next_cursor && setEventCursors((values) => [...values, events.data!.next_cursor!])}>下一页事件</Button></Space>
       </aside> : null}
     </div>
-    <Modal title="驳回版本" open={reasonOpen} onCancel={() => setReasonOpen(false)} okText="确认驳回" okButtonProps={{ danger: true, disabled: !reason.trim(), loading: acting }} onOk={async () => { if (await action(() => api.rejectEntry(modelId, entryId!, revisionId, reason.trim()), '已驳回')) { setReasonOpen(false); setReason('') } }}><Input.TextArea aria-label="驳回理由" value={reason} maxLength={1000} rows={4} onChange={(event) => setReason(event.target.value)} placeholder="必填，说明需要修改的内容" /></Modal>
+    <Modal title="驳回版本" open={reasonOpen} onCancel={() => setReasonOpen(false)} okText="确认驳回" okButtonProps={{ danger: true, disabled: !reason.trim() || writing, loading: acting }} onOk={async () => { if (await action(() => api.rejectEntry(modelId, entryId!, revisionId, reason.trim()), '已驳回')) { setReasonOpen(false); setReason('') } }}><Input.TextArea aria-label="驳回理由" value={reason} maxLength={1000} rows={4} onChange={(event) => setReason(event.target.value)} placeholder="必填，说明需要修改的内容" /></Modal>
+    <Modal title="放弃未保存的修改？" open={blocker.state === 'blocked'} okText="放弃并离开" cancelText="继续编辑" okButtonProps={{ danger: true }} onOk={() => blocker.proceed?.()} onCancel={() => blocker.reset?.()}>当前修改尚未保存，离开后无法恢复。</Modal>
   </>
 }

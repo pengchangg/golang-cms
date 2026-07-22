@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -41,6 +42,7 @@ type Config struct {
 	S3DownloadTTL        time.Duration
 	AssetMimeTypes       []string
 	AssetMaxSize         int64
+	TrustedProxyCIDRs    []netip.Prefix
 }
 
 func Load(command string) (Config, error) {
@@ -94,6 +96,9 @@ func Load(command string) (Config, error) {
 	if cfg.MySQLDSN == "" {
 		return Config{}, errors.New("缺少必需环境变量 MYSQL_DSN")
 	}
+	if cfg.Environment == "production" && cfg.AllowInsecureMySQL {
+		return Config{}, errors.New("production 禁止 MYSQL_ALLOW_INSECURE=true")
+	}
 	if command == "serve" {
 		if cfg.ListenAddr == "" {
 			return Config{}, fmt.Errorf("APP_LISTEN_ADDR 不能为空")
@@ -104,6 +109,11 @@ func Load(command string) (Config, error) {
 		if err := validateSecurityConfig(cfg); err != nil {
 			return Config{}, err
 		}
+		trustedProxies, err := parseCIDRs("APP_TRUSTED_PROXY_CIDRS", os.Getenv("APP_TRUSTED_PROXY_CIDRS"))
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TrustedProxyCIDRs = trustedProxies
 		if cfg.AssetsEnabled {
 			if err := loadAssetsConfig(&cfg); err != nil {
 				return Config{}, err
@@ -111,6 +121,27 @@ func Load(command string) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func parseCIDRs(name, value string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]netip.Prefix, 0, len(parts))
+	seen := map[netip.Prefix]bool{}
+	for _, part := range parts {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(part))
+		if err != nil || prefix != prefix.Masked() || prefix.Addr().Is4In6() {
+			return nil, fmt.Errorf("%s 必须是逗号分隔的规范 CIDR", name)
+		}
+		prefix = prefix.Masked()
+		if !seen[prefix] {
+			seen[prefix] = true
+			result = append(result, prefix)
+		}
+	}
+	return result, nil
 }
 
 func loadAssetsConfig(cfg *Config) error {
@@ -158,8 +189,8 @@ func loadAssetsConfig(cfg *Config) error {
 		}
 		cfg.AssetMimeTypes = append(cfg.AssetMimeTypes, value)
 	}
-	if cfg.AssetMaxSize, err = strconv.ParseInt(os.Getenv("ASSET_MAX_SIZE_BYTES"), 10, 64); err != nil || cfg.AssetMaxSize < 1 || cfg.AssetMaxSize > 5*1024*1024*1024 {
-		return errors.New("ASSET_MAX_SIZE_BYTES 必须在 1 至 5368709120 之间")
+	if cfg.AssetMaxSize, err = strconv.ParseInt(os.Getenv("ASSET_MAX_SIZE_BYTES"), 10, 64); err != nil || cfg.AssetMaxSize < 1 || cfg.AssetMaxSize > 100*1024*1024 {
+		return errors.New("ASSET_MAX_SIZE_BYTES 必须在 1 至 104857600 之间")
 	}
 	return nil
 }
@@ -225,6 +256,12 @@ func validateSecurityConfig(cfg Config) error {
 	}
 	if base.Scheme == "http" && !isLoopbackHost(base.Hostname()) {
 		return errors.New("APP_BASE_URL 仅回环地址允许使用 HTTP")
+	}
+	if cfg.SMSProvider == "fixed" {
+		listenHost, _, _ := net.SplitHostPort(cfg.ListenAddr)
+		if !isLoopbackHost(base.Hostname()) || !isLoopbackHost(listenHost) {
+			return errors.New("SMS_PROVIDER=fixed 仅允许回环 APP_BASE_URL 和 APP_LISTEN_ADDR")
+		}
 	}
 	if base.RawQuery != "" || base.Fragment != "" || (base.Path != "" && base.Path != "/") {
 		return errors.New("APP_BASE_URL 只能包含 origin")

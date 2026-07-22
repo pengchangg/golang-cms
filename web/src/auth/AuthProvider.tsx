@@ -11,15 +11,16 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     let active = true
+    const epoch = authStore.getEpoch()
 
     api.getSession().then(
       (session) => {
-        if (active) authStore.setSession(session)
+        if (active) authStore.setSession(session, epoch)
       },
       (error: unknown) => {
         if (!active) return
         if (error instanceof ApiError && error.status === 401 && error.code === 'session_invalid') return
-        authStore.setError(error)
+        authStore.setError(error, epoch)
       },
     )
 

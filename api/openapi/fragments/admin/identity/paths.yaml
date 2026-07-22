@@ -150,7 +150,7 @@
       "403": *forbidden
       "404": *notFound
       "409":
-        description: 操作会移除最后一个有效应急管理员。
+        description: 操作会移除最后一个有效应急管理员，错误码为 last_emergency_admin_required。
         content:
           application/json:
             schema:
@@ -160,7 +160,7 @@
     - *userId
   patch:
     operationId: updateAdminUserPhone
-    summary: 修改手机号管理用户的手机号
+    summary: 高危或应急管理员修改非应急用户手机号
     parameters:
       - *sessionCookie
       - *origin

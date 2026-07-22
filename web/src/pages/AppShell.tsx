@@ -9,7 +9,7 @@ import { visibleNavigation } from '../auth/permissions'
 import { authStore, useAuthState } from '../auth/store'
 import { PermissionRoute } from '../components/PermissionRoute'
 import { ASSETS_ENABLED } from '../config'
-import { navigation } from './navigation'
+import { apiKeyPagePermissions, navigation, rolePagePermissions } from './navigation'
 
 const WorkspacePage = lazy(() => import('./WorkspacePage'))
 const AccountPage = lazy(() => import('./AccountPage'))
@@ -50,10 +50,11 @@ export default function AppShell() {
   const selected = [...items].reverse().find((item) => item.path === '/' ? location.pathname === '/' : location.pathname.startsWith(item.path)) ?? items[0]
 
   async function logout() {
+    const epoch = authStore.beginTransition()
     setLoggingOut(true)
     try {
       await api.logout()
-      authStore.clear()
+      authStore.clear(epoch)
     } catch (error) {
       message.error(apiErrorMessage(error, '退出登录失败'))
     } finally {
@@ -104,13 +105,13 @@ export default function AppShell() {
               <Route index element={<WorkspacePage principal={principal} />} />
               <Route path="account" element={<AccountPage session={session} logout={logout} loggingOut={loggingOut} />} />
               <Route path="users" element={systemRoute('users.view', <UsersPage principal={principal} />)} />
-              <Route path="roles" element={systemRoute('roles.view', <RolesPage principal={principal} />)} />
+              <Route path="roles" element={systemRoute(rolePagePermissions, <RolesPage principal={principal} />)} />
               <Route path="models" element={systemRoute('models.view', <ModelsPage principal={principal} />)} />
               <Route path="models/:modelId" element={systemRoute('models.view', <ModelDesignerPage principal={principal} />)} />
               <Route path="content/:modelId" element={contentRoute('content.view', <EntriesPage principal={principal} />)} />
               <Route path="content/:modelId/new" element={contentRoute('content.create', <EntryEditorPage principal={principal} />)} />
               <Route path="content/:modelId/:entryId" element={contentRoute('content.view', <EntryEditorPage principal={principal} />)} />
-              <Route path="api-keys" element={systemRoute('api_keys.view', <APIKeysPage principal={principal} />)} />
+              <Route path="api-keys" element={systemRoute(apiKeyPagePermissions, <APIKeysPage principal={principal} />)} />
               <Route path="assets" element={ASSETS_ENABLED ? systemRoute('assets.view', <AssetsPage principal={principal} />) : <Navigate to="/" replace />} />
               <Route path="audit" element={systemRoute('audit.view', <AuditPage principal={principal} />)} />
               <Route path="*" element={<Navigate to="/" replace />} />

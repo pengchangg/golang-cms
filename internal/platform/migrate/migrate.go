@@ -65,9 +65,10 @@ func Load(source fs.FS) ([]Migration, error) {
 		})
 	}
 	slices.SortFunc(migrations, func(a, b Migration) int { return int(a.Version) - int(b.Version) })
-	for index := 1; index < len(migrations); index++ {
-		if migrations[index-1].Version == migrations[index].Version {
-			return nil, fmt.Errorf("迁移版本重复: %06d", migrations[index].Version)
+	for index, migration := range migrations {
+		expected := uint64(index + 1)
+		if migration.Version != expected {
+			return nil, fmt.Errorf("迁移版本不连续: 期望 %06d，得到 %06d", expected, migration.Version)
 		}
 	}
 	return migrations, nil

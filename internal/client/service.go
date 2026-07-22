@@ -29,6 +29,7 @@ type TransactionRunner interface {
 
 type Authorizer interface {
 	RequireSystemPermission(context.Context, identity.Principal, string) error
+	CurrentPrincipal(context.Context, database.Querier, identity.Principal) (identity.Principal, error)
 }
 
 type Dependencies struct {
@@ -99,7 +100,14 @@ func (s *Service) Create(ctx context.Context, principal identity.Principal, meta
 		return APIKeySecret{}, err
 	}
 	err = s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		if err := s.authorizer.RequireSystemPermission(ctx, principal, "api_keys.create"); err != nil {
+		current, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		if err := s.authorizer.RequireSystemPermission(ctx, current, "api_keys.create"); err != nil {
+			return err
+		}
+		if err := requireReadableModels(current, ids); err != nil {
 			return err
 		}
 		if err := s.repository.ValidateActiveModels(ctx, q, ids); err != nil {
@@ -115,7 +123,11 @@ func (s *Service) Create(ctx context.Context, principal identity.Principal, meta
 
 func (s *Service) Revoke(ctx context.Context, principal identity.Principal, meta RequestMeta, id string) error {
 	return s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		if err := s.authorizer.RequireSystemPermission(ctx, principal, "api_keys.revoke"); err != nil {
+		current, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		if err := s.authorizer.RequireSystemPermission(ctx, current, "api_keys.revoke"); err != nil {
 			return err
 		}
 		key, err := s.repository.Get(ctx, q, id, true, s.now())
@@ -138,7 +150,11 @@ func (s *Service) Revoke(ctx context.Context, principal identity.Principal, meta
 func (s *Service) Rotate(ctx context.Context, principal identity.Principal, meta RequestMeta, id string, request RotateAPIKeyRequest) (APIKeySecret, error) {
 	var result APIKeySecret
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
-		if err := s.authorizer.RequireSystemPermission(ctx, principal, "api_keys.create"); err != nil {
+		current, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
+		if err != nil {
+			return err
+		}
+		if err := s.authorizer.RequireSystemPermission(ctx, current, "api_keys.create"); err != nil {
 			return err
 		}
 		old, err := s.repository.Get(ctx, q, id, true, s.now())
@@ -165,6 +181,9 @@ func (s *Service) Rotate(ctx context.Context, principal identity.Principal, meta
 		if err != nil {
 			return err
 		}
+		if err = requireReadableModels(current, ids); err != nil {
+			return err
+		}
 		if err = s.repository.ValidateActiveModels(ctx, q, ids); err != nil {
 			return err
 		}
@@ -183,33 +202,76 @@ func (s *Service) Rotate(ctx context.Context, principal identity.Principal, meta
 	return result, err
 }
 
+func requireReadableModels(principal identity.Principal, modelIDs []string) error {
+	requested := identity.PermissionSet{Models: make([]identity.ModelPermissions, 0, len(modelIDs))}
+	for _, modelID := range modelIDs {
+		requested.Models = append(requested.Models, identity.ModelPermissions{ModelID: modelID, Permissions: []string{"content.view"}})
+	}
+	if !principal.CanDelegate(requested) {
+		return appError(apperror.KindPermissionDenied, "permission_denied", "不能为无内容查看权限的模型签发 API Key")
+	}
+	return nil
+}
+
 func (s *Service) Authenticate(ctx context.Context, raw string) (AuthenticatedKey, error) {
-	prefix, secret, err := parseRawKey(raw)
-	if err != nil {
-		return AuthenticatedKey{}, invalidAPIKey()
-	}
-	key, err := s.repository.FindByPrefix(ctx, s.db, prefix, s.now())
-	if errors.Is(err, sql.ErrNoRows) {
-		return AuthenticatedKey{}, invalidAPIKey()
-	}
+	key, err := s.authenticate(ctx, s.db, raw, false)
 	if err != nil {
 		return AuthenticatedKey{}, err
 	}
+	// 节流条件由数据库原子判断；写入失败不能改变本次鉴权结果。
+	authenticated := authenticatedKey(key, s.now())
+	if authenticated.ShouldTouchLastUse {
+		s.TouchLastUsed(ctx, authenticated)
+	}
+	return authenticated, nil
+}
+
+// AuthenticateForDownload 在调用方事务中锁定 API Key，确保撤销与下载授权串行化。
+func (s *Service) AuthenticateForDownload(ctx context.Context, q database.Querier, raw string) (AuthenticatedKey, error) {
+	key, err := s.authenticate(ctx, q, raw, true)
+	if err != nil {
+		return AuthenticatedKey{}, err
+	}
+	return authenticatedKey(key, s.now()), nil
+}
+
+// TouchLastUsed 在授权事务提交后尽力记录使用时间，不影响本次鉴权结果。
+func (s *Service) TouchLastUsed(ctx context.Context, key AuthenticatedKey) {
+	if key.ShouldTouchLastUse {
+		_ = s.repository.TouchLastUsed(ctx, s.db, key.ID, s.now())
+	}
+}
+
+func (s *Service) authenticate(ctx context.Context, q database.Querier, raw string, lock bool) (APIKey, error) {
+	prefix, secret, err := parseRawKey(raw)
+	if err != nil {
+		return APIKey{}, invalidAPIKey()
+	}
+	key, err := s.repository.FindByPrefix(ctx, q, prefix, lock, s.now())
+	if errors.Is(err, sql.ErrNoRows) {
+		return APIKey{}, invalidAPIKey()
+	}
+	if err != nil {
+		return APIKey{}, err
+	}
 	if key.RevokedAt != nil {
-		return AuthenticatedKey{}, appError(apperror.KindUnauthenticated, "api_key_revoked", "API Key 已撤销")
+		return APIKey{}, appError(apperror.KindUnauthenticated, "api_key_revoked", "API Key 已撤销")
 	}
 	if key.ExpiresAt != nil && !s.now().Before(*key.ExpiresAt) {
-		return AuthenticatedKey{}, appError(apperror.KindUnauthenticated, "api_key_expired", "API Key 已过期")
+		return APIKey{}, appError(apperror.KindUnauthenticated, "api_key_expired", "API Key 已过期")
 	}
 	digest := sha256.Sum256(append(append([]byte(nil), key.Salt...), secret...))
 	if len(key.Hash) != sha256.Size || subtle.ConstantTimeCompare(digest[:], key.Hash) != 1 {
-		return AuthenticatedKey{}, invalidAPIKey()
+		return APIKey{}, invalidAPIKey()
 	}
-	// 节流条件由数据库原子判断；写入失败不能改变本次鉴权结果。
-	if key.LastUsedAt == nil || !key.LastUsedAt.After(s.now().Add(-5*time.Minute)) {
-		_ = s.repository.TouchLastUsed(ctx, s.db, key.ID, s.now())
+	return key, nil
+}
+
+func authenticatedKey(key APIKey, now time.Time) AuthenticatedKey {
+	return AuthenticatedKey{
+		ID: key.ID, Prefix: key.Prefix, ModelIDs: append([]string(nil), key.ModelIDs...),
+		ShouldTouchLastUse: key.LastUsedAt == nil || !key.LastUsedAt.After(now.Add(-5*time.Minute)),
 	}
-	return AuthenticatedKey{ID: key.ID, Prefix: key.Prefix, ModelIDs: append([]string(nil), key.ModelIDs...)}, nil
 }
 
 func (s *Service) generate(name string, ids []string, expires *time.Time, createdBy string, rotatedFrom *string) (APIKeySecret, error) {

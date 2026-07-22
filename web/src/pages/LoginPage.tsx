@@ -1,5 +1,5 @@
 import { Alert, Button, Collapse, Form, Input, Typography } from 'antd'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 
 import { api, safeReturnTo } from '../api/client'
@@ -39,22 +39,24 @@ export function LoginPage() {
   const [sending, setSending] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [localSubmitting, setLocalSubmitting] = useState(false)
+  const authRequest = useRef(false)
   const returnTo = safeReturnTo(
     typeof location.state === 'object' && location.state && 'returnTo' in location.state
       ? location.state.returnTo
       : undefined,
   ) ?? '/'
 
-  async function loadCaptcha() {
+  async function loadCaptcha(expectedEpoch?: number) {
     setCaptchaLoading(true)
     setCaptcha(undefined)
     setSliderX(0)
     try {
-      setCaptcha(await api.createCaptchaChallenge())
+      const challenge = await api.createCaptchaChallenge()
+      if (expectedEpoch === undefined || authStore.getEpoch() === expectedEpoch) setCaptcha(challenge)
     } catch (error) {
-      setSMSError(error)
+      if (expectedEpoch === undefined || authStore.getEpoch() === expectedEpoch) setSMSError(error)
     } finally {
-      setCaptchaLoading(false)
+      if (expectedEpoch === undefined || authStore.getEpoch() === expectedEpoch) setCaptchaLoading(false)
     }
   }
 
@@ -113,35 +115,42 @@ export function LoginPage() {
   }
 
   async function verifyCode(values: SMSLoginValues) {
-    if (!smsChallenge) return
+    if (!smsChallenge || authRequest.current) return
+    authRequest.current = true
+    const epoch = authStore.beginTransition()
     setVerifying(true)
     setSMSError(undefined)
     try {
       const session = await api.verifySMSChallenge(smsChallenge.challenge_id, values.code)
-      authStore.setSession(session)
-      navigate(returnTo, { replace: true })
+      if (authStore.setSession(session, epoch)) navigate(returnTo, { replace: true })
     } catch (error) {
-      setSMSError(error)
-      setSMSChallenge(undefined)
-      setRetryAfter(0)
-      smsForm.setFieldValue('code', '')
-      await loadCaptcha()
+      if (authStore.getEpoch() === epoch) {
+        setSMSError(error)
+        setSMSChallenge(undefined)
+        setRetryAfter(0)
+        smsForm.setFieldValue('code', '')
+        await loadCaptcha(epoch)
+      }
     } finally {
       setVerifying(false)
+      authRequest.current = false
     }
   }
 
   async function localLogin(values: LocalLoginValues) {
+    if (authRequest.current) return
+    authRequest.current = true
+    const epoch = authStore.beginTransition()
     setLocalSubmitting(true)
     setLocalError(undefined)
     try {
       const session = await api.localLogin(values.username, values.password)
-      authStore.setSession(session)
-      navigate(returnTo, { replace: true })
+      if (authStore.setSession(session, epoch)) navigate(returnTo, { replace: true })
     } catch (error) {
-      setLocalError(error)
+      if (authStore.getEpoch() === epoch) setLocalError(error)
     } finally {
       setLocalSubmitting(false)
+      authRequest.current = false
     }
   }
 
@@ -228,7 +237,7 @@ export function LoginPage() {
               ]}>
                 <Input inputMode="numeric" autoComplete="one-time-code" maxLength={6} />
               </Form.Item>
-              <Button type="primary" htmlType="submit" block loading={verifying}>登录</Button>
+              <Button type="primary" htmlType="submit" block loading={verifying} disabled={localSubmitting}>登录</Button>
               <Button type="link" block disabled={retryAfter > 0 || captchaLoading} onClick={() => void resendCode()}>
                 {retryAfter > 0 ? `${retryAfter} 秒后可重新发送` : '重新发送验证码'}
               </Button>
@@ -252,7 +261,7 @@ export function LoginPage() {
                   <Input.Password autoComplete="current-password" maxLength={1024} />
                 </Form.Item>
                 {localError ? <RequestError error={localError} /> : null}
-                <Button htmlType="submit" block loading={localSubmitting}>本地应急登录</Button>
+                <Button htmlType="submit" block loading={localSubmitting} disabled={verifying}>本地应急登录</Button>
               </Form>
             ),
           }]}

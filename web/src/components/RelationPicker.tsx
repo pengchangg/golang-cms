@@ -10,7 +10,7 @@ function entryLabel(entry: ContentEntrySummary, fields: EntryListField[]) {
   return typeof title === 'string' && title.trim() ? `${title.trim()}（${entry.id}）` : entry.id
 }
 
-export function RelationPicker({ multiple, value, onChange, disabled, targetModelId, canViewTarget }: { multiple: boolean; value: string | string[] | null; onChange: (value: string | string[] | null) => void; disabled: boolean; targetModelId?: string; canViewTarget: boolean }) {
+export function RelationPicker({ multiple, value, onChange, disabled, targetModelId, canViewTarget, labelledBy, describedBy }: { multiple: boolean; value: string | string[] | null; onChange: (value: string | string[] | null) => void; disabled: boolean; targetModelId?: string; canViewTarget: boolean; labelledBy?: string; describedBy?: string }) {
   const selected = multiple ? (Array.isArray(value) ? value : []) : (typeof value === 'string' ? value : undefined)
   const [items, setItems] = useState<ContentEntrySummary[]>([])
   const [fields, setFields] = useState<EntryListField[]>([])
@@ -62,7 +62,9 @@ export function RelationPicker({ multiple, value, onChange, disabled, targetMode
     {!targetModelId ? <Alert type="warning" showIcon title="关联字段未配置目标模型" /> : !canViewTarget ? <Alert type="info" showIcon title="无目标模型内容查看权限" description="现有条目 ID 会保留，但不能浏览或修改候选内容。" /> : null}
     <Select
       mode={multiple ? 'multiple' : undefined}
-      aria-label={multiple ? '选择多个关联内容' : '选择关联内容'}
+      aria-label={labelledBy ? undefined : multiple ? '选择多个关联内容' : '选择关联内容'}
+      aria-labelledby={labelledBy}
+      aria-describedby={describedBy}
       allowClear
       showSearch
       optionFilterProp="label"

@@ -10,13 +10,14 @@ const extensions = [
   StarterKit.configure({ horizontalRule: false, link: false }),
 ]
 
-export function RichTextEditor({ value, onChange, disabled, label }: { value: unknown; onChange: (value: unknown) => void; disabled: boolean; label: string }) {
+export function RichTextEditor({ value, onChange, disabled, label, labelledBy, describedBy }: { value: unknown; onChange: (value: unknown) => void; disabled: boolean; label: string; labelledBy?: string; describedBy?: string }) {
   const externalRef = useRef(JSON.stringify(normalizeRichText(value)))
   const emitChange = useEffectEvent((next: unknown) => onChange(next))
   const editor = useEditor({
     extensions,
     content: richTextToEditor(value),
     editable: !disabled,
+    editorProps: { attributes: { role: 'textbox', 'aria-multiline': 'true', ...(labelledBy ? { 'aria-labelledby': labelledBy, ...(describedBy ? { 'aria-describedby': describedBy } : {}) } : { 'aria-label': `${label} 富文本编辑器` }) } },
   })
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export function RichTextEditor({ value, onChange, disabled, label }: { value: un
 
   if (!editor) return null
   const run = (command: () => boolean) => { command(); editor.commands.focus() }
-  return <div className={`rich-text-editor${disabled ? ' is-disabled' : ''}`} aria-label={`${label} 富文本编辑器`}>
+  return <div className={`rich-text-editor${disabled ? ' is-disabled' : ''}`}>
     <div className="rich-text-toolbar" role="toolbar" aria-label={`${label} 格式工具栏`}>
       <Select aria-label="段落格式" size="small" disabled={disabled} value={state.heading ? `h${state.heading}` : 'paragraph'} onChange={(format) => run(() => format === 'paragraph' ? editor.chain().focus().setParagraph().run() : editor.chain().focus().toggleHeading({ level: Number(format.slice(1)) as 1 | 2 | 3 | 4 | 5 | 6 }).run())} options={[{ value: 'paragraph', label: '正文' }, ...Array.from({ length: 6 }, (_, index) => ({ value: `h${index + 1}`, label: `标题 ${index + 1}` }))]} />
       <Space.Compact>

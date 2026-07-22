@@ -43,9 +43,6 @@ type Repository interface {
 	DeleteUniqueValues(context.Context, database.Querier, string, string) error
 	ListRevisions(context.Context, database.Querier, string, string, int, *uint) ([]Revision, error)
 	GetRevision(context.Context, database.Querier, string, string, string) (Revision, error)
-}
-
-type F2Repository interface {
 	CreateFieldValues(context.Context, database.Querier, []FieldValue) error
 	CreateRelations(context.Context, database.Querier, []Relation) error
 	ValidateRelationTargets(context.Context, database.Querier, []Relation) error
@@ -68,11 +65,15 @@ type SQLRepository struct{}
 func NewRepository() SQLRepository { return SQLRepository{} }
 
 func (SQLRepository) HasAnyContent(ctx context.Context, q database.Querier, modelID string) (bool, error) {
-	var exists bool
-	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM content_entries WHERE model_id = ?)`, modelID).Scan(&exists); err != nil {
+	var found int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM content_entries WHERE model_id = ? LIMIT 1 FOR SHARE`, modelID).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
 		return false, fmt.Errorf("查询模型内容存在性: %w", err)
 	}
-	return exists, nil
+	return true, nil
 }
 
 func (SQLRepository) ListEntries(ctx context.Context, q database.Querier, modelID string, input AdminEntryQuery, fields map[string]schema.ContentField, limit int, cursor *EntryCursor) ([]EntrySummary, [][]*string, error) {

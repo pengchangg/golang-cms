@@ -17,8 +17,8 @@ func (c *fakeClock) Now() time.Time { return c.now }
 
 type fakePermissions struct{}
 
-func (fakePermissions) Permissions(context.Context, string) ([]string, []identity.ModelPermissions, error) {
-	return []string{"models.view", "models.view"}, []identity.ModelPermissions{{ModelID: "a", Permissions: []string{"content.view"}}}, nil
+func (fakePermissions) Permissions(context.Context, string) (identity.PermissionSet, error) {
+	return identity.PermissionSet{System: []string{"models.view", "models.view"}, Models: []identity.ModelPermissions{{ModelID: "a", Permissions: []string{"content.view"}}}}, nil
 }
 
 type fakeModels struct{}
@@ -83,18 +83,18 @@ func (m *memoryStore) SaveSMSChallenge(_ context.Context, value SMSChallenge) er
 	return nil
 }
 
-func (m *memoryStore) ConsumeSMSChallenge(_ context.Context, hash, binding, otp []byte, now time.Time) (string, error) {
+func (m *memoryStore) ConsumeSMSChallenge(_ context.Context, hash, binding, otp []byte, now time.Time) (string, *string, error) {
 	value, ok := m.sms[key(hash)]
 	if !ok || !bytes.Equal(value.BindingHash, binding) || !now.Before(value.ExpiresAt) || value.AttemptsRemaining <= 0 {
-		return "", ErrNotFound
+		return "", nil, ErrNotFound
 	}
 	if !bytes.Equal(value.OTPHash, otp) {
 		value.AttemptsRemaining--
 		m.sms[key(hash)] = value
-		return "", ErrInvalidChallenge
+		return "", nil, ErrInvalidChallenge
 	}
 	delete(m.sms, key(hash))
-	return value.PhoneE164, nil
+	return value.PhoneE164, value.UserID, nil
 }
 
 func (m *memoryStore) AllowRateLimit(_ context.Context, scope string, hash []byte, _ time.Time, _ time.Duration, limit int) (bool, error) {
@@ -121,15 +121,43 @@ func (m *memoryStore) FindPhoneUser(_ context.Context, phone string) (User, erro
 func (m *memoryStore) CreateSession(_ context.Context, value NewSession, _ audit.Event) error {
 	user := m.local
 	if value.AuthMethod == identity.AuthMethodSMS {
+		candidate, ok := m.phones[value.PhoneE164]
+		if !ok || candidate.ID != value.UserID || !candidate.Enabled {
+			return ErrInvalidChallenge
+		}
 		for _, candidate := range m.phones {
 			if candidate.ID == value.UserID {
 				user = candidate
 			}
 		}
+	} else if value.AuthMethod == identity.AuthMethodLocal && (!m.local.Enabled || m.local.PasswordHash != value.PasswordHash) {
+		return ErrInvalidChallenge
 	}
 	m.sessions[key(value.Hash)] = Session{UserID: value.UserID, DisplayName: user.DisplayName, Email: user.Email, Enabled: user.Enabled, AuthMethod: value.AuthMethod, IdleExpiresAt: value.IdleExpiresAt, ExpiresAt: value.ExpiresAt}
 	return nil
 }
+
+func TestSMSLoginRejectsChallengeAfterPhoneChanges(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC)}
+	store := newMemoryStore()
+	service := testService(t, store, clock)
+	challengeID, binding := "challenge", "binding"
+	challengeHash := service.digest("sms_challenge", challengeID)
+	store.sms[key(challengeHash)] = SMSChallenge{
+		Hash: challengeHash, BindingHash: service.digest("captcha_binding", binding), PhoneE164: "+8613800138000",
+		UserID: stringPointer("usr_sms"), OTPHash: service.digest("sms_otp", challengeID+"\x00"+"123456"), AttemptsRemaining: 1, ExpiresAt: clock.now.Add(time.Minute),
+	}
+	store.phones["+8613800138000"] = User{ID: "usr_other", DisplayName: "另一用户", Enabled: true}
+
+	if _, err := service.VerifySMSChallenge(context.Background(), challengeID, "123456", binding, RequestMeta{IP: "127.0.0.1"}); err == nil {
+		t.Fatal("号码转绑后旧挑战登录了另一用户")
+	}
+	if len(store.sessions) != 0 {
+		t.Fatalf("旧挑战创建了会话: %v", store.sessions)
+	}
+}
+
+func stringPointer(value string) *string { return &value }
 
 func (m *memoryStore) Session(_ context.Context, hash []byte) (Session, error) {
 	value, ok := m.sessions[key(hash)]
@@ -156,8 +184,8 @@ func (m *memoryStore) AppendFailure(_ context.Context, event audit.Event) error 
 	return m.failureErr
 }
 
-func (m *memoryStore) UpsertEmergencyAdmin(context.Context, string, string, string, string, time.Time, audit.Event) error {
-	return nil
+func (m *memoryStore) UpsertEmergencyAdmin(context.Context, string, string, string, string, bool, time.Time, audit.Event) (bool, error) {
+	return true, nil
 }
 
 func testService(t *testing.T, store *memoryStore, clock *fakeClock) *Service {
@@ -311,6 +339,34 @@ func TestLocalLoginRemainsAvailable(t *testing.T) {
 	}
 	if _, err := service.LocalLogin(context.Background(), "admin", "wrong", RequestMeta{IP: "127.0.0.2"}); err == nil {
 		t.Fatal("错误本地密码被接受")
+	}
+}
+
+func TestLocalSessionRejectsPasswordChangedAfterVerification(t *testing.T) {
+	clock := &fakeClock{now: time.Now().UTC()}
+	store := newMemoryStore()
+	oldHash, _ := HashPassword("old password", bytes.NewReader(bytes.Repeat([]byte{1}, 16)))
+	newHash, _ := HashPassword("new password", bytes.NewReader(bytes.Repeat([]byte{2}, 16)))
+	store.local = User{ID: "usr_local", DisplayName: "Admin", Enabled: true, PasswordHash: newHash}
+	service := testService(t, store, clock)
+
+	_, err := service.createSession(context.Background(), User{ID: "usr_local", DisplayName: "Admin", Enabled: true, PasswordHash: oldHash}, identity.AuthMethodLocal, "", "auth_local_login_succeeded", RequestMeta{IP: "127.0.0.1"})
+	if !errors.Is(err, ErrInvalidChallenge) || len(store.sessions) != 0 {
+		t.Fatalf("createSession() error = %v, sessions=%v", err, store.sessions)
+	}
+}
+
+func TestUnknownAuthMethodFailsClosed(t *testing.T) {
+	clock := &fakeClock{now: time.Now().UTC()}
+	store := newMemoryStore()
+	service := testService(t, store, clock)
+	store.sessions[key(service.digest("session", "unknown"))] = Session{UserID: "usr_legacy", DisplayName: "旧用户", Enabled: true, AuthMethod: identity.AuthMethod("oidc"), IdleExpiresAt: clock.now.Add(time.Minute), ExpiresAt: clock.now.Add(time.Hour)}
+
+	if _, err := service.CurrentSession(context.Background(), "unknown"); err == nil {
+		t.Fatal("未知认证方式的历史会话仍然有效")
+	}
+	if _, err := service.createSession(context.Background(), User{ID: "usr_legacy", Enabled: true}, identity.AuthMethod("oidc"), "", "auth_unknown", RequestMeta{}); !errors.Is(err, ErrInvalidChallenge) {
+		t.Fatalf("createSession() error = %v", err)
 	}
 }
 

@@ -51,6 +51,12 @@ func statusForKind(kind apperror.Kind) int {
 		return http.StatusConflict
 	case apperror.KindUnavailable:
 		return http.StatusServiceUnavailable
+	case apperror.KindPayloadTooLarge:
+		return http.StatusRequestEntityTooLarge
+	case apperror.KindTooManyRequests:
+		return http.StatusTooManyRequests
+	case apperror.KindMethodNotAllowed:
+		return http.StatusMethodNotAllowed
 	default:
 		return http.StatusInternalServerError
 	}

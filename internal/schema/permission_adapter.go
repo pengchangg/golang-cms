@@ -13,8 +13,12 @@ type PermissionModelAdapter struct {
 }
 
 func (a PermissionModelAdapter) ActiveModelIDs(ctx context.Context) ([]string, error) {
+	return a.ActiveModelIDsWith(ctx, a.DB)
+}
+
+func (a PermissionModelAdapter) ActiveModelIDsWith(ctx context.Context, q database.Querier) ([]string, error) {
 	status := StatusActive
-	models, err := a.Repository.ListModels(ctx, a.DB, &status)
+	models, err := a.Repository.ListModels(ctx, q, &status)
 	if err != nil {
 		return nil, err
 	}

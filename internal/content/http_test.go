@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,6 +125,84 @@ func TestUpdateRequestRequiresBaseRevisionID(t *testing.T) {
 	}
 	if len(repository.revisions[created.ID]) != 1 {
 		t.Fatal("缺少基线 Revision 的请求产生了新 Revision")
+	}
+}
+
+func TestHTTPJSONRequestBodyExactLimitAndOneByteOver(t *testing.T) {
+	valid := `{"content":{"title":"内容"}}`
+	exact := valid + strings.Repeat(" ", int(maxJSONRequestBytes)-len(valid))
+	crossingSecondValue := valid + strings.Repeat(" ", int(maxJSONRequestBytes)-len(valid)-1) + `{}`
+	for _, test := range []struct {
+		name string
+		body string
+		want int
+		code string
+	}{
+		{name: "exact limit", body: exact, want: http.StatusCreated},
+		{name: "one byte over", body: exact + "x", want: http.StatusRequestEntityTooLarge, code: "request_body_too_large"},
+		{name: "two values within limit", body: valid + ` {}`, want: http.StatusBadRequest, code: "validation_failed"},
+		{name: "second value crosses limit", body: crossingSecondValue, want: http.StatusRequestEntityTooLarge, code: "request_body_too_large"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, _, _, _ := testService()
+			handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) { return contentPrincipal(permissionCreate), nil })
+			request := httptest.NewRequest(http.MethodPost, "/api/admin/v1/models/mdl_1/entries", strings.NewReader(test.body))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, body=%s", response.Code, response.Body.String())
+			}
+			if test.code != "" && !bytes.Contains(response.Body.Bytes(), []byte(`"code":"`+test.code+`"`)) {
+				t.Fatalf("错误响应 = %s", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestHTTPWorkflowResponsesUseContentEntryContract(t *testing.T) {
+	service, _, _, _ := testService()
+	principal := contentPrincipal(permissionCreate, permissionSubmit, permissionReview, permissionPublish, permissionUnpublish)
+	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
+	created, err := service.CreateEntry(ctx, principal, testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"待审核"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := testHTTPHandler(service, func(*http.Request) (identity.Principal, error) { return principal, nil })
+	action := func(entryID, name, body string) Entry {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/api/admin/v1/models/mdl_1/entries/"+entryID+"/"+name, strings.NewReader(body))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s 响应 = %d, body=%s", name, response.Code, response.Body.String())
+		}
+		var result Entry
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		for _, property := range []string{`"current_draft_content"`, `"current_draft_revision"`, `"current_published_revision_id"`, `"current_published_revision"`, `"workflow_status"`, `"referenced_assets"`} {
+			if !bytes.Contains(response.Body.Bytes(), []byte(property)) {
+				t.Fatalf("%s 响应缺少 %s: %s", name, property, response.Body.String())
+			}
+		}
+		return result
+	}
+
+	submitted := action(created.ID, "submit", `{"revision_id":"`+created.CurrentDraftRevisionID+`"}`)
+	approved := action(created.ID, "approve", `{"revision_id":"`+submitted.CurrentDraftRevisionID+`"}`)
+	unpublished := action(created.ID, "unpublish", `{"revision_id":"`+*approved.CurrentPublishedRevisionID+`"}`)
+	if submitted.WorkflowStatus != WorkflowPendingReview || approved.WorkflowStatus != WorkflowPublished || unpublished.WorkflowStatus != WorkflowUnpublished {
+		t.Fatalf("工作流状态 = %s/%s/%s", submitted.WorkflowStatus, approved.WorkflowStatus, unpublished.WorkflowStatus)
+	}
+
+	rejectedEntry, err := service.CreateEntry(ctx, principal, testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"title":"待驳回"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	action(rejectedEntry.ID, "submit", `{"revision_id":"`+rejectedEntry.CurrentDraftRevisionID+`"}`)
+	rejected := action(rejectedEntry.ID, "reject", `{"revision_id":"`+rejectedEntry.CurrentDraftRevisionID+`","reason":"需要修改"}`)
+	if rejected.WorkflowStatus != WorkflowRejected {
+		t.Fatalf("驳回状态 = %s", rejected.WorkflowStatus)
 	}
 }
 

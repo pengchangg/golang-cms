@@ -1,0 +1,1 @@
+INSERT INTO roles (id, `key`, kind, display_name, description, created_at, updated_at) VALUES (CONCAT('rol_', LOWER(REPLACE(UUID(), '-', ''))), 'high_risk_admin', 'high_risk', '高危管理员', '内置动态全权限角色，仅用于受控的最高权限管理。', '1970-01-01 00:00:01.000000', '1970-01-01 00:00:01.000000');

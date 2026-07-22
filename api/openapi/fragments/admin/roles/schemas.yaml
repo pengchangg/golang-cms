@@ -4,14 +4,19 @@ $defs:
   RoleKey:
     type: string
     pattern: "^[a-z][a-z0-9_]{0,63}$"
+  RoleKind:
+    type: string
+    enum: [custom, high_risk]
   Role:
     type: object
     additionalProperties: false
-    required: [id, key, display_name, description, system_permissions, model_permissions, created_at, updated_at]
+    required: [id, key, kind, display_name, description, system_permissions, model_permissions, created_at, updated_at]
     properties:
       id: { type: string, minLength: 1 }
       key:
         $ref: "#/$defs/RoleKey"
+      kind:
+        $ref: "#/$defs/RoleKind"
       display_name: { type: string, minLength: 1, maxLength: 120 }
       description: { type: string, maxLength: 1000 }
       system_permissions:

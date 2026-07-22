@@ -6,16 +6,17 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"cms/internal/client"
 )
 
 func TestClientAssetScopeUsesStrictBearerRules(t *testing.T) {
-	provider := ClientAssetScope(nil)
 	for _, header := range []string{"", "bearer token", "Bearer", "Bearer one two", "Bearer one,Bearer two"} {
 		req := httptest.NewRequest(http.MethodGet, "/api/content/v1/assets/ast_1", nil)
 		if header != "" {
 			req.Header.Set("Authorization", header)
 		}
-		if _, err := provider(req); err == nil {
+		if _, err := client.ParseBearerToken(req); err == nil {
 			t.Fatalf("Authorization %q should fail", header)
 		}
 	}

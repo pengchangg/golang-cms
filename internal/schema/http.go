@@ -4,14 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
-	"strings"
 
 	"cms/internal/identity"
 	"cms/internal/platform/apperror"
 	"cms/internal/platform/httpx"
 )
+
+const maxJSONRequestBytes = int64(1 << 20)
+
+var errRequestBodyTooLarge = &apperror.Error{Kind: apperror.KindPayloadTooLarge, Code: "request_body_too_large", Message: "请求体超过 1 MiB 上限"}
 
 type PrincipalProvider func(*http.Request) (identity.Principal, error)
 
@@ -228,14 +230,25 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (identity
 	return principal, true
 }
 func decodeRequest(w http.ResponseWriter, r *http.Request, target any) bool {
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONRequestBytes)
+	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpx.WriteError(w, r, errRequestBodyTooLarge)
+			return false
+		}
 		writeValidation(w, r, "", "invalid_json", "请求体不是合法 JSON")
 		return false
 	}
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpx.WriteError(w, r, errRequestBodyTooLarge)
+			return false
+		}
 		writeValidation(w, r, "", "invalid_json", "请求体只能包含一个 JSON 值")
 		return false
 	}
@@ -251,18 +264,11 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 func requestMeta(r *http.Request) RequestMeta {
-	ip := strings.TrimSpace(r.RemoteAddr)
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		ip = host
-	}
-	if parsed := net.ParseIP(ip); parsed != nil {
-		ip = parsed.String()
-	}
 	userAgent := []rune(r.UserAgent())
 	if len(userAgent) > 512 {
 		userAgent = userAgent[:512]
 	}
-	return RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: ip, UserAgent: string(userAgent)}
+	return RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: httpx.ClientIPFromRequest(r), UserAgent: string(userAgent)}
 }
 
 type Module struct{ handler *Handler }

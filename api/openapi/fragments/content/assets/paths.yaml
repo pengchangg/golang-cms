@@ -41,8 +41,22 @@ x-integration-status: integrated
           application/json:
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "429":
+        description: API Key 或 Key/IP 组合超过频率或并发额度，error.code 为 content_rate_limited 或 content_concurrency_limited。
+        headers:
+          Retry-After:
+            required: true
+            schema: { type: integer, minimum: 1 }
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "503":
-        description: 对象存储临时不可用，error.code 为 object_store_unavailable。
+        description: 内容 API 全进程并发已达上限或对象存储临时不可用，error.code 为 content_api_busy 或 object_store_unavailable。
+        headers:
+          Retry-After:
+            description: 仅 content_api_busy 时提供。
+            schema: { type: integer, minimum: 1 }
         content:
           application/json:
             schema:

@@ -13,6 +13,7 @@ import { TransferActions } from './components/TransferActions'
 const session: SessionResponse = {
   principal: {
     user_id: 'usr_assets_disabled', display_name: '阶段二用户', email: null, auth_method: 'sms',
+    is_emergency_admin: false, has_high_risk_role: false,
     system_permissions: ['assets.view'],
     model_permissions: [{ model_id: 'mdl_1', permissions: ['content.view', 'content.create'] }],
   },

@@ -56,6 +56,8 @@ curl --fail-with-body \
 
 该接口只返回 API Key 授权范围内仍处于 active 状态的模型：
 
+管理端创建或轮换 API Key 时，模型范围不能超过操作者当前拥有 `content.view` 的模型集合；权限不足返回 `403 permission_denied`。模型权限被收回后，操作者不能通过轮换保留或扩大到该模型范围。
+
 ```json
 {
   "items": [
@@ -320,9 +322,12 @@ curl --silent --show-error \
 | 404 | `published_model_not_found` | 模型不存在、已归档或不在 Key 范围 |
 | 404 | `published_content_not_found` | 条目不存在、已归档或没有当前发布 Revision |
 | 404 | `published_asset_not_found` | 素材不存在或没有授权的当前发布引用 |
+| 429 | `content_rate_limited` | 当前 Key 或 Key/IP 组合请求过于频繁 |
+| 429 | `content_concurrency_limited` | 当前 Key 或 Key/IP 组合并发请求过多 |
+| 503 | `content_api_busy` | 当前应用实例的内容 API 并发已达上限 |
 | 503 | `object_store_unavailable` | 对象存储暂时不可用 |
 
-遇到错误时保留 `request_id` 供服务端排查，但不要记录完整 API Key。
+遇到 429 或 `content_api_busy` 时按 `Retry-After` 秒数退避；遇到其他错误时保留 `request_id` 供服务端排查，但不要记录完整 API Key。
 
 ## 10. 安全建议
 

@@ -117,10 +117,13 @@ x-integration-status: integrated
         schema: { type: string }
     responses:
       "200":
-        description: 当前草稿内容的 UTF-8 BOM CSV。
+        description: 当前草稿内容的 UTF-8 BOM CSV；最多 10,000 行、50 MiB，生成和传输总期限 120 秒。
         headers:
           Content-Disposition:
             schema: { type: string, minLength: 1 }
+          Content-Length:
+            required: true
+            schema: { type: integer, minimum: 1 }
         content:
           text/csv:
             schema: { type: string, contentEncoding: binary }
@@ -128,3 +131,21 @@ x-integration-status: integrated
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound
+      "413":
+        description: 行数或文件大小超过同步导出上限，error.code 为 export_row_limit_exceeded 或 export_size_limit_exceeded。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "429":
+        description: 全进程或当前用户导出并发数已达上限，error.code 为 export_concurrency_limit。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "503":
+        description: 导出生成超过 120 秒期限，error.code 为 export_timeout。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse

@@ -1,3 +1,9 @@
+x-body-too-large: &bodyTooLarge
+  description: JSON 请求体超过 1 MiB，error.code 为 request_body_too_large。
+  content:
+    application/json:
+      schema:
+        $ref: ../../shared/error.yaml#/$defs/ErrorResponse
 /models/{model_id}/entries:
   parameters: &modelId
     - name: model_id
@@ -109,6 +115,7 @@
             schema:
               $ref: ./schemas.yaml#/$defs/ContentEntry
       "400": *badRequest
+      "413": *bodyTooLarge
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound
@@ -160,6 +167,7 @@
             schema:
               $ref: ./schemas.yaml#/$defs/ContentEntry
       "400": *badRequest
+      "413": *bodyTooLarge
       "401": *unauthenticated
       "403": *forbidden
       "404": *notFound

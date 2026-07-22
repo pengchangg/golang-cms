@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -7,7 +7,7 @@ import { authStore } from './auth/store'
 import type { SessionResponse } from './api/types'
 
 const session: SessionResponse = {
-  principal: { user_id: 'usr_accessible', display_name: '林岚', email: 'linlan@example.com', auth_method: 'sms', system_permissions: [], model_permissions: [] },
+  principal: { user_id: 'usr_accessible', display_name: '林岚', email: 'linlan@example.com', auth_method: 'sms', is_emergency_admin: false, has_high_risk_role: false, system_permissions: [], model_permissions: [] },
   content_models: [],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-18T10:00:00Z',
@@ -44,6 +44,30 @@ describe('认证界面', () => {
     const trigger = screen.getByRole('button', { name: '打开导航' })
     await userEvent.click(trigger)
     await waitFor(() => expect(screen.getByRole('navigation', { name: '移动端主导航' })).toBeVisible())
+  })
+
+  it('旧会话探测成功响应不能覆盖新登录会话', async () => {
+    let resolve!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>((done) => { resolve = done })))
+    render(<App />)
+    const current = { ...session, principal: { ...session.principal, display_name: '新会话用户' }, csrf_token: 'new-session-csrf-token-with-thirty-two-chars' }
+    act(() => authStore.setSession(current))
+    resolve(Response.json({ ...session, principal: { ...session.principal, display_name: '旧会话用户' } }))
+
+    expect(await screen.findByRole('heading', { name: '早上好，新会话用户' })).toBeInTheDocument()
+    expect(screen.queryByText('旧会话用户')).not.toBeInTheDocument()
+  })
+
+  it('旧会话探测错误不能覆盖新登录会话', async () => {
+    let reject!: (error: unknown) => void
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>((_resolve, fail) => { reject = fail })))
+    render(<App />)
+    const current = { ...session, principal: { ...session.principal, display_name: '新会话用户' }, csrf_token: 'new-session-csrf-token-with-thirty-two-chars' }
+    act(() => authStore.setSession(current))
+    reject(new TypeError('旧请求网络失败'))
+
+    expect(await screen.findByRole('heading', { name: '早上好，新会话用户' })).toBeInTheDocument()
+    expect(screen.queryByText('暂时无法确认登录状态')).not.toBeInTheDocument()
   })
 
   it('内容导航展示模型名称和稳定标识而不是模型 ID', async () => {
@@ -122,6 +146,28 @@ describe('认证界面', () => {
     await userEvent.click(screen.getByRole('button', { name: '重新发送验证码' }))
     expect(await screen.findByLabelText('拖动滑块，使拼图对齐缺口')).toBeVisible()
     expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('本地登录使用同步锁阻止并发请求', async () => {
+    let resolveLogin!: (response: Response) => void
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: { code: 'session_invalid', message: '会话失效', request_id: 'req_login', details: [] } }, { status: 401 }))
+      .mockResolvedValueOnce(Response.json({ challenge_id: 'cap_1', background_image: '/captcha-bg', tile_image: '/captcha-piece', tile_x: 80, tile_y: 72, expires_at: '2026-07-18T09:02:00Z' }))
+      .mockReturnValueOnce(new Promise<Response>((done) => { resolveLogin = done }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await userEvent.click(await screen.findByText('本地应急登录'))
+    await userEvent.type(screen.getByLabelText('管理员账号'), 'admin')
+    await userEvent.type(screen.getByLabelText('密码'), 'password')
+    const form = screen.getByRole('button', { name: '本地应急登录' }).closest('form')!
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/admin/v1/auth/local/login')).toHaveLength(1)
+    resolveLogin(Response.json(session))
+    expect(await screen.findByRole('heading', { name: '早上好，林岚' })).toBeInTheDocument()
   })
 
 })

@@ -2,14 +2,16 @@ package transfer
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime/multipart"
-	"net"
 	"net/http"
 	"os"
-	"strings"
+	"strconv"
+	"time"
 
 	"cms/internal/content"
 	"cms/internal/identity"
@@ -19,6 +21,7 @@ import (
 
 const maxImportBytes = 10 << 20
 const maxImportRequestBytes = maxImportBytes + 1<<20
+const exportTimeout = 120 * time.Second
 
 type PrincipalProvider func(*http.Request) (identity.Principal, error)
 
@@ -156,13 +159,38 @@ func (h *Handler) exportCSV(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	release, err := h.service.acquireExport(principal.UserID)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), exportTimeout)
+	defer cancel()
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(exportTimeout))
 	file, err := os.CreateTemp("", "cms-export-*.csv")
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
-	defer func() { name := file.Name(); _ = file.Close(); _ = os.Remove(name) }()
-	if err = h.service.Export(r.Context(), principal, r.PathValue("model_id"), ExportRequest{WorkflowStatus: values.Get("workflow_status"), Filter: values.Get("filter"), RelationFilter: values.Get("relation_filter"), Sort: values.Get("sort")}, file); err != nil {
+	defer func() {
+		name := file.Name()
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Error("关闭 CSV 导出临时文件失败", "request_id", httpx.RequestIDFromContext(r.Context()), "error", closeErr)
+		}
+		if removeErr := os.Remove(name); removeErr != nil {
+			slog.Error("删除 CSV 导出临时文件失败", "request_id", httpx.RequestIDFromContext(r.Context()), "path", name, "error", removeErr)
+		}
+	}()
+	if err = h.service.Export(ctx, principal, r.PathValue("model_id"), ExportRequest{WorkflowStatus: values.Get("workflow_status"), Filter: values.Get("filter"), RelationFilter: values.Get("relation_filter"), Sort: values.Get("sort")}, file); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = &apperror.Error{Kind: apperror.KindUnavailable, Code: "export_timeout", Message: "导出超过 120 秒期限"}
+		}
+		httpx.WriteError(w, r, err)
+		return
+	}
+	info, err := file.Stat()
+	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
 	}
@@ -170,24 +198,41 @@ func (h *Handler) exportCSV(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, err)
 		return
 	}
+	first := make([]byte, 32*1024)
+	n, readErr := (&contextReader{ctx: ctx, reader: file}).Read(first)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		httpx.WriteError(w, r, &apperror.Error{Kind: apperror.KindUnavailable, Code: "export_timeout", Message: "导出超过 120 秒期限"})
+		return
+	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="export.csv"`)
-	_, _ = io.Copy(w, file)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	_, err = io.Copy(w, io.MultiReader(bytes.NewReader(first[:n]), &contextReader{ctx: ctx, reader: file}))
+	if err != nil {
+		slog.Error("CSV 导出传输失败", "request_id", httpx.RequestIDFromContext(r.Context()), "user_id", principal.UserID, "model_id", r.PathValue("model_id"), "error", err)
+	}
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r *contextReader) Read(value []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.reader.Read(value)
+	}
 }
 
 func requestMeta(r *http.Request) content.RequestMeta {
-	ip := strings.TrimSpace(r.RemoteAddr)
-	if host, _, err := net.SplitHostPort(ip); err == nil {
-		ip = host
-	}
-	if parsed := net.ParseIP(ip); parsed != nil {
-		ip = parsed.String()
-	}
 	userAgent := []rune(r.UserAgent())
 	if len(userAgent) > 512 {
 		userAgent = userAgent[:512]
 	}
-	return content.RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: ip, UserAgent: string(userAgent)}
+	return content.RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: httpx.ClientIPFromRequest(r), UserAgent: string(userAgent)}
 }
 
 func writeStatusError(w http.ResponseWriter, r *http.Request, status int, code, message string) {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -252,7 +251,7 @@ func writePreview(w http.ResponseWriter, r *http.Request, value Preview, err err
 	w.Header().Set("Content-Disposition", "inline")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if value.Kind == PreviewImage && value.MimeType == "image/svg+xml" {
-		w.Header().Set("Content-Security-Policy", "sandbox")
+		w.Header().Set("Content-Security-Policy", "sandbox; frame-ancestors 'none'")
 	}
 	if value.Size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(value.Size, 10))
@@ -262,14 +261,10 @@ func writePreview(w http.ResponseWriter, r *http.Request, value Preview, err err
 }
 
 func requestMeta(r *http.Request) RequestMeta {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
 	agent := strings.ToValidUTF8(r.UserAgent(), "")
 	for utf8.RuneCountInString(agent) > 512 {
 		_, size := utf8.DecodeLastRuneInString(agent)
 		agent = agent[:len(agent)-size]
 	}
-	return RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: host, UserAgent: agent}
+	return RequestMeta{RequestID: httpx.RequestIDFromContext(r.Context()), IP: httpx.ClientIPFromRequest(r), UserAgent: agent}
 }

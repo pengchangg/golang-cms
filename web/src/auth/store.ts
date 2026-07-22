@@ -9,6 +9,7 @@ export type AuthState =
   | { status: 'authenticated'; session: SessionResponse }
 
 let state: AuthState = { status: 'loading', session: null }
+let epoch = 0
 const listeners = new Set<() => void>()
 
 function emit() {
@@ -17,24 +18,39 @@ function emit() {
 
 export const authStore = {
   getSnapshot: () => state,
+  getEpoch: () => epoch,
+  beginTransition() {
+    epoch += 1
+    return epoch
+  },
   subscribe(listener: () => void) {
     listeners.add(listener)
     return () => listeners.delete(listener)
   },
-  setSession(session: SessionResponse) {
+  setSession(session: SessionResponse, expectedEpoch?: number) {
+    if (expectedEpoch !== undefined && expectedEpoch !== epoch) return false
     state = { status: 'authenticated', session }
+    epoch += 1
     emit()
+    return true
   },
-  clear() {
+  clear(expectedEpoch?: number) {
+    if (expectedEpoch !== undefined && expectedEpoch !== epoch) return false
     state = { status: 'anonymous', session: null }
+    epoch += 1
     emit()
+    return true
   },
-  setError(error: unknown) {
+  setError(error: unknown, expectedEpoch?: number) {
+    if (expectedEpoch !== undefined && expectedEpoch !== epoch) return false
     state = { status: 'error', session: null, error }
+    epoch += 1
     emit()
+    return true
   },
   reset() {
     state = { status: 'loading', session: null }
+    epoch += 1
     emit()
   },
 }

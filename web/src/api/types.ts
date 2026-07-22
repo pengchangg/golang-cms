@@ -31,6 +31,8 @@ export interface Principal {
   display_name: string
   email: string | null
   auth_method: AuthMethod
+  is_emergency_admin: boolean
+  has_high_risk_role: boolean
   system_permissions: SystemPermission[]
   model_permissions: Array<{
     model_id: string
@@ -90,11 +92,11 @@ export type FieldType =
 export interface CursorResponse<T> { items: T[]; next_cursor: string | null }
 export interface UserSummary {
   id: string; display_name: string; email: string | null; phone_masked: string | null; auth_methods: AuthMethod[]
-  is_emergency_admin: boolean; status: UserStatus; created_at: string; updated_at: string
+  is_emergency_admin: boolean; has_high_risk_role: boolean; status: UserStatus; created_at: string; updated_at: string
 }
 export interface User extends UserSummary { phone: string | null; role_ids: string[] }
 export interface Role {
-  id: string; key: string; display_name: string; description: string
+  id: string; key: string; kind: 'custom' | 'high_risk'; display_name: string; description: string
   system_permissions: SystemPermission[]
   model_permissions: Array<{ model_id: string; permissions: ModelPermission[] }>
   created_at: string; updated_at: string

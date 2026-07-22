@@ -131,7 +131,7 @@ button, a { touch-action: manipulation; }
 .initial-child-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .dynamic-form { display: grid; max-width: 900px; gap: 18px; }
 .dynamic-field { display: grid; gap: 8px; padding: 20px; border-top: 1px solid var(--line); background: rgb(255 254 249 / 45%); }
-.dynamic-field > label { display: flex; align-items: center; gap: 8px; }
+.dynamic-field > [id$="-label"] { display: flex; align-items: center; gap: 8px; }
 .required-mark { color: #a63a32; font-size: 12px; }
 .dynamic-field .dynamic-form { padding: 8px 0 0 16px; border-left: 2px solid rgb(37 107 85 / 20%); }
 .rich-text-editor, .json-editor { overflow: hidden; border: 1px solid var(--line); background: #fffef9; }

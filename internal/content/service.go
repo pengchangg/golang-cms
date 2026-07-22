@@ -39,6 +39,7 @@ type TransactionRunner interface {
 type ModelRepository interface {
 	GetModel(context.Context, database.Querier, string) (schema.ContentModel, error)
 	LockModel(context.Context, database.Querier, string) (schema.ContentModelSummary, error)
+	LockModelSchema(context.Context, database.Querier, string) (schema.ContentModel, error)
 	LockModels(context.Context, database.Querier, []string) (map[string]schema.ContentModelSummary, error)
 }
 
@@ -72,8 +73,8 @@ func NewService(dependencies Dependencies) *Service {
 	return &Service{db: dependencies.DB, tx: dependencies.Transactor, repository: dependencies.Repository, models: dependencies.ModelRepository, audit: dependencies.Audit, media: dependencies.Media, assets: dependencies.Assets, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, newID: randomID}
 }
 
-func (s *Service) HasAnyContent(ctx context.Context, modelID string) (bool, error) {
-	return s.repository.HasAnyContent(ctx, s.db, modelID)
+func (s *Service) HasAnyContent(ctx context.Context, q database.Querier, modelID string) (bool, error) {
+	return s.repository.HasAnyContent(ctx, q, modelID)
 }
 
 func (s *Service) ListEntries(ctx context.Context, principal identity.Principal, modelID string, query AdminEntryQuery) (EntryList, error) {
@@ -398,7 +399,7 @@ func (s *Service) createDraftInTx(ctx context.Context, q database.Querier, princ
 	}
 	var model schema.ContentModel
 	if batch == nil {
-		model, err = s.models.GetModel(ctx, q, modelID)
+		model, err = s.models.LockModelSchema(ctx, q, modelID)
 		if err != nil {
 			return Entry{}, err
 		}
@@ -497,7 +498,7 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 		if modelSummary.Status == schema.StatusArchived {
 			return conflict("resource_archived", "归档模型不能修改内容")
 		}
-		model, err := s.models.GetModel(ctx, q, modelID)
+		model, err := s.models.LockModelSchema(ctx, q, modelID)
 		if err != nil {
 			return err
 		}
@@ -522,10 +523,8 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 		if err != nil {
 			return err
 		}
-		if f2, ok := s.repository.(F2Repository); ok {
-			if err = f2.ValidateRelationTargets(ctx, q, relations); err != nil {
-				return err
-			}
+		if err = s.repository.ValidateRelationTargets(ctx, q, relations); err != nil {
+			return err
 		}
 		current, err := s.repository.GetRevision(ctx, q, modelID, entryID, entry.CurrentDraftRevisionID)
 		if err != nil {
@@ -545,18 +544,8 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 		if err := s.repository.SetDraftPointer(ctx, q, modelID, entryID, revisionID); err != nil {
 			return err
 		}
-		if _, ok := s.repository.(F2Repository); ok {
-			if err := s.rebuildUniqueValues(ctx, q, modelID, entryID, model.Fields); err != nil {
-				return err
-			}
-		} else {
-			values, err := uniqueValues(content, model.Fields)
-			if err != nil {
-				return err
-			}
-			if err = s.replaceUniqueValues(ctx, q, modelID, entryID, model.Fields, values); err != nil {
-				return err
-			}
+		if err := s.rebuildUniqueValues(ctx, q, modelID, entryID, model.Fields); err != nil {
+			return err
 		}
 		entry.CurrentDraftRevisionID, entry.CurrentDraftContent, entry.UpdatedAt = revisionID, content, now
 		if err := s.repository.UpdateEntry(ctx, q, entry); err != nil {
@@ -593,6 +582,11 @@ func (s *Service) lockRelationModels(ctx context.Context, q database.Querier, so
 	if len(models) != len(ids) {
 		return nil, notFound("模型")
 	}
+	for _, relation := range relations {
+		if models[relation.TargetModelID].Status != schema.StatusActive {
+			return nil, conflict("target_model_invalid", "关联目标模型无效或已归档")
+		}
+	}
 	return models, nil
 }
 
@@ -602,8 +596,12 @@ func ensureRelationModelsLocked(content json.RawMessage, revision Revision, fiel
 		return err
 	}
 	for _, relation := range relations {
-		if _, ok := locked[relation.TargetModelID]; !ok {
+		target, ok := locked[relation.TargetModelID]
+		if !ok {
 			return conflict("model_schema_conflict", "关联目标模型已变化，请重试")
+		}
+		if target.Status != schema.StatusActive {
+			return conflict("target_model_invalid", "关联目标模型无效或已归档")
 		}
 	}
 	return nil
@@ -624,14 +622,12 @@ func (s *Service) ArchiveEntry(ctx context.Context, principal identity.Principal
 		if entry.Status == StatusArchived {
 			return conflict("resource_archived", "内容条目已归档")
 		}
-		if f2, ok := s.repository.(F2Repository); ok {
-			workflowEntry, err := f2.GetWorkflowEntry(ctx, q, modelID, entryID)
-			if err != nil {
-				return err
-			}
-			if workflowEntry.CurrentPublishedRevisionID != nil {
-				return conflict("published_entry_archive_forbidden", "已发布内容必须先下线")
-			}
+		workflowEntry, err := s.repository.GetWorkflowEntry(ctx, q, modelID, entryID)
+		if err != nil {
+			return err
+		}
+		if workflowEntry.CurrentPublishedRevisionID != nil {
+			return conflict("published_entry_archive_forbidden", "已发布内容必须先下线")
 		}
 		entry.Status, entry.UpdatedAt = StatusArchived, s.now()
 		if err := s.repository.UpdateEntry(ctx, q, entry); err != nil {
@@ -649,7 +645,6 @@ func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Queri
 	if err != nil {
 		return err
 	}
-	f2, ok := s.repository.(F2Repository)
 	values, relations, err := revisionDerivatives(revision.Content, revision, fields)
 	if err != nil {
 		return err
@@ -657,10 +652,8 @@ func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Queri
 	relationsPrechecked := len(prechecked) > 0 && prechecked[0]
 	mediaPrechecked := len(prechecked) > 1 && prechecked[1]
 	if !relationsPrechecked {
-		if ok {
-			if err = f2.ValidateRelationTargets(ctx, q, relations); err != nil {
-				return err
-			}
+		if err = s.repository.ValidateRelationTargets(ctx, q, relations); err != nil {
+			return err
 		}
 	}
 	if !mediaPrechecked {
@@ -676,13 +669,10 @@ func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Queri
 			return err
 		}
 	}
-	if !ok {
-		return nil
-	}
-	if err = f2.CreateFieldValues(ctx, q, values); err != nil {
+	if err = s.repository.CreateFieldValues(ctx, q, values); err != nil {
 		return err
 	}
-	return f2.CreateRelations(ctx, q, relations)
+	return s.repository.CreateRelations(ctx, q, relations)
 }
 
 func precheckMedia(ctx context.Context, q database.Querier, checker MediaPrechecker, references []MediaReference) error {
@@ -732,7 +722,7 @@ func (s *Service) precheckDraftBatch(ctx context.Context, q database.Querier, mo
 	if lockedModels[modelID].Status == schema.StatusArchived {
 		return nil, conflict("resource_archived", "归档模型不能创建内容")
 	}
-	model, err = s.models.GetModel(ctx, q, modelID)
+	model, err = s.models.LockModelSchema(ctx, q, modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -743,10 +733,8 @@ func (s *Service) precheckDraftBatch(ctx context.Context, q database.Querier, mo
 	for _, reference := range mediaSet {
 		allReferences = append(allReferences, reference)
 	}
-	if f2, ok := s.repository.(F2Repository); ok {
-		if err = f2.ValidateRelationTargets(ctx, q, allRelations); err != nil {
-			return nil, err
-		}
+	if err = s.repository.ValidateRelationTargets(ctx, q, allRelations); err != nil {
+		return nil, err
 	}
 	if err = precheckMedia(ctx, q, s.media, allReferences); err != nil {
 		return nil, err
@@ -825,8 +813,7 @@ func draftIdentifiers(raw json.RawMessage, modelID string, fields []schema.Conte
 }
 
 func (s *Service) rebuildUniqueValues(ctx context.Context, q database.Querier, modelID, entryID string, fields []schema.ContentField) error {
-	f2 := s.repository.(F2Repository)
-	entry, err := f2.GetWorkflowEntry(ctx, q, modelID, entryID)
+	entry, err := s.repository.GetWorkflowEntry(ctx, q, modelID, entryID)
 	if err != nil {
 		return err
 	}
@@ -889,10 +876,6 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 		failures.add("/revision_id", "required", "revision_id 为必填项")
 		return Entry{}, failures.err()
 	}
-	f2, ok := s.repository.(F2Repository)
-	if !ok {
-		return Entry{}, fmt.Errorf("F2Repository 未装配")
-	}
 	var result Entry
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
 		if err := requireModelPermission(principal, modelID, permission); err != nil {
@@ -905,7 +888,7 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 		if err != nil {
 			return err
 		}
-		current, err := f2.GetWorkflowEntry(ctx, q, modelID, entryID)
+		current, err := s.repository.GetWorkflowEntry(ctx, q, modelID, entryID)
 		if err != nil {
 			return err
 		}
@@ -922,7 +905,7 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 		if expected != revisionID {
 			return conflict("workflow_revision_conflict", "目标 Revision 已不是当前指针")
 		}
-		revision, err := f2.LockRevision(ctx, q, modelID, entryID, revisionID)
+		revision, err := s.repository.LockRevision(ctx, q, modelID, entryID, revisionID)
 		if err != nil {
 			return err
 		}
@@ -954,7 +937,7 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 			submitter = &principal.UserID
 			submittedAt = &now
 		}
-		changed, err := f2.TransitionRevision(ctx, q, revisionID, from, to, submitter, submittedAt)
+		changed, err := s.repository.TransitionRevision(ctx, q, revisionID, from, to, submitter, submittedAt)
 		if err != nil {
 			return err
 		}
@@ -964,19 +947,19 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 		if eventType == "approved" {
 			if current.CurrentPublishedRevisionID != nil && *current.CurrentPublishedRevisionID != revisionID {
 				var changed bool
-				if changed, err = f2.TransitionRevision(ctx, q, *current.CurrentPublishedRevisionID, WorkflowPublished, WorkflowUnpublished, nil, nil); err != nil {
+				if changed, err = s.repository.TransitionRevision(ctx, q, *current.CurrentPublishedRevisionID, WorkflowPublished, WorkflowUnpublished, nil, nil); err != nil {
 					return err
 				}
 				if !changed {
 					return conflict("workflow_revision_conflict", "当前发布 Revision 已变化")
 				}
 			}
-			if err = f2.SetPublishedPointer(ctx, q, modelID, entryID, revisionID, now); err != nil {
+			if err = s.repository.SetPublishedPointer(ctx, q, modelID, entryID, revisionID, now); err != nil {
 				return err
 			}
 		}
 		if eventType == "unpublished" {
-			deleted, err := f2.DeletePublishedPointer(ctx, q, modelID, entryID, revisionID)
+			deleted, err := s.repository.DeletePublishedPointer(ctx, q, modelID, entryID, revisionID)
 			if err != nil {
 				return err
 			}
@@ -992,7 +975,7 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 		if reason != "" {
 			reasonPointer = &reason
 		}
-		if err = f2.CreateWorkflowEvent(ctx, q, modelID, WorkflowEvent{ID: eventID, EntryID: entryID, RevisionID: revisionID, Type: eventType, FromStatus: from, ToStatus: to, ActorID: principal.UserID, Reason: reasonPointer, OccurredAt: now}); err != nil {
+		if err = s.repository.CreateWorkflowEvent(ctx, q, modelID, WorkflowEvent{ID: eventID, EntryID: entryID, RevisionID: revisionID, Type: eventType, FromStatus: from, ToStatus: to, ActorID: principal.UserID, Reason: reasonPointer, OccurredAt: now}); err != nil {
 			return err
 		}
 		if eventType == "approved" || eventType == "unpublished" {
@@ -1007,7 +990,7 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 		if err = s.appendAudit(ctx, q, principal, meta, "content_revision_"+eventType, "content_revision", revisionID, map[string]any{"entry_id": entryID, "model_id": modelID, "from": from, "to": to}); err != nil {
 			return err
 		}
-		result, err = f2.GetWorkflowEntry(ctx, q, modelID, entryID)
+		result, err = s.repository.GetWorkflowEntry(ctx, q, modelID, entryID)
 		return err
 	})
 	if err == nil {
@@ -1022,10 +1005,6 @@ func (s *Service) ListWorkflowEvents(ctx context.Context, principal identity.Pri
 	if err := requireModelPermission(principal, modelID, permissionView); err != nil {
 		return WorkflowEventList{}, err
 	}
-	f2, ok := s.repository.(F2Repository)
-	if !ok {
-		return WorkflowEventList{}, fmt.Errorf("F2Repository 未装配")
-	}
 	if _, err := s.repository.GetEntry(ctx, s.db, modelID, entryID); err != nil {
 		return WorkflowEventList{}, err
 	}
@@ -1033,7 +1012,7 @@ func (s *Service) ListWorkflowEvents(ctx context.Context, principal identity.Pri
 	if err != nil {
 		return WorkflowEventList{}, err
 	}
-	items, err := f2.ListWorkflowEvents(ctx, s.db, modelID, entryID, limit+1, cursor)
+	items, err := s.repository.ListWorkflowEvents(ctx, s.db, modelID, entryID, limit+1, cursor)
 	if err != nil {
 		return WorkflowEventList{}, err
 	}
@@ -1078,10 +1057,8 @@ func (s *Service) ListRevisions(ctx context.Context, principal identity.Principa
 		return RevisionList{}, err
 	}
 	result := RevisionList{Items: items}
-	if len(items) >= limit {
-		if len(items) > limit {
-			result.Items = items[:limit]
-		}
+	if len(items) > limit {
+		result.Items = items[:limit]
 		last := result.Items[len(result.Items)-1]
 		value, err := encodeCursor(cursorEnvelope{Kind: "revisions", ModelID: modelID, EntryID: entryID, Number: last.Number})
 		if err != nil {

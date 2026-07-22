@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"cms/internal/content"
@@ -34,10 +35,38 @@ type Service struct {
 	models   ModelReader
 	importer Importer
 	entries  EntryLister
+	exportMu sync.Mutex
+	exports  int
+	users    map[string]struct{}
 }
 
+const (
+	maxExportRows       = 10_000
+	maxExportBytes      = int64(50 << 20)
+	maxConcurrentExport = 2
+)
+
 func NewService(d Dependencies) *Service {
-	return &Service{db: d.DB, models: d.Models, importer: d.Importer, entries: d.Entries}
+	return &Service{db: d.DB, models: d.Models, importer: d.Importer, entries: d.Entries, users: make(map[string]struct{})}
+}
+
+func (s *Service) acquireExport(userID string) (func(), error) {
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+	if s.exports >= maxConcurrentExport {
+		return nil, &apperror.Error{Kind: apperror.KindTooManyRequests, Code: "export_concurrency_limit", Message: "导出并发数已达上限"}
+	}
+	if _, exists := s.users[userID]; exists {
+		return nil, &apperror.Error{Kind: apperror.KindTooManyRequests, Code: "export_concurrency_limit", Message: "导出并发数已达上限"}
+	}
+	s.exports++
+	s.users[userID] = struct{}{}
+	return func() {
+		s.exportMu.Lock()
+		s.exports--
+		delete(s.users, userID)
+		s.exportMu.Unlock()
+	}, nil
 }
 
 func (s *Service) Template(ctx context.Context, principal identity.Principal, modelID string, w io.Writer) error {
@@ -127,9 +156,18 @@ func (s *Service) Export(ctx context.Context, principal identity.Principal, mode
 		return err
 	}
 	fields := ActiveRootFields(model.Fields)
-	return WriteCSV(w, fields, func(yield func(json.RawMessage) error) error {
+	limited := &exportWriter{ctx: ctx, writer: w}
+	rows := 0
+	return WriteCSV(limited, fields, func(yield func(json.RawMessage) error) error {
 		for {
 			for _, entry := range page.Items {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				rows++
+				if rows > maxExportRows {
+					return &apperror.Error{Kind: apperror.KindPayloadTooLarge, Code: "export_row_limit_exceeded", Message: "导出不能超过 10,000 行"}
+				}
 				if err := yield(entry.CurrentDraftContent); err != nil {
 					return err
 				}
@@ -144,6 +182,24 @@ func (s *Service) Export(ctx context.Context, principal identity.Principal, mode
 			}
 		}
 	})
+}
+
+type exportWriter struct {
+	ctx     context.Context
+	writer  io.Writer
+	written int64
+}
+
+func (w *exportWriter) Write(value []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if int64(len(value)) > maxExportBytes-w.written {
+		return 0, &apperror.Error{Kind: apperror.KindPayloadTooLarge, Code: "export_size_limit_exceeded", Message: "导出文件不能超过 50 MiB"}
+	}
+	n, err := w.writer.Write(value)
+	w.written += int64(n)
+	return n, err
 }
 
 var exportInteger = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)

@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"net/netip"
 	"path"
 	"strings"
 
@@ -29,13 +30,13 @@ func (m handlerModule) RegisterRoutes(mux *http.ServeMux) {
 	}
 }
 
-func New(web fs.FS, modules ...Module) http.Handler {
+func New(web fs.FS, trustedProxies []netip.Prefix, modules ...Module) http.Handler {
 	mux := http.NewServeMux()
 	for _, module := range modules {
 		module.RegisterRoutes(mux)
 	}
 	mux.Handle("/", spaHandler(web))
-	return httpx.RequestID(httpx.Recover(mux))
+	return httpx.SecurityHeaders(httpx.RequestID(httpx.ClientIP(trustedProxies, httpx.Recover(mux))))
 }
 
 func spaHandler(web fs.FS) http.Handler {

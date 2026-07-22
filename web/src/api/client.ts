@@ -59,6 +59,7 @@ async function request<T>(path: string, init: RequestInit = {}, parse: (response
   }
 
   const method = (init.method ?? 'GET').toUpperCase()
+  const authEpoch = authStore.getEpoch()
   const headers = new Headers(init.headers)
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
@@ -94,7 +95,7 @@ async function request<T>(path: string, init: RequestInit = {}, parse: (response
           },
         }
     if (response.status === 401 && errorResponse.error.code === 'session_invalid') {
-      authStore.clear()
+      authStore.clear(authEpoch)
     }
     throw new ApiError(response.status, errorResponse)
   }

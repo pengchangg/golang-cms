@@ -5,7 +5,7 @@ import { ApiError, api, safeReturnTo, uploadAssetFile } from './client'
 import type { SessionResponse } from './types'
 
 const session: SessionResponse = {
-  principal: { user_id: 'usr_test', display_name: '测试用户', email: null, auth_method: 'local', system_permissions: [], model_permissions: [] },
+  principal: { user_id: 'usr_test', display_name: '测试用户', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: [], model_permissions: [] },
   content_models: [],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-18T10:00:00Z',
@@ -94,6 +94,29 @@ describe('API Client', () => {
 
     await expect(api.getSession()).rejects.toMatchObject({ code: 'session_invalid', requestId: 'req_401' } satisfies Partial<ApiError>)
     expect(authStore.getSnapshot().status).toBe('anonymous')
+  })
+
+  it('旧请求的会话失效响应不能清空新会话', async () => {
+    authStore.setSession(session)
+    let resolve!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>((done) => { resolve = done })))
+    const request = api.getSession()
+    const current = { ...session, csrf_token: 'new-session-csrf-token-with-thirty-two-chars' }
+    authStore.setSession(current)
+    resolve(Response.json({ error: { code: 'session_invalid', message: '旧会话失效', request_id: 'req_old', details: [] } }, { status: 401 }))
+
+    await expect(request).rejects.toMatchObject({ code: 'session_invalid' })
+    expect(authStore.getSnapshot()).toMatchObject({ status: 'authenticated', session: current })
+  })
+
+  it('后发认证操作会废弃先发操作的成功响应', () => {
+    const first = authStore.beginTransition()
+    const second = authStore.beginTransition()
+    const newer = { ...session, csrf_token: 'newer-session-csrf-token-with-thirty-two-chars' }
+
+    expect(authStore.setSession(session, first)).toBe(false)
+    expect(authStore.setSession(newer, second)).toBe(true)
+    expect(authStore.getSnapshot()).toMatchObject({ status: 'authenticated', session: newer })
   })
 
   it('403 只作为授权错误，不清空有效认证状态', async () => {

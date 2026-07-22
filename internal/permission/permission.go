@@ -3,10 +3,12 @@ package permission
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sort"
 
 	"cms/internal/identity"
 	"cms/internal/platform/apperror"
+	"cms/internal/platform/database"
 )
 
 const (
@@ -27,6 +29,7 @@ type Authorizer interface {
 
 type ActiveModelProvider interface {
 	ActiveModelIDs(context.Context) ([]string, error)
+	ActiveModelIDsWith(context.Context, database.Querier) ([]string, error)
 }
 
 var allSystemPermissions = []string{
@@ -43,70 +46,128 @@ type SQLProvider struct {
 	Models ActiveModelProvider
 }
 
-func (p SQLProvider) Permissions(ctx context.Context, userID string) ([]string, []identity.ModelPermissions, error) {
-	var enabled, emergency bool
-	err := p.DB.QueryRowContext(ctx, `SELECT u.enabled, EXISTS(SELECT 1 FROM local_credentials lc
-		WHERE lc.user_id=u.id AND lc.emergency_admin=TRUE) FROM users u WHERE u.id=?`, userID).Scan(&enabled, &emergency)
+func (p SQLProvider) Permissions(ctx context.Context, userID string) (identity.PermissionSet, error) {
+	return p.permissions(ctx, p.DB, userID, false)
+}
+
+func (p SQLProvider) PermissionsWith(ctx context.Context, q database.Querier, userID string) (identity.PermissionSet, error) {
+	return p.permissions(ctx, q, userID, true)
+}
+
+func (p SQLProvider) permissions(ctx context.Context, q database.Querier, userID string, lock bool) (identity.PermissionSet, error) {
+	var enabled bool
+	identityQuery := "SELECT enabled FROM users WHERE id=?"
+	if lock {
+		identityQuery += " FOR UPDATE"
+	}
+	err := q.QueryRowContext(ctx, identityQuery, userID).Scan(&enabled)
 	if err == sql.ErrNoRows {
-		return []string{}, []identity.ModelPermissions{}, nil
+		return identity.PermissionSet{}, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return identity.PermissionSet{}, err
 	}
 	if !enabled {
-		return []string{}, []identity.ModelPermissions{}, nil
+		return identity.PermissionSet{}, nil
 	}
-	if emergency {
-		if p.Models == nil {
-			return nil, nil, &apperror.Error{Kind: apperror.KindInternal, Code: "internal_error", Message: "有效模型提供者未装配"}
+	lockSuffix := ""
+	if lock {
+		lockSuffix = " FOR SHARE"
+	}
+	emergency := false
+	emergencyQuery := "SELECT emergency_admin FROM local_credentials WHERE user_id=?"
+	if lock {
+		emergencyQuery += " FOR SHARE"
+	}
+	if err := q.QueryRowContext(ctx, emergencyQuery, userID).Scan(&emergency); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return identity.PermissionSet{}, err
+	}
+	roleRows, err := q.QueryContext(ctx, `SELECT r.id,r.kind FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=? ORDER BY r.id`+lockSuffix, userID)
+	if err != nil {
+		return identity.PermissionSet{}, err
+	}
+	roleIDs := []string{}
+	highRisk := false
+	for roleRows.Next() {
+		var roleID, kind string
+		if err := roleRows.Scan(&roleID, &kind); err != nil {
+			roleRows.Close()
+			return identity.PermissionSet{}, err
 		}
-		modelIDs, err := p.Models.ActiveModelIDs(ctx)
+		roleIDs = append(roleIDs, roleID)
+		highRisk = highRisk || kind == string(RoleKindHighRisk)
+	}
+	if err := roleRows.Err(); err != nil {
+		roleRows.Close()
+		return identity.PermissionSet{}, err
+	}
+	if err := roleRows.Close(); err != nil {
+		return identity.PermissionSet{}, err
+	}
+	if emergency || highRisk {
+		if p.Models == nil {
+			return identity.PermissionSet{}, &apperror.Error{Kind: apperror.KindInternal, Code: "internal_error", Message: "有效模型提供者未装配"}
+		}
+		var modelIDs []string
+		var err error
+		if lock {
+			modelIDs, err = p.Models.ActiveModelIDsWith(ctx, q)
+		} else {
+			modelIDs, err = p.Models.ActiveModelIDs(ctx)
+		}
 		if err != nil {
-			return nil, nil, err
+			return identity.PermissionSet{}, err
 		}
 		system, models := emergencyPermissions(modelIDs)
-		return system, models, nil
-	}
-	systemRows, err := p.DB.QueryContext(ctx, `SELECT DISTINCT rsp.permission FROM user_roles ur
-		JOIN role_system_permissions rsp ON rsp.role_id=ur.role_id WHERE ur.user_id=? ORDER BY rsp.permission`, userID)
-	if err != nil {
-		return nil, nil, err
+		return identity.PermissionSet{System: system, Models: models, EmergencyAdmin: emergency, HighRiskRole: highRisk}, nil
 	}
 	system := []string{}
-	for systemRows.Next() {
-		var code string
-		if err := systemRows.Scan(&code); err != nil {
-			systemRows.Close()
-			return nil, nil, err
-		}
-		if ValidSystemPermission(code) {
-			system = append(system, code)
-		}
-	}
-	if err := systemRows.Close(); err != nil {
-		return nil, nil, err
-	}
-	modelRows, err := p.DB.QueryContext(ctx, `SELECT DISTINCT rmp.model_id, rmp.permission FROM user_roles ur
-		JOIN role_model_permissions rmp ON rmp.role_id=ur.role_id WHERE ur.user_id=? ORDER BY rmp.model_id, rmp.permission`, userID)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer modelRows.Close()
 	models := []identity.ModelPermissions{}
-	for modelRows.Next() {
-		var modelID, code string
-		if err := modelRows.Scan(&modelID, &code); err != nil {
-			return nil, nil, err
+	for _, roleID := range roleIDs {
+		systemRows, err := q.QueryContext(ctx, `SELECT permission FROM role_system_permissions WHERE role_id=? ORDER BY permission`+lockSuffix, roleID)
+		if err != nil {
+			return identity.PermissionSet{}, err
 		}
-		if !ValidModelPermission(code) {
-			continue
+		for systemRows.Next() {
+			var code string
+			if err := systemRows.Scan(&code); err != nil {
+				systemRows.Close()
+				return identity.PermissionSet{}, err
+			}
+			if ValidSystemPermission(code) {
+				system = append(system, code)
+			}
 		}
-		if len(models) == 0 || models[len(models)-1].ModelID != modelID {
-			models = append(models, identity.ModelPermissions{ModelID: modelID, Permissions: []string{}})
+		if err := systemRows.Err(); err != nil {
+			systemRows.Close()
+			return identity.PermissionSet{}, err
 		}
-		models[len(models)-1].Permissions = append(models[len(models)-1].Permissions, code)
+		if err := systemRows.Close(); err != nil {
+			return identity.PermissionSet{}, err
+		}
+		modelRows, err := q.QueryContext(ctx, `SELECT model_id, permission FROM role_model_permissions WHERE role_id=? ORDER BY model_id, permission`+lockSuffix, roleID)
+		if err != nil {
+			return identity.PermissionSet{}, err
+		}
+		for modelRows.Next() {
+			var modelID, code string
+			if err := modelRows.Scan(&modelID, &code); err != nil {
+				modelRows.Close()
+				return identity.PermissionSet{}, err
+			}
+			if ValidModelPermission(code) {
+				models = append(models, identity.ModelPermissions{ModelID: modelID, Permissions: []string{code}})
+			}
+		}
+		if err := modelRows.Err(); err != nil {
+			modelRows.Close()
+			return identity.PermissionSet{}, err
+		}
+		if err := modelRows.Close(); err != nil {
+			return identity.PermissionSet{}, err
+		}
 	}
-	return system, models, modelRows.Err()
+	return identity.PermissionSet{System: system, Models: models}, nil
 }
 
 func emergencyPermissions(modelIDs []string) ([]string, []identity.ModelPermissions) {
@@ -122,7 +183,13 @@ func emergencyPermissions(modelIDs []string) ([]string, []identity.ModelPermissi
 	return system, models
 }
 
-type PrincipalAuthorizer struct{}
+type TransactionalPermissionProvider interface {
+	PermissionsWith(context.Context, database.Querier, string) (identity.PermissionSet, error)
+}
+
+type PrincipalAuthorizer struct {
+	Provider TransactionalPermissionProvider
+}
 
 func (PrincipalAuthorizer) RequireSystemPermission(_ context.Context, principal identity.Principal, required string) error {
 	for _, granted := range principal.SystemPermissions {
@@ -131,6 +198,17 @@ func (PrincipalAuthorizer) RequireSystemPermission(_ context.Context, principal 
 		}
 	}
 	return &apperror.Error{Kind: apperror.KindPermissionDenied, Code: "permission_denied", Message: "权限不足"}
+}
+
+func (a PrincipalAuthorizer) CurrentPrincipal(ctx context.Context, q database.Querier, principal identity.Principal) (identity.Principal, error) {
+	if a.Provider == nil {
+		return identity.Principal{}, &apperror.Error{Kind: apperror.KindInternal, Code: "internal_error", Message: "事务权限提供者未装配"}
+	}
+	permissions, err := a.Provider.PermissionsWith(ctx, q, principal.UserID)
+	if err != nil {
+		return identity.Principal{}, err
+	}
+	return identity.NewPrincipal(principal.UserID, principal.DisplayName, principal.Email, principal.AuthMethod, permissions), nil
 }
 
 func ValidSystemPermission(code string) bool { _, ok := systemPermissionSet[code]; return ok }
