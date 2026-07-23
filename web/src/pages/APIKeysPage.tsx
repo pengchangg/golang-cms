@@ -126,7 +126,7 @@ export default function APIKeysPage({ principal }: { principal: Principal }) {
     </Modal>
     <Modal className="secret-modal" title="仅此一次：保存完整 API Key" open={Boolean(secret)} closable={false} mask={{ closable: false }} keyboard={false} footer={<Button type="primary" onClick={() => setSecret(undefined)}>我已安全保存</Button>}>
       <Alert type="warning" showIcon title="关闭后无法再次查看" description="此响应按 no-store 获取。不要将密钥粘贴到工单、日志或聊天记录。" />
-      <Typography.Paragraph className="secret-value" copyable={{ icon: <CopyOutlined />, tooltips: ['复制完整 Key', '已复制'] }}><code>{secret?.key}</code></Typography.Paragraph>
+      <Typography.Paragraph className="secret-value" copyable={{ text: secret?.key, icon: <CopyOutlined />, tooltips: ['复制完整 Key', '已复制'] }}><code>{secret?.key}</code></Typography.Paragraph>
       <Typography.Text type="secondary">模型范围：{secret?.model_ids.join('、')}</Typography.Text>
       <br/><Typography.Text type="secondary">配置范围：{secret?.config_namespace_ids?.join('、') || '无'}</Typography.Text>
     </Modal>

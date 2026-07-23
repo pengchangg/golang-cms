@@ -103,6 +103,25 @@ it('只有 api_keys.create 时可录入模型 ID 创建', async () => {
   expect(listModels).not.toHaveBeenCalled()
 }, 20_000)
 
+it('密钥弹窗复制完整 Key 字符串而不是 [object Object]', async () => {
+  const secretKey = 'cmsk_huwjnv452ymh_44hsEdNk-JhG5iJwdxyYS9T2rxiY8RAUFm3J3jxXjTw'
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  const createKey = vi.spyOn(api, 'createAPIKey').mockResolvedValue({ ...key, key: secretKey })
+  render(<APIKeysPage principal={principal(['api_keys.create'], ['mdl_1'])} />)
+  await userEvent.click(await screen.findByRole('button', { name: /创建 API Key/ }))
+  await userEvent.type(screen.getByLabelText('名称'), '新客户端')
+  await userEvent.click(screen.getByRole('combobox', { name: '模型范围' }))
+  const options = await screen.findAllByText('mdl_1')
+  await userEvent.click(options.find((element) => element.classList.contains('ant-select-item-option-content'))!)
+  await userEvent.click(screen.getByRole('button', { name: /^创\s*建$/ }))
+  await waitFor(() => expect(createKey).toHaveBeenCalled())
+  const copyButton = await screen.findByRole('button', { name: '复制完整 Key' })
+  await userEvent.click(copyButton)
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(secretKey))
+  expect(writeText).not.toHaveBeenCalledWith('[object Object]')
+}, 20_000)
+
 it('只有 api_keys.create 时可按已知 ID 轮换', async () => {
   const listKeys = vi.spyOn(api, 'listAPIKeys')
   const rotateKey = vi.spyOn(api, 'rotateAPIKey').mockResolvedValue({ ...key, key: 'cmsk_rotated' })

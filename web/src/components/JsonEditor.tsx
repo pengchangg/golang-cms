@@ -3,45 +3,82 @@ import { basicSetup, EditorView } from 'codemirror'
 import { Alert, Button } from 'antd'
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 
-export function JsonEditor({ value, onChange, label, disabled, onValidityChange, labelledBy, describedBy }: { value: unknown; onChange: (value: unknown) => void; label: string; disabled: boolean; onValidityChange?: (valid: boolean) => void; labelledBy?: string; describedBy?: string }) {
+function serializeJSON(value: unknown) {
+  return value == null ? '' : JSON.stringify(value, null, 2)
+}
+
+interface JsonEditorProps {
+  value: unknown
+  onChange: (value: unknown) => void
+  label: string
+  disabled: boolean
+  variant?: 'preview' | 'full'
+  onValidityChange?: (valid: boolean) => void
+  labelledBy?: string
+  describedBy?: string
+}
+
+export function JsonEditor({ value, onChange, label, disabled, variant = 'full', onValidityChange, labelledBy, describedBy }: JsonEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView>(null)
-  const initialText = value == null ? '' : JSON.stringify(value, null, 2)
+  const initialText = serializeJSON(value)
   const externalRef = useRef(initialText)
   const textRef = useRef(initialText)
   const applyingExternalRef = useRef(false)
   const [error, setError] = useState<string>()
   const emitChange = useEffectEvent((next: unknown) => onChange(next))
   const emitValidity = useEffectEvent((valid: boolean) => onValidityChange?.(valid))
+  const isPreview = variant === 'preview'
 
   useEffect(() => {
+    if (isPreview) {
+      emitValidity(true)
+      return () => emitValidity(true)
+    }
     if (!hostRef.current) return
     const view = new EditorView({
       doc: textRef.current,
       parent: hostRef.current,
-      extensions: [basicSetup, json(), EditorView.lineWrapping, EditorView.contentAttributes.of(labelledBy ? { 'aria-labelledby': labelledBy, ...(describedBy ? { 'aria-describedby': describedBy } : {}) } : { 'aria-label': `${label} JSON 编辑器` }), EditorView.editable.of(!disabled), EditorView.updateListener.of((update) => {
-        if (!update.docChanged) return
-        const text = update.state.doc.toString()
-        textRef.current = text
-        if (applyingExternalRef.current) return
-        try {
-          const parsed = text ? JSON.parse(text) : null
-          externalRef.current = parsed == null ? '' : JSON.stringify(parsed, null, 2)
-          setError(undefined)
-          emitValidity(true)
-          emitChange(parsed)
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : 'JSON 格式无效')
-          emitValidity(false)
-        }
-      })],
+      extensions: [
+        basicSetup,
+        json(),
+        EditorView.lineWrapping,
+        EditorView.contentAttributes.of(
+          labelledBy
+            ? { 'aria-labelledby': labelledBy, ...(describedBy ? { 'aria-describedby': describedBy } : {}) }
+            : { 'aria-label': `${label} JSON 编辑器` },
+        ),
+        EditorView.editable.of(!disabled),
+        EditorView.updateListener.of((update) => {
+          if (!update.docChanged) return
+          const text = update.state.doc.toString()
+          textRef.current = text
+          if (applyingExternalRef.current) return
+          try {
+            const parsed = text ? JSON.parse(text) : null
+            externalRef.current = serializeJSON(parsed)
+            setError(undefined)
+            emitValidity(true)
+            emitChange(parsed)
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : 'JSON 格式无效')
+            emitValidity(false)
+          }
+        }),
+      ],
     })
     viewRef.current = view
-    return () => { view.destroy(); viewRef.current = null }
-  }, [describedBy, disabled, label, labelledBy])
+    emitValidity(true)
+    return () => {
+      view.destroy()
+      viewRef.current = null
+      emitValidity(true)
+    }
+  }, [describedBy, disabled, isPreview, label, labelledBy])
 
   useEffect(() => {
-    const serialized = value == null ? '' : JSON.stringify(value, null, 2)
+    if (isPreview) return
+    const serialized = serializeJSON(value)
     if (serialized === externalRef.current) return
     externalRef.current = serialized
     textRef.current = serialized
@@ -53,9 +90,7 @@ export function JsonEditor({ value, onChange, label, disabled, onValidityChange,
       setError(undefined)
       emitValidity(true)
     }
-  }, [value])
-
-  useEffect(() => () => emitValidity(true), [])
+  }, [isPreview, value])
 
   function format() {
     try {
@@ -65,9 +100,28 @@ export function JsonEditor({ value, onChange, label, disabled, onValidityChange,
     } catch { /* 错误提示已由编辑监听器维护。 */ }
   }
 
-  return <div className="json-editor">
-    <div className="json-editor-actions"><Button size="small" disabled={disabled || Boolean(error)} onClick={format}>格式化 JSON</Button></div>
-    <div ref={hostRef} />
-    {error ? <Alert type="error" showIcon title="JSON 格式无效" description={error} /> : null}
-  </div>
+  if (isPreview) {
+    const text = serializeJSON(value) || 'null'
+    return (
+      <div
+        className="json-editor is-preview is-disabled"
+        role="group"
+        aria-label={labelledBy ? undefined : `${label} JSON 预览`}
+        aria-labelledby={labelledBy}
+        aria-describedby={describedBy}
+      >
+        <pre className="json-editor-preview">{text}</pre>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`json-editor is-full${disabled ? ' is-disabled' : ''}`} role="group" aria-label={labelledBy ? undefined : `${label} JSON 编辑器`} aria-labelledby={labelledBy} aria-describedby={describedBy}>
+      <div className="json-editor-actions">
+        <Button size="small" disabled={disabled || Boolean(error)} onClick={format}>格式化 JSON</Button>
+      </div>
+      <div className="json-editor-host" ref={hostRef} />
+      {error ? <Alert type="error" showIcon title="JSON 格式无效" description={error} /> : null}
+    </div>
+  )
 }

@@ -3,7 +3,7 @@ import type { FieldType } from './api/types'
 export const fieldTypeMeta = {
   single_line_text: { label: '单行文本', description: '标题、名称等简短文字' },
   multi_line_text: { label: '多行文本', description: '摘要、说明等较长纯文本' },
-  rich_text: { label: '富文本', description: '结构化正文内容' },
+  rich_text: { label: '富文本', description: '所见即所得正文内容' },
   integer: { label: '整数', description: '不含小数的数字' },
   decimal: { label: '小数', description: '价格、比例等精确数值' },
   boolean: { label: '布尔值', description: '是或否的开关状态' },

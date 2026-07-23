@@ -737,9 +737,11 @@ func TestListEntriesReturnsDraftContentAndActiveRootFieldDefinitions(t *testing.
 		t.Fatal(err)
 	}
 	models := service.models.(memoryModels)
+	targetModelID := "mdl_target"
 	models.model.Fields = append(models.model.Fields,
 		schema.ContentField{ID: "fld_kind", Key: "kind", DisplayName: "类型", Type: schema.FieldTypeSingleSelect, Constraints: schema.FieldConstraints{EnumOptions: []schema.EnumOption{{Value: "news", Label: "新闻"}}, Filterable: true, Sortable: true}, Status: schema.StatusActive},
 		schema.ContentField{ID: "fld_group", Key: "group", DisplayName: "分组", Type: schema.FieldTypeObject, Status: schema.StatusActive, Children: []schema.ContentField{{ID: "fld_child", Key: "child", DisplayName: "子字段", Type: schema.FieldTypeSingleLineText, Status: schema.StatusActive}, {ID: "fld_old_child", Key: "old_child", Status: schema.StatusArchived}}},
+		schema.ContentField{ID: "fld_related", Key: "related", DisplayName: "关联", Type: schema.FieldTypeSingleRelation, Constraints: schema.FieldConstraints{TargetModelID: &targetModelID}, Status: schema.StatusActive},
 		schema.ContentField{ID: "fld_old", Key: "old", DisplayName: "旧字段", Type: schema.FieldTypeSingleLineText, Status: schema.StatusArchived},
 	)
 	service.models = models
@@ -753,8 +755,11 @@ func TestListEntriesReturnsDraftContentAndActiveRootFieldDefinitions(t *testing.
 	if len(result.Items) != 1 || result.Items[0].ID != created.ID || string(result.Items[0].CurrentDraftContent) != `{"title":"列表标题"}` {
 		t.Fatalf("列表未返回当前草稿内容: %#v", result.Items)
 	}
-	if len(result.Fields) != 3 || result.Fields[0].Key != "title" || result.Fields[1].Key != "kind" || len(result.Fields[1].Constraints.EnumOptions) != 1 || !result.Fields[1].Constraints.Filterable || !result.Fields[1].Constraints.Sortable || len(result.Fields[2].Children) != 1 || result.Fields[2].Children[0].Key != "child" {
+	if len(result.Fields) != 4 || result.Fields[0].Key != "title" || result.Fields[1].Key != "kind" || len(result.Fields[1].Constraints.EnumOptions) != 1 || !result.Fields[1].Constraints.Filterable || !result.Fields[1].Constraints.Sortable || len(result.Fields[2].Children) != 1 || result.Fields[2].Children[0].Key != "child" {
 		t.Fatalf("列表字段定义未按活动根字段裁剪: %#v", result.Fields)
+	}
+	if result.Fields[3].Key != "related" || result.Fields[3].Constraints.TargetModelID == nil || *result.Fields[3].Constraints.TargetModelID != targetModelID {
+		t.Fatalf("关联字段未透出 target_model_id: %#v", result.Fields[3])
 	}
 	if resolver.calls != 1 || result.Items[0].ReferencedAssets["ast_1"].PreviewKind != "image" {
 		t.Fatalf("列表素材引用未一次批量解析: calls=%d items=%#v", resolver.calls, result.Items[0].ReferencedAssets)
@@ -845,6 +850,56 @@ func TestPublishedContentResolvesReferencedAssetsInOneBatch(t *testing.T) {
 	expanded := entry.Expanded["related"].(ExpandedEntry)
 	if len(expanded.ReferencedAssets) != 1 || expanded.ReferencedAssets["ast_target"].ObjectKey != "assets/ast_target/target" {
 		t.Fatalf("展开条目素材字典错误: %#v", expanded.ReferencedAssets)
+	}
+}
+
+func TestPublishedContentHydratesRichTextMediaObjectKeys(t *testing.T) {
+	fields := []schema.ContentField{{ID: "fld_body", Key: "body", Type: schema.FieldTypeRichText, Status: schema.StatusActive}}
+	nestedFields := []schema.ContentField{{
+		ID: "fld_group", Key: "group", Type: schema.FieldTypeObject, Status: schema.StatusActive,
+		Children: []schema.ContentField{{ID: "fld_note", Key: "note", Type: schema.FieldTypeRichText, Status: schema.StatusActive}},
+	}}
+	asset := func(id, key string) PublishedReferencedAsset {
+		return PublishedReferencedAsset{ID: id, ObjectKey: key, Filename: id + ".png", MimeType: "image/png", Size: 10, SHA256: strings.Repeat("0", 64), ETag: "etag"}
+	}
+	resolver := &memoryPublishedAssetResolver{items: map[string]map[string]PublishedReferencedAsset{
+		"rev_root":   {"ast_body": asset("ast_body", "assets/ast_body/body.png")},
+		"rev_nested": {"ast_note": asset("ast_note", "assets/ast_note/note.png")},
+	}}
+	reader := &SQLPublishedContentReader{assets: resolver}
+	entry := PublishedEntry{
+		ModelID: "mdl_root", RevisionID: "rev_root",
+		Content: json.RawMessage(`{"body":"<p>x</p><img data-asset-id=\"ast_body\" alt=\"图\" width=\"100\">"}`),
+		Expanded: map[string]any{
+			"related": ExpandedEntry{
+				ModelID: "mdl_nested", RevisionID: "rev_nested",
+				Content: json.RawMessage(`{"group":{"note":"<audio data-asset-id=\"ast_note\" controls></audio>"}}`),
+			},
+		},
+	}
+	if err := reader.resolvePublishedAssets(context.Background(), []*PublishedEntry{&entry}, map[string][]schema.ContentField{
+		"mdl_root": fields, "mdl_nested": nestedFields,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]string
+	if err := json.Unmarshal(entry.Content, &root); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(root["body"], `data-asset-id="ast_body"`) || !strings.Contains(root["body"], `src="assets/ast_body/body.png"`) {
+		t.Fatalf("发布正文未注入 object_key src: %s", root["body"])
+	}
+	expanded := entry.Expanded["related"].(ExpandedEntry)
+	var nested map[string]json.RawMessage
+	if err := json.Unmarshal(expanded.Content, &nested); err != nil {
+		t.Fatal(err)
+	}
+	var group map[string]string
+	if err := json.Unmarshal(nested["group"], &group); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(group["note"], `data-asset-id="ast_note"`) || !strings.Contains(group["note"], `src="assets/ast_note/note.png"`) {
+		t.Fatalf("嵌套富文本未注入 object_key src: %s", group["note"])
 	}
 }
 
@@ -1020,7 +1075,7 @@ func TestImportPrechecksEveryRichTextMediaKindForSameAsset(t *testing.T) {
 	}
 
 	err := service.ImportDrafts(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", func(yield func(ImportDraft) error) error {
-		return yield(ImportDraft{Content: json.RawMessage(`{"body":{"type":"doc","content":[{"type":"image","attrs":{"asset_id":"ast_shared","alt":""}},{"type":"audio","attrs":{"asset_id":"ast_shared"}}]}}`)})
+		return yield(ImportDraft{Content: json.RawMessage(`{"body":"<img data-asset-id=\"ast_shared\" alt=\"\"><audio data-asset-id=\"ast_shared\" controls></audio>"}`)})
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

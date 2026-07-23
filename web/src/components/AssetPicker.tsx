@@ -1,4 +1,5 @@
-import { Button, Modal, Space, Table, Typography } from 'antd'
+import { Button, Modal, Space, Table, Tooltip, Typography } from 'antd'
+import type { ReactNode } from 'react'
 import { useState } from 'react'
 
 import { adminDownloadUrl, api } from '../api/client'
@@ -15,7 +16,7 @@ function assetUrls(id: string) {
   }
 }
 
-export function AssetPicker({ multiple, value, onChange, disabled, canUpload = false, knownAssets = {}, labelledBy, describedBy, kind, triggerLabel, hideSelection = false, onAssetChosen, open: controlledOpen, onOpenChange }: { multiple: boolean; value: string | string[] | null; onChange: (value: string | string[] | null) => void; disabled?: boolean; canUpload?: boolean; knownAssets?: Record<string, ReferencedAsset>; labelledBy?: string; describedBy?: string; kind?: AssetKind; triggerLabel?: string; hideSelection?: boolean; onAssetChosen?: (asset: Asset) => void; open?: boolean; onOpenChange?: (open: boolean) => void }) {
+export function AssetPicker({ multiple, value, onChange, disabled, canUpload = false, knownAssets = {}, labelledBy, describedBy, kind, triggerLabel, triggerIcon, hideSelection = false, hideTrigger = false, onAssetChosen, open: controlledOpen, onOpenChange }: { multiple: boolean; value: string | string[] | null; onChange: (value: string | string[] | null) => void; disabled?: boolean; canUpload?: boolean; knownAssets?: Record<string, ReferencedAsset>; labelledBy?: string; describedBy?: string; kind?: AssetKind; triggerLabel?: string; triggerIcon?: ReactNode; hideSelection?: boolean; hideTrigger?: boolean; onAssetChosen?: (asset: Asset) => void; open?: boolean; onOpenChange?: (open: boolean) => void }) {
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const setOpen = (next: boolean) => { setInternalOpen(next); onOpenChange?.(next) }
@@ -48,8 +49,13 @@ export function AssetPicker({ multiple, value, onChange, disabled, canUpload = f
     choose(asset)
   }
 
+  const defaultTriggerLabel = triggerLabel ?? (multiple ? '选择素材' : selected.length ? '更换素材' : '选择素材')
+  const triggerButton = triggerIcon
+    ? <Tooltip title={defaultTriggerLabel}><Button type="text" size="small" aria-label={defaultTriggerLabel} aria-labelledby={labelledBy && actionID ? `${labelledBy} ${actionID}` : undefined} aria-describedby={describedBy} icon={triggerIcon} onClick={() => setOpen(true)} disabled={disabled}><span id={actionID} className="visually-hidden">{defaultTriggerLabel}</span></Button></Tooltip>
+    : <Button aria-labelledby={labelledBy && actionID ? `${labelledBy} ${actionID}` : undefined} aria-describedby={describedBy} onClick={() => setOpen(true)} disabled={disabled}><span id={actionID}>{defaultTriggerLabel}</span></Button>
+
   return <div className="asset-picker"><Space wrap>
-    <Button aria-labelledby={labelledBy && actionID ? `${labelledBy} ${actionID}` : undefined} aria-describedby={describedBy} onClick={() => setOpen(true)} disabled={disabled}><span id={actionID}>{triggerLabel ?? (multiple ? '选择素材' : selected.length ? '更换素材' : '选择素材')}</span></Button>
+    {!hideTrigger && triggerButton}
     {!hideSelection && (selected.length ? <Typography.Text type="secondary">已选 {selected.length}{multiple ? ' / 50' : ''}</Typography.Text> : <Typography.Text type="secondary">未选择</Typography.Text>)}
   </Space>
   {!hideSelection && <div className="asset-selection" aria-label="已选素材" aria-describedby={describedBy}>

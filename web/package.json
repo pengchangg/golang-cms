@@ -16,17 +16,14 @@
     "@dnd-kit/core": "6.3.1",
     "@dnd-kit/sortable": "10.0.0",
     "@dnd-kit/utilities": "3.2.2",
-    "@tiptap/core": "3.28.0",
-    "@tiptap/extension-placeholder": "3.28.0",
-    "@tiptap/pm": "3.28.0",
-    "@tiptap/react": "3.28.0",
-    "@tiptap/starter-kit": "3.28.0",
+    "@tinymce/tinymce-react": "6.3.0",
     "antd": "6.5.1",
     "codemirror": "6.0.2",
     "dayjs": "1.11.19",
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "react-router-dom": "7.9.6"
+    "react-router-dom": "7.9.6",
+    "tinymce": "8.3.2"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -269,9 +269,10 @@ type EntryList struct {
 }
 
 type EntryListFieldConstraints struct {
-	EnumOptions []schema.EnumOption `json:"enum_options,omitempty"`
-	Filterable  bool                `json:"filterable"`
-	Sortable    bool                `json:"sortable"`
+	EnumOptions   []schema.EnumOption `json:"enum_options,omitempty"`
+	TargetModelID *string             `json:"target_model_id,omitempty"`
+	Filterable    bool                `json:"filterable"`
+	Sortable      bool                `json:"sortable"`
 }
 
 type EntryListField struct {

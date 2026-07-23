@@ -370,7 +370,156 @@ func (r *SQLPublishedContentReader) resolvePublishedAssets(ctx context.Context, 
 		}
 		item.assign(values)
 	}
+	for _, entry := range entries {
+		if err := hydratePublishedEntryMedia(entry, fieldsByModel); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func hydratePublishedEntryMedia(entry *PublishedEntry, fieldsByModel map[string][]schema.ContentField) error {
+	var err error
+	if entry.Content, err = hydratePublishedContent(entry.Content, fieldsByModel[entry.ModelID], entry.ReferencedAssets); err != nil {
+		return err
+	}
+	for key, value := range entry.Expanded {
+		switch expanded := value.(type) {
+		case ExpandedEntry:
+			item := expanded
+			if item.Content, err = hydratePublishedContent(item.Content, fieldsByModel[item.ModelID], item.ReferencedAssets); err != nil {
+				return err
+			}
+			entry.Expanded[key] = item
+		case []ExpandedEntry:
+			items := append([]ExpandedEntry(nil), expanded...)
+			for i := range items {
+				if items[i].Content, err = hydratePublishedContent(items[i].Content, fieldsByModel[items[i].ModelID], items[i].ReferencedAssets); err != nil {
+					return err
+				}
+			}
+			entry.Expanded[key] = items
+		}
+	}
+	return nil
+}
+
+func hydratePublishedContent(content json.RawMessage, fields []schema.ContentField, assets map[string]PublishedReferencedAsset) (json.RawMessage, error) {
+	if len(content) == 0 || len(fields) == 0 {
+		return content, nil
+	}
+	objectKeys := map[string]string{}
+	for id, asset := range assets {
+		if asset.ObjectKey != "" {
+			objectKeys[id] = asset.ObjectKey
+		}
+	}
+	if len(objectKeys) == 0 {
+		return content, nil
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(content, &source); err != nil {
+		return nil, err
+	}
+	changed := false
+	for _, field := range fields {
+		if field.Status != schema.StatusActive {
+			continue
+		}
+		raw, ok := source[field.Key]
+		if !ok {
+			continue
+		}
+		next, did, err := hydratePublishedFieldValue(raw, field, objectKeys)
+		if err != nil {
+			return nil, err
+		}
+		if did {
+			source[field.Key] = next
+			changed = true
+		}
+	}
+	if !changed {
+		return content, nil
+	}
+	return json.Marshal(source)
+}
+
+func hydratePublishedFieldValue(value json.RawMessage, field schema.ContentField, objectKeys map[string]string) (json.RawMessage, bool, error) {
+	if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return value, false, nil
+	}
+	switch field.Type {
+	case schema.FieldTypeRichText:
+		var htmlValue string
+		if err := json.Unmarshal(value, &htmlValue); err != nil {
+			return nil, false, err
+		}
+		next := hydrateRichTextObjectKeys(htmlValue, objectKeys)
+		if next == htmlValue {
+			return value, false, nil
+		}
+		encoded, err := json.Marshal(next)
+		return encoded, true, err
+	case schema.FieldTypeObject:
+		return hydratePublishedObjectValue(value, field.Children, objectKeys)
+	case schema.FieldTypeRepeatableGroup:
+		var groups []json.RawMessage
+		if err := json.Unmarshal(value, &groups); err != nil {
+			return nil, false, err
+		}
+		changed := false
+		for i, group := range groups {
+			if bytes.Equal(bytes.TrimSpace(group), []byte("null")) {
+				continue
+			}
+			next, did, err := hydratePublishedObjectValue(group, field.Children, objectKeys)
+			if err != nil {
+				return nil, false, err
+			}
+			if did {
+				groups[i] = next
+				changed = true
+			}
+		}
+		if !changed {
+			return value, false, nil
+		}
+		encoded, err := json.Marshal(groups)
+		return encoded, true, err
+	default:
+		return value, false, nil
+	}
+}
+
+func hydratePublishedObjectValue(value json.RawMessage, fields []schema.ContentField, objectKeys map[string]string) (json.RawMessage, bool, error) {
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(value, &source); err != nil {
+		return nil, false, err
+	}
+	changed := false
+	for _, field := range fields {
+		if field.Status != schema.StatusActive {
+			continue
+		}
+		raw, ok := source[field.Key]
+		if !ok {
+			continue
+		}
+		next, did, err := hydratePublishedFieldValue(raw, field, objectKeys)
+		if err != nil {
+			return nil, false, err
+		}
+		if did {
+			source[field.Key] = next
+			changed = true
+		}
+	}
+	if !changed {
+		return value, false, nil
+	}
+	encoded, err := json.Marshal(source)
+	return encoded, true, err
 }
 
 func publishedAssetIDs(content json.RawMessage, fields []schema.ContentField) ([]string, error) {

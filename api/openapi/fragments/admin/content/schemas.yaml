@@ -149,6 +149,10 @@ $defs:
             type: array
             items:
               $ref: ../models/schemas.yaml#/$defs/EnumOption
+          target_model_id:
+            type: string
+            minLength: 1
+            description: 关联目标活动模型 ID；仅 single_relation / multi_relation 有值。
           filterable: { type: boolean }
           sortable: { type: boolean }
       children:

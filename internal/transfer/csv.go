@@ -244,7 +244,9 @@ func decodeCell(cell string, field schema.ContentField) (any, error) {
 			return nil, errors.New("多值字段必须是 JSON array")
 		}
 		return value, nil
-	case schema.FieldTypeRichText, schema.FieldTypeObject:
+	case schema.FieldTypeRichText:
+		return cell, nil
+	case schema.FieldTypeObject:
 		var value map[string]any
 		if err := strictJSON(cell, &value); err != nil {
 			return nil, errors.New("字段必须是 JSON object")
@@ -401,7 +403,7 @@ func encodeCell(value any, field schema.ContentField) (string, error) {
 			return "true", nil
 		}
 		return "false", nil
-	case schema.FieldTypeDecimal, schema.FieldTypeDate, schema.FieldTypeDatetime, schema.FieldTypeSingleSelect, schema.FieldTypeSingleMedia, schema.FieldTypeSingleRelation:
+	case schema.FieldTypeDecimal, schema.FieldTypeDate, schema.FieldTypeDatetime, schema.FieldTypeSingleSelect, schema.FieldTypeSingleMedia, schema.FieldTypeSingleRelation, schema.FieldTypeRichText:
 		return value.(string), nil
 	default:
 		data, err := json.Marshal(value)

@@ -44,11 +44,5 @@ components:
       $ref: ./fragments/content/assets/schemas.yaml#/$defs/SingleMediaValue
     MultiMediaValue:
       $ref: ./fragments/content/assets/schemas.yaml#/$defs/MultiMediaValue
-    RichTextImageNode:
-      $ref: ./fragments/shared/rich-text.yaml#/$defs/RichTextImageNode
-    RichTextAudioNode:
-      $ref: ./fragments/shared/rich-text.yaml#/$defs/RichTextAudioNode
-    RichTextVideoNode:
-      $ref: ./fragments/shared/rich-text.yaml#/$defs/RichTextVideoNode
     RichTextDocument:
       $ref: ./fragments/shared/rich-text.yaml#/$defs/RichTextDocument

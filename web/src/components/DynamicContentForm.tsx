@@ -6,7 +6,9 @@ import type { ContentField, ReferencedAsset } from '../api/types'
 import { ASSETS_ENABLED } from '../config'
 import { fieldTypeMeta } from '../fieldTypes'
 import { AssetPicker } from './AssetPicker'
+import { ComplexFieldShell } from './ComplexFieldShell'
 import { RelationPicker } from './RelationPicker'
+import { richTextPlainText } from './richText'
 
 const JsonEditor = lazy(() => import('./JsonEditor').then((module) => ({ default: module.JsonEditor })))
 const RichTextEditor = lazy(() => import('./RichTextEditor').then((module) => ({ default: module.RichTextEditor })))
@@ -14,6 +16,93 @@ const RichTextEditor = lazy(() => import('./RichTextEditor').then((module) => ({
 function RepeatableGroupEditor({ field, value, onChange, disabled, canSelectAssets, canUploadAssets, referencedAssets, canViewModel, onFieldValidityChange, path, labelledBy, describedBy, modelId, entryId }: { field: ContentField; value: unknown; onChange: (value: Record<string, unknown>[]) => void; disabled: boolean; canSelectAssets: boolean; canUploadAssets: boolean; referencedAssets: Record<string, ReferencedAsset>; canViewModel: (modelId: string) => boolean; onFieldValidityChange?: (path: string, valid: boolean) => void; path: string; labelledBy: string; describedBy: string; modelId?: string; entryId?: string }) {
   const items = Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : []
   return <div className="repeatable-group" role="group" aria-labelledby={labelledBy} aria-describedby={describedBy}><Space direction="vertical" size="middle" style={{ width: '100%' }}>{items.map((item, index) => <Card key={index} size="small" title={`第 ${index + 1} 项`} extra={<Button size="small" danger disabled={disabled} onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}>删除</Button>}><DynamicContentForm fields={field.children} content={item} onChange={(next) => onChange(items.map((current, itemIndex) => itemIndex === index ? next : current))} disabled={disabled} canSelectAssets={canSelectAssets} canUploadAssets={canUploadAssets} referencedAssets={referencedAssets} canViewModel={canViewModel} onFieldValidityChange={onFieldValidityChange} path={`${path}/${index}`} modelId={modelId} entryId={entryId} /></Card>)}</Space><Button className="repeatable-add" disabled={disabled} onClick={() => onChange([...items, {}])}>添加一项</Button></div>
+}
+
+function RichTextFieldControl({ field, value, update, disabled, labelledBy, describedBy, canSelectAssets, canUploadAssets, referencedAssets, modelId, entryId }: {
+  field: ContentField
+  value: unknown
+  update: (key: string, value: unknown) => void
+  disabled: boolean
+  labelledBy: string
+  describedBy: string
+  canSelectAssets: boolean
+  canUploadAssets: boolean
+  referencedAssets: Record<string, ReferencedAsset>
+  modelId?: string
+  entryId?: string
+}) {
+  const summary = richTextPlainText(value)
+  return (
+    <ComplexFieldShell
+      label={field.display_name}
+      disabled={disabled}
+      loadingLabel="正在加载富文本编辑器"
+      preview={<div className="rich-text-preview" aria-labelledby={labelledBy} aria-describedby={describedBy}>{summary || <span className="complex-field-empty">暂无正文</span>}</div>}
+    >
+      {() => (
+        <RichTextEditor
+          label={field.display_name}
+          value={value}
+          onChange={(next) => update(field.key, next)}
+          disabled={disabled}
+          layout="fullscreen"
+          labelledBy={labelledBy}
+          describedBy={describedBy}
+          canSelectAssets={canSelectAssets}
+          canUploadAssets={canUploadAssets}
+          referencedAssets={referencedAssets}
+          modelId={modelId}
+          entryId={entryId}
+        />
+      )}
+    </ComplexFieldShell>
+  )
+}
+
+function JsonFieldControl({ field, value, update, disabled, labelledBy, describedBy, path, onFieldValidityChange }: {
+  field: ContentField
+  value: unknown
+  update: (key: string, value: unknown) => void
+  disabled: boolean
+  labelledBy: string
+  describedBy: string
+  path: string
+  onFieldValidityChange?: (path: string, valid: boolean) => void
+}) {
+  return (
+    <ComplexFieldShell
+      label={field.display_name}
+      disabled={disabled}
+      loadingLabel="正在加载 JSON 编辑器"
+      preview={(
+        <Suspense fallback={<div className="editor-loading">正在加载 JSON 预览</div>}>
+          <JsonEditor
+            label={field.display_name}
+            value={value}
+            onChange={() => undefined}
+            disabled
+            variant="preview"
+            labelledBy={labelledBy}
+            describedBy={describedBy}
+            onValidityChange={(valid) => onFieldValidityChange?.(`${path}/${field.id}`, valid)}
+          />
+        </Suspense>
+      )}
+    >
+      {() => (
+        <JsonEditor
+          label={field.display_name}
+          value={value}
+          onChange={(next) => update(field.key, next)}
+          disabled={disabled}
+          variant="full"
+          labelledBy={labelledBy}
+          describedBy={describedBy}
+          onValidityChange={(valid) => onFieldValidityChange?.(`${path}/${field.id}`, valid)}
+        />
+      )}
+    </ComplexFieldShell>
+  )
 }
 
 export function DynamicContentForm({ fields, content, onChange, disabled = false, canSelectAssets = true, canUploadAssets = false, referencedAssets = {}, canViewModel = () => true, onFieldValidityChange, path = '', modelId, entryId }: { fields: ContentField[]; content: Record<string, unknown>; onChange: (value: Record<string, unknown>) => void; disabled?: boolean; canSelectAssets?: boolean; canUploadAssets?: boolean; referencedAssets?: Record<string, ReferencedAsset>; canViewModel?: (modelId: string) => boolean; onFieldValidityChange?: (path: string, valid: boolean) => void; path?: string; modelId?: string; entryId?: string }) {
@@ -43,9 +132,36 @@ export function DynamicContentForm({ fields, content, onChange, disabled = false
     else if (field.type === 'date' || field.type === 'datetime') control = <DatePicker {...accessibility} showTime={field.type === 'datetime'} value={typeof value === 'string' ? dayjs(value) : null} onChange={(next) => update(field.key, next ? (field.type === 'date' ? next.format('YYYY-MM-DD') : next.toISOString()) : null)} disabled={disabled} />
     else if (field.type === 'single_select') control = <Select {...accessibility} value={typeof value === 'string' ? value : undefined} options={field.constraints.enum_options} fieldNames={{ value: 'value', label: 'label' }} onChange={(next) => update(field.key, next)} disabled={disabled} />
     else if (field.type === 'multi_select') control = <Checkbox.Group {...accessibility} value={Array.isArray(value) ? value as string[] : []} options={(field.constraints.enum_options ?? []).map((item) => ({ label: item.label, value: item.value }))} onChange={(next) => update(field.key, next)} disabled={disabled} />
-    else if (field.type === 'rich_text') control = <Suspense fallback={<div className="editor-loading">正在加载富文本编辑器</div>}><RichTextEditor label={field.display_name} value={value} onChange={(next) => update(field.key, next)} disabled={disabled} labelledBy={labelID} describedBy={describedBy} canSelectAssets={canSelectAssets} canUploadAssets={canUploadAssets} referencedAssets={referencedAssets} modelId={modelId} entryId={entryId} /></Suspense>
-    else if (field.type === 'json') control = <Suspense fallback={<div className="editor-loading">正在加载 JSON 编辑器</div>}><JsonEditor label={field.display_name} value={value} onChange={(next) => update(field.key, next)} disabled={disabled} labelledBy={labelID} describedBy={describedBy} onValidityChange={(valid) => onFieldValidityChange?.(`${path}/${field.id}`, valid)} /></Suspense>
-    else if (field.type === 'object') control = <div role="group" aria-labelledby={labelID} aria-describedby={describedBy}><DynamicContentForm fields={field.children} content={value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}} onChange={(next) => update(field.key, next)} disabled={disabled} canSelectAssets={canSelectAssets} canUploadAssets={canUploadAssets} referencedAssets={referencedAssets} canViewModel={canViewModel} onFieldValidityChange={onFieldValidityChange} path={`${path}/${field.id}`} modelId={modelId} entryId={entryId} /></div>
+    else if (field.type === 'rich_text') {
+      control = (
+        <RichTextFieldControl
+          field={field}
+          value={value}
+          update={update}
+          disabled={disabled}
+          labelledBy={labelID}
+          describedBy={describedBy}
+          canSelectAssets={canSelectAssets}
+          canUploadAssets={canUploadAssets}
+          referencedAssets={referencedAssets}
+          modelId={modelId}
+          entryId={entryId}
+        />
+      )
+    } else if (field.type === 'json') {
+      control = (
+        <JsonFieldControl
+          field={field}
+          value={value}
+          update={update}
+          disabled={disabled}
+          labelledBy={labelID}
+          describedBy={describedBy}
+          path={path}
+          onFieldValidityChange={onFieldValidityChange}
+        />
+      )
+    } else if (field.type === 'object') control = <div role="group" aria-labelledby={labelID} aria-describedby={describedBy}><DynamicContentForm fields={field.children} content={value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}} onChange={(next) => update(field.key, next)} disabled={disabled} canSelectAssets={canSelectAssets} canUploadAssets={canUploadAssets} referencedAssets={referencedAssets} canViewModel={canViewModel} onFieldValidityChange={onFieldValidityChange} path={`${path}/${field.id}`} modelId={modelId} entryId={entryId} /></div>
     else if (field.type === 'repeatable_group') control = <RepeatableGroupEditor field={field} value={value} onChange={(next) => update(field.key, next)} disabled={disabled} canSelectAssets={canSelectAssets} canUploadAssets={canUploadAssets} referencedAssets={referencedAssets} canViewModel={canViewModel} onFieldValidityChange={onFieldValidityChange} path={`${path}/${field.id}`} labelledBy={labelID} describedBy={describedBy} modelId={modelId} entryId={entryId} />
     else control = null
     return <section className="dynamic-field" key={field.id}><div id={labelID}><strong>{field.display_name}</strong>{field.required ? <span className="required-mark">必填</span> : null}</div><Typography.Text id={metaID} type="secondary"><code>{field.key}</code> · {fieldTypeMeta[field.type].label}</Typography.Text>{control}{field.description ? <Typography.Text id={descriptionID} type="secondary">{field.description}</Typography.Text> : null}</section>

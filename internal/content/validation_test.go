@@ -98,57 +98,72 @@ func TestCanonicalUniqueValueIsTypeSafeAndNormalizesDecimals(t *testing.T) {
 	}
 }
 
-func TestValidateRichTextUsesRecursiveWhitelist(t *testing.T) {
+func TestValidateRichTextUsesHTMLWhitelist(t *testing.T) {
 	fields := []schema.ContentField{{Key: "body", Type: schema.FieldTypeRichText, DefaultValue: json.RawMessage("null"), Status: schema.StatusActive}}
-	valid := json.RawMessage(`{"body":{"type":"doc","content":[{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"标题","marks":[{"type":"bold"}]}]},{"type":"paragraph","content":[{"type":"hard_break"}]}]}}`)
-	if _, err := validateContent(valid, fields); err != nil {
+	valid := json.RawMessage(`{"body":"<h2><strong>标题</strong></h2><p><br></p>"}`)
+	content, err := validateContent(valid, fields)
+	if err != nil {
 		t.Fatalf("白名单文档应通过: %v", err)
 	}
-	invalid := json.RawMessage(`{"body":{"type":"doc","content":[{"type":"paragraph","onclick":"run()","content":[{"type":"text","text":"x","marks":[{"type":"link","attrs":{"href":"javascript:run()"}}]}]},{"type":"html","html":"<script>run()</script>"}]}}`)
-	_, err := validateContent(invalid, fields)
-	if err == nil {
-		t.Fatal("HTML、事件和 URL 属性必须被递归拒绝")
+	var object map[string]any
+	if err := json.Unmarshal(content, &object); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := object["body"].(string)
+	if !strings.Contains(body, "<h2>") || !strings.Contains(body, "<strong>") {
+		t.Fatalf("清洗后应保留标题与加粗: %q", body)
+	}
+
+	dirty := json.RawMessage(`{"body":"<p onclick=\"run()\">x<a href=\"javascript:run()\">y</a></p><script>run()</script>"}`)
+	cleaned, err := validateContent(dirty, fields)
+	if err != nil {
+		t.Fatalf("危险标签应被清洗而非整段拒绝: %v", err)
+	}
+	if err := json.Unmarshal(cleaned, &object); err != nil {
+		t.Fatal(err)
+	}
+	body, _ = object["body"].(string)
+	if strings.Contains(body, "script") || strings.Contains(body, "onclick") || strings.Contains(body, "javascript:") {
+		t.Fatalf("危险内容必须被清洗: %q", body)
 	}
 }
 
-func TestValidateRichTextAllowsOnlyAtomicBlockMediaNodes(t *testing.T) {
+func TestValidateRichTextAllowsMediaWithDataAssetID(t *testing.T) {
 	fields := []schema.ContentField{{ID: "fld_body", Key: "body", Type: schema.FieldTypeRichText, Status: schema.StatusActive}}
-	valid := json.RawMessage(`{"body":{"type":"doc","content":[{"type":"image","attrs":{"asset_id":"ast_image","alt":"封面"}},{"type":"audio","attrs":{"asset_id":"ast_audio"}},{"type":"video","attrs":{"asset_id":"ast_video"}}]}}`)
+	valid := json.RawMessage(`{"body":"<img data-asset-id=\"ast_image\" alt=\"封面\" width=\"320\"><audio data-asset-id=\"ast_audio\" controls></audio><video data-asset-id=\"ast_video\" controls></video>"}`)
 	content, err := validateContent(valid, fields)
 	if err != nil {
-		t.Fatalf("合法媒体块应通过: %v", err)
+		t.Fatalf("合法媒体应通过: %v", err)
 	}
 	refs, err := mediaReferences(content, Revision{ID: "rev_1", EntryID: "ent_1", ModelID: "mdl_1"}, fields)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(refs) != 3 || refs[0].AssetID != "ast_image" || refs[0].Kind != "image" || refs[0].JSONPointer != "/body/content/0/attrs/asset_id" || refs[0].Position != 0 || refs[2].JSONPointer != "/body/content/2/attrs/asset_id" {
+	if len(refs) != 3 || refs[0].AssetID != "ast_image" || refs[0].Kind != "image" || refs[0].JSONPointer != "/body/media/0" || refs[0].Position != 0 || refs[2].JSONPointer != "/body/media/2" {
 		t.Fatalf("富文本媒体引用不符合预期: %#v", refs)
 	}
 
-	invalid := json.RawMessage(`{"body":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"image","attrs":{"asset_id":"ast_inline","alt":""}}]},{"type":"image","attrs":{"asset_id":"ast_extra","alt":"","title":"x"},"content":[]},{"type":"audio","attrs":{"asset_id":"ast_audio","alt":"x"}}]}}`)
+	invalid := json.RawMessage(`{"body":"<img data-asset-id=\"ast_extra\"><audio data-asset-id=\"\"></audio>"}`)
 	_, err = validateContent(invalid, fields)
 	assertValidationCodes(t, err, []string{
-		"/content/body/content/0/content/0/type:invalid_value",
-		"/content/body/content/1/attrs/title:unknown_property",
-		"/content/body/content/1/content:unknown_property",
-		"/content/body/content/2/attrs/alt:unknown_property",
+		"/content/body/media/0/@alt:invalid_type",
+		"/content/body/media/1/@data-asset-id:invalid_type",
 	})
 }
 
 func TestValidateRichTextLimitsImageAlt(t *testing.T) {
 	fields := []schema.ContentField{{Key: "body", Type: schema.FieldTypeRichText, Status: schema.StatusActive}}
-	raw, err := json.Marshal(map[string]any{"body": map[string]any{"type": "doc", "content": []any{map[string]any{"type": "image", "attrs": map[string]any{"asset_id": "ast_image", "alt": strings.Repeat("图", 1001)}}}}})
+	raw, err := json.Marshal(map[string]any{"body": `<img data-asset-id="ast_image" alt="` + strings.Repeat("图", 1001) + `">`})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = validateContent(raw, fields)
-	assertValidationCodes(t, err, []string{"/content/body/content/0/attrs/alt:too_long"})
+	assertValidationCodes(t, err, []string{"/content/body/media/0/@alt:too_long"})
 }
 
 func TestRichTextMediaReferencesStayInDraftAndPublishedScans(t *testing.T) {
 	fields := []schema.ContentField{{ID: "fld_body", Key: "body", Type: schema.FieldTypeRichText, Status: schema.StatusActive}}
-	raw := json.RawMessage(`{"body":{"type":"doc","content":[{"type":"blockquote","content":[{"type":"image","attrs":{"asset_id":"ast_1","alt":"说明"}}]}]}}`)
+	raw := json.RawMessage(`{"body":"<blockquote><img data-asset-id=\"ast_1\" alt=\"说明\"></blockquote>"}`)
 	relations, draftRefs := draftIdentifiers(raw, "mdl_1", fields)
 	if len(relations) != 0 || len(draftRefs) != 1 || draftRefs[0].AssetID != "ast_1" || draftRefs[0].Kind != "image" {
 		t.Fatalf("CSV 草稿标识扫描不符合预期: relations=%#v refs=%#v", relations, draftRefs)

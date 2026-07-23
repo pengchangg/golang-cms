@@ -1,74 +1,16 @@
-import { Button, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd'
+import { Button, Input, Select, Space, Table, Tag, Typography } from 'antd'
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { api } from '../api/client'
-import type { ContentEntrySummary, EntryListField, Principal, WorkflowStatus } from '../api/types'
+import type { ContentEntrySummary, Principal, WorkflowStatus } from '../api/types'
 import { hasModelPermission } from '../auth/permissions'
+import { EntryFieldValue } from '../components/EntryFieldValue'
 import { DataState, PageHeader, PendingApiNotice, useApiData } from '../components/Page'
 import { TransferActions } from '../components/TransferActions'
-import { AssetPreview } from '../components/AssetPreview'
 
 const workflowLabels: Record<WorkflowStatus, string> = {
   draft: '草稿', pending_review: '待审核', rejected: '已驳回', published: '已发布', unpublished: '已下线',
-}
-
-function displayValue(value: unknown, field: EntryListField): string {
-  if (value === null || value === undefined || value === '') return '-'
-  const labels = new Map(field.constraints.enum_options?.map((option) => [option.value, option.label]))
-  let text: string
-  if (field.type === 'single_select' && typeof value === 'string') text = labels.get(value) ?? value
-  else if (field.type === 'multi_select' && Array.isArray(value)) text = value.map((item) => typeof item === 'string' ? labels.get(item) ?? item : String(item)).join('、')
-  else if (typeof value === 'boolean') text = value ? '是' : '否'
-  else if (typeof value === 'string' || typeof value === 'number') text = String(value)
-  else text = JSON.stringify(value)
-  return text.length > 80 ? `${text.slice(0, 77)}...` : text
-}
-
-function assetUrls(modelId: string, entryId: string, assetId: string) {
-  const base = `/api/admin/v1/models/${encodeURIComponent(modelId)}/entries/${encodeURIComponent(entryId)}/assets/${encodeURIComponent(assetId)}`
-  return { previewUrl: `${base}/preview`, downloadUrl: `${base}/download` }
-}
-
-function MediaCollection({ value, item, modelId, limit }: { value: unknown; item: ContentEntrySummary; modelId: string; limit?: number }) {
-  const [open, setOpen] = useState(false)
-  const ids = (Array.isArray(value) ? value : typeof value === 'string' ? [value] : []).filter((id): id is string => typeof id === 'string' && id !== '')
-  if (!ids.length) return <span>-</span>
-  const renderAsset = (id: string) => {
-    const asset = item.referenced_assets[id]
-    if (!asset) return <span key={id} className="asset-preview-unavailable" title={`素材 ${id} 的元数据不可用`}>素材不可用</span>
-    const urls = assetUrls(modelId, item.id, asset.id)
-    return <AssetPreview key={id} asset={asset} {...urls} compact />
-  }
-  const visible = limit ? ids.slice(0, limit) : ids
-  return <div className="entry-media-collection">
-    {visible.map(renderAsset)}
-    {limit && ids.length > limit ? <><Button className="entry-media-more" type="link" onClick={() => setOpen(true)}>+{ids.length - limit} 查看全部</Button><Modal title="全部素材" open={open} footer={null} onCancel={() => setOpen(false)} destroyOnHidden><div className="entry-media-modal-list">{ids.map(renderAsset)}</div></Modal></> : null}
-  </div>
-}
-
-function StructuredValue({ value, field, item, modelId }: { value: unknown; field: EntryListField; item: ContentEntrySummary; modelId: string }) {
-  if (field.type === 'single_media' || field.type === 'multi_media') return <MediaCollection value={value} item={item} modelId={modelId} limit={3} />
-  if (field.type === 'object') {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return <span>-</span>
-    const record = value as Record<string, unknown>
-    return <div className="entry-structured-value">{field.children.map((child) => <div className="entry-structured-row" key={child.key}><strong>{child.display_name}</strong><StructuredValue value={record[child.key]} field={child} item={item} modelId={modelId} /></div>)}</div>
-  }
-  if (field.type === 'repeatable_group') {
-    if (!Array.isArray(value) || !value.length) return <span>-</span>
-    return <div className="entry-structured-value">{value.map((group, index) => {
-      const record = group && typeof group === 'object' && !Array.isArray(group) ? group as Record<string, unknown> : {}
-      return <section className="entry-repeatable-item" key={index} aria-label={`${field.display_name}第 ${index + 1} 项`}><small>第 {index + 1} 项</small>{field.children.map((child) => <div className="entry-structured-row" key={child.key}><strong>{child.display_name}</strong><StructuredValue value={record[child.key]} field={child} item={item} modelId={modelId} /></div>)}</section>
-    })}</div>
-  }
-  return <span title={displayValue(value, field)}>{displayValue(value, field)}</span>
-}
-
-function EntryFieldValue({ field, item, modelId }: { field: EntryListField; item: ContentEntrySummary; modelId: string }) {
-  const value = item.current_draft_content[field.key]
-  if (field.type === 'single_media' || field.type === 'multi_media') return <MediaCollection value={value} item={item} modelId={modelId} limit={3} />
-  if (field.type === 'object' || field.type === 'repeatable_group') return <div className="entry-structured-cell"><StructuredValue value={value} field={field} item={item} modelId={modelId} /></div>
-  return <span title={displayValue(value, field)}>{displayValue(value, field)}</span>
 }
 
 export default function EntriesPage({ principal }: { principal: Principal }) {
@@ -86,6 +28,7 @@ export default function EntriesPage({ principal }: { principal: Principal }) {
   const entries = useApiData(() => api.listEntries(modelId, { workflow_status: workflowStatus, filter, relation_filter, sort, cursor, include_total: true }), [modelId, workflowStatus, filter, relation_filter, sort, cursor])
   const canCreate = hasModelPermission(principal, modelId, 'content.create')
   const canReview = hasModelPermission(principal, modelId, 'content.review')
+  const canViewModel = (targetModelId: string) => hasModelPermission(principal, targetModelId, 'content.view')
   const fields = entries.data?.fields ?? []
   const scalarFields = fields.filter((field) => field.constraints.filterable && field.type !== 'single_relation' && field.type !== 'multi_relation')
   const relationFields = fields.filter((field) => field.type === 'single_relation' || field.type === 'multi_relation')
@@ -102,7 +45,7 @@ export default function EntriesPage({ principal }: { principal: Principal }) {
     <Select aria-label="排序" allowClear placeholder="默认排序" value={sort} onChange={(value) => { setSort(value); setCursors([undefined]) }} options={sortableFields.flatMap((field) => [{ value: field.key, label: `${field.display_name}升序` }, { value: `-${field.key}`, label: `${field.display_name}降序` }])} />
   </Space></section>{entries.data?.total !== undefined ? <Typography.Text className="result-count" type="secondary">匹配 {entries.data.total}{entries.data.total_is_estimate ? '+' : ''} 条</Typography.Text> : null}<DataState loading={entries.loading} error={entries.error} empty={!entries.data?.items.length} retry={entries.reload}><Table<ContentEntrySummary> rowKey="id" dataSource={entries.data?.items} pagination={false} scroll={{ x: 'max-content' }} columns={[
     { title: '内容 ID', dataIndex: 'id', render: (value: string) => <Link to={`/content/${modelId}/${value}`}><code>{value}</code></Link> },
-    ...fields.map((field) => ({ title: field.display_name, key: field.key, width: field.type === 'object' || field.type === 'repeatable_group' ? 300 : field.type === 'single_media' || field.type === 'multi_media' ? 280 : 180, render: (_: unknown, item: ContentEntrySummary) => <EntryFieldValue field={field} item={item} modelId={modelId} /> })),
+    ...fields.map((field) => ({ title: field.display_name, key: field.key, width: field.type === 'single_media' || field.type === 'multi_media' ? 280 : 180, render: (_: unknown, item: ContentEntrySummary) => <EntryFieldValue field={field} item={item} modelId={modelId} canViewModel={canViewModel} /> })),
     { title: '工作流', dataIndex: 'workflow_status', render: (value: WorkflowStatus) => <Tag color={value === 'pending_review' ? 'gold' : value === 'published' ? 'green' : value === 'rejected' ? 'red' : 'default'}>{workflowLabels[value]}</Tag> },
     { title: '更新于', dataIndex: 'updated_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
   ]} /></DataState><Space className="pagination-actions"><Button disabled={cursors.length === 1} onClick={() => setCursors((values) => values.slice(0, -1))}>上一页</Button><Button disabled={!entries.data?.next_cursor} onClick={() => entries.data?.next_cursor && setCursors((values) => [...values, entries.data!.next_cursor!])}>下一页</Button></Space></>

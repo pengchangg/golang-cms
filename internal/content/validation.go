@@ -289,12 +289,12 @@ func validateValue(value any, field schema.ContentField, path string, failures *
 			failures.add(path, "out_of_range", "字段值不满足长度约束")
 		}
 	case schema.FieldTypeRichText:
-		document, ok := value.(map[string]any)
+		text, ok := value.(string)
 		if !ok {
-			failures.add(path, "invalid_type", "富文本字段值必须是结构化 object")
-		} else {
-			validateRichTextNode(document, path, "root", failures)
+			failures.add(path, "invalid_type", "富文本字段值必须是 HTML 字符串")
+			return value
 		}
+		return validateRichTextHTML(text, path, failures)
 	case schema.FieldTypeInteger:
 		number, ok := value.(json.Number)
 		if !ok || !integerPattern.MatchString(number.String()) {
@@ -427,157 +427,11 @@ func mediaReferences(content json.RawMessage, revision Revision, fields []schema
 }
 
 func appendRichTextMediaReferences(result *[]MediaReference, value any, revision Revision, fieldID, pointer string) {
-	node, ok := value.(map[string]any)
-	if !ok {
+	text, ok := value.(string)
+	if !ok || text == "" {
 		return
 	}
-	typeName, _ := node["type"].(string)
-	if typeName == "image" || typeName == "audio" || typeName == "video" {
-		attrs, _ := node["attrs"].(map[string]any)
-		assetID, _ := attrs["asset_id"].(string)
-		if assetID != "" {
-			*result = append(*result, MediaReference{RevisionID: revision.ID, EntryID: revision.EntryID, ModelID: revision.ModelID, FieldID: fieldID, AssetID: assetID, JSONPointer: pointer + "/attrs/asset_id", Position: 0, Kind: typeName})
-		}
-		return
-	}
-	children, _ := node["content"].([]any)
-	for i, child := range children {
-		appendRichTextMediaReferences(result, child, revision, fieldID, fmt.Sprintf("%s/content/%d", pointer, i))
-	}
-}
-
-func validateRichTextNode(node map[string]any, path, parent string, failures *validationErrors) {
-	typeName, ok := node["type"].(string)
-	if !ok {
-		failures.add(path+"/type", "invalid_type", "富文本节点 type 必须是字符串")
-		return
-	}
-	allowedChildren := map[string]map[string]bool{
-		"doc":          {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true, "image": true, "audio": true, "video": true},
-		"bullet_list":  {"list_item": true},
-		"ordered_list": {"list_item": true},
-		"list_item":    {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true, "image": true, "audio": true, "video": true},
-		"blockquote":   {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true, "image": true, "audio": true, "video": true},
-		"paragraph":    {"text": true, "hard_break": true},
-		"heading":      {"text": true, "hard_break": true},
-		"code_block":   {"text": true},
-	}
-	if parent == "root" && typeName != "doc" || parent != "root" && !allowedChildren[parent][typeName] {
-		failures.add(path+"/type", "invalid_value", "富文本节点类型不允许出现在当前位置")
-	}
-	allowedProperties := map[string]bool{"type": true}
-	switch typeName {
-	case "doc", "paragraph", "bullet_list", "ordered_list", "list_item", "blockquote", "code_block":
-		allowedProperties["content"] = true
-	case "heading":
-		allowedProperties["content"], allowedProperties["attrs"] = true, true
-	case "text":
-		allowedProperties["text"], allowedProperties["marks"] = true, true
-	case "hard_break":
-	case "image", "audio", "video":
-		allowedProperties["attrs"] = true
-	default:
-		failures.add(path+"/type", "invalid_value", "未知富文本节点类型")
-	}
-	for key := range node {
-		if !allowedProperties[key] {
-			failures.add(path+"/"+escapePointer(key), "unknown_property", "富文本节点包含未允许属性")
-		}
-	}
-	if typeName == "heading" {
-		attrs, ok := node["attrs"].(map[string]any)
-		if !ok || len(attrs) != 1 {
-			failures.add(path+"/attrs", "invalid_type", "heading attrs 只能包含 level")
-		} else if level, ok := attrs["level"].(json.Number); !ok || !map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true, "6": true}[level.String()] {
-			failures.add(path+"/attrs/level", "invalid_value", "heading level 必须是 1 至 6 的整数")
-		}
-	}
-	if typeName == "image" || typeName == "audio" || typeName == "video" {
-		validateRichTextMediaAttrs(node["attrs"], path+"/attrs", typeName, failures)
-		return
-	}
-	if typeName == "text" {
-		if _, ok := node["text"].(string); !ok {
-			failures.add(path+"/text", "invalid_type", "text 节点必须包含字符串 text")
-		}
-		validateRichTextMarks(node["marks"], path+"/marks", failures)
-		return
-	}
-	if typeName == "hard_break" {
-		return
-	}
-	children, ok := node["content"].([]any)
-	if !ok {
-		failures.add(path+"/content", "invalid_type", "富文本容器节点必须包含 content 数组")
-		return
-	}
-	for i, child := range children {
-		childPath := fmt.Sprintf("%s/content/%d", path, i)
-		object, ok := child.(map[string]any)
-		if !ok {
-			failures.add(childPath, "invalid_type", "富文本子节点必须是 object")
-			continue
-		}
-		validateRichTextNode(object, childPath, typeName, failures)
-	}
-}
-
-func validateRichTextMediaAttrs(value any, path, kind string, failures *validationErrors) {
-	attrs, ok := value.(map[string]any)
-	if !ok {
-		failures.add(path, "invalid_type", "媒体节点 attrs 必须是 object")
-		return
-	}
-	allowed := map[string]bool{"asset_id": true}
-	if kind == "image" {
-		allowed["alt"] = true
-	}
-	for key := range attrs {
-		if !allowed[key] {
-			failures.add(path+"/"+escapePointer(key), "unknown_property", "媒体节点 attrs 包含未允许属性")
-		}
-	}
-	if assetID, ok := attrs["asset_id"].(string); !ok || assetID == "" {
-		failures.add(path+"/asset_id", "invalid_type", "媒体节点 asset_id 必须是非空字符串")
-	}
-	if kind == "image" {
-		if alt, ok := attrs["alt"].(string); !ok {
-			failures.add(path+"/alt", "invalid_type", "image alt 必须是字符串")
-		} else if utf8.RuneCountInString(alt) > 1000 {
-			failures.add(path+"/alt", "too_long", "image alt 最多 1000 个字符")
-		}
-	}
-}
-
-func validateRichTextMarks(value any, path string, failures *validationErrors) {
-	if value == nil {
-		return
-	}
-	marks, ok := value.([]any)
-	if !ok {
-		failures.add(path, "invalid_type", "marks 必须是数组")
-		return
-	}
-	allowed := map[string]bool{"bold": true, "italic": true, "underline": true, "strike": true, "code": true}
-	seen := map[string]bool{}
-	for i, item := range marks {
-		markPath := fmt.Sprintf("%s/%d", path, i)
-		mark, ok := item.(map[string]any)
-		if !ok {
-			failures.add(markPath, "invalid_type", "mark 必须是 object")
-			continue
-		}
-		if len(mark) != 1 {
-			failures.add(markPath, "unknown_property", "mark 只能包含 type")
-		}
-		typeName, ok := mark["type"].(string)
-		if !ok || !allowed[typeName] {
-			failures.add(markPath+"/type", "invalid_value", "未知富文本 mark 类型")
-		} else if seen[typeName] {
-			failures.add(markPath+"/type", "duplicate", "mark 不可重复")
-		}
-		seen[typeName] = true
-	}
+	appendRichTextHTMLMediaReferences(result, text, revision, fieldID, pointer)
 }
 
 func validateNumber(value string, field schema.ContentField, path string, failures *validationErrors) {

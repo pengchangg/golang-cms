@@ -184,7 +184,8 @@ describe('工作流页面行为', () => {
     render(<MemoryRouter initialEntries={['/content/mdl_1']}><Routes><Route path="/content/:modelId" element={<EntriesPage principal={principal([], ['content.view'])} />} /></Routes></MemoryRouter>)
     expect(await screen.findByText('旧标题')).toBeVisible()
     expect(screen.getByText('新闻')).toBeVisible()
-    expect(screen.getByText(`${JSON.stringify(details).slice(0, 77)}...`)).toBeVisible()
+    expect(screen.getByRole('button', { name: (accessibleName) => accessibleName === '预览' })).toBeVisible()
+    expect(screen.queryByText(`${JSON.stringify(details).slice(0, 77)}...`)).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: '标题' })).toBeVisible()
     const fieldSelect = screen.getByRole('combobox', { name: '过滤字段' })
     await userEvent.click(fieldSelect)
@@ -196,7 +197,7 @@ describe('工作流页面行为', () => {
     await waitFor(() => expect(listEntries).toHaveBeenLastCalledWith('mdl_1', expect.objectContaining({ cursor: 'entries_2' })))
   })
 
-  it('内容列表递归展示根媒体和 object/repeatable 嵌套素材且不请求素材详情', async () => {
+  it('内容列表对 object/repeatable 使用预览弹窗展示嵌套素材且不请求素材详情', async () => {
     const media = (id: string, filename: string) => ({ id, filename, mime_type: 'image/png', size: 100, status: 'available' as const, preview_kind: 'image' as const })
     const mediaField = (key: string, display_name: string) => ({ key, display_name, type: 'single_media' as const, constraints: { filterable: false, sortable: false }, children: [] })
     const fields = [
@@ -208,19 +209,76 @@ describe('工作流页面行为', () => {
     const referenced_assets = Object.fromEntries(['cover', 'one', 'two', 'three', 'four', 'poster', 'nested'].map((id) => [id, media(id, `${id}.png`)]))
     vi.spyOn(api, 'listEntries').mockResolvedValue({ items: [{ ...entry, current_draft_content: { cover: 'cover', gallery: ['one', 'two', 'three', 'four'], details: { poster: ['one', 'two', 'three', 'four'] }, sections: [{ illustration: 'nested' }] }, referenced_assets }], fields, next_cursor: null })
     const getAsset = vi.spyOn(api, 'getAsset')
+    const fieldPreview = () => screen.getAllByRole('button', { name: (accessibleName) => accessibleName === '预览' })
     render(<MemoryRouter initialEntries={['/content/mdl_1']}><Routes><Route path="/content/:modelId" element={<EntriesPage principal={principal([], ['content.view'])} />} /></Routes></MemoryRouter>)
 
     expect(await screen.findByText('cover.png')).toBeVisible()
     expect(screen.getAllByText('one.png').length).toBeGreaterThan(0)
-    expect(screen.getByText('nested.png')).toBeVisible()
+    expect(screen.queryByText('nested.png')).not.toBeInTheDocument()
+    expect(fieldPreview()).toHaveLength(2)
     const more = screen.getAllByText('+1 查看全部')
-    expect(more).toHaveLength(2)
+    expect(more).toHaveLength(1)
     expect(screen.getByText('cover.png')).toHaveAttribute('title', '预览 cover.png')
     expect(document.querySelector('img[src="/api/admin/v1/models/mdl_1/entries/ent_1/assets/cover/preview"]')).toBeInTheDocument()
     expect(getAsset).not.toHaveBeenCalled()
 
     await userEvent.click(more[0])
     expect(screen.getAllByText('four.png').length).toBeGreaterThan(0)
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await userEvent.click(fieldPreview()[0])
+    expect(await screen.findByText('海报')).toBeInTheDocument()
+    expect(screen.getAllByText('one.png').length).toBeGreaterThan(1)
+    expect(getAsset).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await userEvent.click(fieldPreview()[1])
+    expect(await screen.findByText('nested.png')).toBeInTheDocument()
+    expect(getAsset).not.toHaveBeenCalled()
+  })
+
+  it('内容列表富文本与关联字段不直渲，预览弹窗展示内容', async () => {
+    const fields = [
+      { key: 'body', display_name: '正文', type: 'rich_text' as const, constraints: { filterable: false, sortable: false }, children: [] },
+      { key: 'author', display_name: '作者', type: 'single_relation' as const, constraints: { filterable: false, sortable: false, target_model_id: 'mdl_author' }, children: [] },
+    ]
+    const listedEntry = { ...entry, current_draft_content: { body: '<p>列表不应直渲这段 HTML</p>', author: 'ent_author' } }
+    vi.spyOn(api, 'listEntries').mockResolvedValue({ items: [listedEntry], fields, next_cursor: null })
+    const authorField = { id: 'fld_name', key: 'name', display_name: '姓名', description: '', type: 'single_line_text' as const, required: true, default_value: null, constraints: {}, children: [], status: 'active' as const, created_at: now, updated_at: now }
+    const authorModel = { id: 'mdl_author', key: 'authors', display_name: '作者', description: '', status: 'active' as const, fields: [authorField], created_at: now, updated_at: now }
+    const authorEntry = {
+      ...entry,
+      id: 'ent_author',
+      model_id: 'mdl_author',
+      current_draft_content: { name: '张三' },
+      current_draft_revision: { ...entry.current_draft_revision, entry_id: 'ent_author', content: { name: '张三' } },
+    }
+    const getModel = vi.spyOn(api, 'getModel').mockResolvedValue(authorModel)
+    const getEntry = vi.spyOn(api, 'getEntry').mockResolvedValue(authorEntry)
+    const value: Principal = {
+      user_id: 'usr_2', display_name: '审核人', email: null, auth_method: 'sms', is_emergency_admin: false, has_high_risk_role: false,
+      system_permissions: [],
+      model_permissions: [
+        { model_id: 'mdl_1', permissions: ['content.view'] },
+        { model_id: 'mdl_author', permissions: ['content.view'] },
+      ],
+      config_namespace_permissions: [],
+    }
+    const fieldPreview = () => screen.getAllByRole('button', { name: (accessibleName) => accessibleName === '预览' })
+    render(<MemoryRouter initialEntries={['/content/mdl_1']}><Routes><Route path="/content/:modelId" element={<EntriesPage principal={value} />} /></Routes></MemoryRouter>)
+
+    expect(await screen.findAllByRole('button', { name: (accessibleName) => accessibleName === '预览' })).toHaveLength(2)
+    expect(screen.queryByText('列表不应直渲这段 HTML')).not.toBeInTheDocument()
+    expect(screen.queryByText('ent_author')).not.toBeInTheDocument()
+
+    await userEvent.click(fieldPreview()[0])
+    await waitFor(() => expect(document.querySelector('.entry-rich-text-preview')).toContainHTML('<p>列表不应直渲这段 HTML</p>'))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await userEvent.click(fieldPreview()[1])
+    expect(await screen.findByText('张三')).toBeInTheDocument()
+    expect(getModel).toHaveBeenCalledWith('mdl_author')
+    expect(getEntry).toHaveBeenCalledWith('mdl_author', 'ent_author')
   })
 
   it('引用素材元数据缺失时显示不可用占位', async () => {
@@ -247,6 +305,7 @@ describe('工作流页面行为', () => {
       .mockResolvedValueOnce({ items: [{ id: 'evt_1', entry_id: entry.id, revision_id: 'rev_1', type: 'submitted', from_status: 'draft', to_status: 'pending_review', actor_id: 'usr_1', reason: null, occurred_at: now }], next_cursor: 'events_2' })
       .mockResolvedValueOnce({ items: [], next_cursor: null })
     renderEntry(principal(['models.view'], ['content.view']))
+    await userEvent.click(await screen.findByRole('button', { name: '版本事件' }))
     await userEvent.click(await screen.findByRole('button', { name: '下一页事件' }))
     await waitFor(() => expect(listEvents).toHaveBeenLastCalledWith('mdl_1', 'ent_1', 'events_2'))
   })

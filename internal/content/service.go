@@ -156,7 +156,7 @@ func (s *Service) ListEntries(ctx context.Context, principal identity.Principal,
 }
 
 func entryListField(field schema.ContentField) EntryListField {
-	result := EntryListField{Key: field.Key, DisplayName: field.DisplayName, Type: field.Type, Constraints: EntryListFieldConstraints{EnumOptions: field.Constraints.EnumOptions, Filterable: field.Constraints.Filterable, Sortable: field.Constraints.Sortable}, Children: []EntryListField{}}
+	result := EntryListField{Key: field.Key, DisplayName: field.DisplayName, Type: field.Type, Constraints: EntryListFieldConstraints{EnumOptions: field.Constraints.EnumOptions, TargetModelID: field.Constraints.TargetModelID, Filterable: field.Constraints.Filterable, Sortable: field.Constraints.Sortable}, Children: []EntryListField{}}
 	for _, child := range field.Children {
 		if child.Status == schema.StatusActive {
 			result.Children = append(result.Children, entryListField(child))

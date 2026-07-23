@@ -176,7 +176,7 @@ export interface EntryListQuery {
 }
 export interface EntryListField {
   key: string; display_name: string; type: FieldType
-  constraints: Pick<FieldConstraints, 'enum_options' | 'filterable' | 'sortable'>
+  constraints: Pick<FieldConstraints, 'enum_options' | 'filterable' | 'sortable' | 'target_model_id'>
   children: EntryListField[]
 }
 export interface EntryListResponse extends CursorResponse<ContentEntrySummary> {
