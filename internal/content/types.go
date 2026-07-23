@@ -86,6 +86,20 @@ type ReferencedAssetResolver interface {
 	ResolveReferencedAssets(context.Context, []string) (map[string]map[string]ReferencedAsset, error)
 }
 
+type PublishedReferencedAsset struct {
+	ID        string `json:"id"`
+	ObjectKey string `json:"object_key"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mime_type"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+	ETag      string `json:"etag"`
+}
+
+type PublishedAssetResolver interface {
+	ResolvePublishedAssets(context.Context, []string) (map[string]map[string]PublishedReferencedAsset, error)
+}
+
 type Entry struct {
 	EntrySummary
 	CurrentDraftRevision     Revision  `json:"current_draft_revision"`
@@ -170,25 +184,27 @@ type PublishedField struct {
 }
 
 type PublishedEntry struct {
-	ID             string          `json:"id"`
-	ModelID        string          `json:"model_id"`
-	ModelKey       string          `json:"model_key"`
-	RevisionID     string          `json:"revision_id"`
-	RevisionNumber uint            `json:"revision_number"`
-	Content        json.RawMessage `json:"content"`
-	Expanded       map[string]any  `json:"expanded"`
-	PublishedAt    time.Time       `json:"published_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
+	ID               string                              `json:"id"`
+	ModelID          string                              `json:"model_id"`
+	ModelKey         string                              `json:"model_key"`
+	RevisionID       string                              `json:"revision_id"`
+	RevisionNumber   uint                                `json:"revision_number"`
+	Content          json.RawMessage                     `json:"content"`
+	Expanded         map[string]any                      `json:"expanded"`
+	ReferencedAssets map[string]PublishedReferencedAsset `json:"referenced_assets"`
+	PublishedAt      time.Time                           `json:"published_at"`
+	UpdatedAt        time.Time                           `json:"updated_at"`
 }
 
 type ExpandedEntry struct {
-	ID          string          `json:"id"`
-	ModelID     string          `json:"model_id"`
-	ModelKey    string          `json:"model_key"`
-	RevisionID  string          `json:"revision_id"`
-	Content     json.RawMessage `json:"content"`
-	PublishedAt time.Time       `json:"published_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	ID               string                              `json:"id"`
+	ModelID          string                              `json:"model_id"`
+	ModelKey         string                              `json:"model_key"`
+	RevisionID       string                              `json:"revision_id"`
+	Content          json.RawMessage                     `json:"content"`
+	ReferencedAssets map[string]PublishedReferencedAsset `json:"referenced_assets"`
+	PublishedAt      time.Time                           `json:"published_at"`
+	UpdatedAt        time.Time                           `json:"updated_at"`
 }
 
 type PublishedFilter struct {

@@ -145,6 +145,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	roleService := permission.NewService(permission.Dependencies{DB: db, Transactor: securityTransactor, Authorizer: authorizer, Audit: auditWriter, Users: userService, Models: modelAdapter})
 	var media content.MediaReferenceManager
 	var assetResolver content.ReferencedAssetResolver
+	var publishedAssetResolver content.PublishedAssetResolver
 	var assetService *asset.Service
 	var objectStore *asset.S3Store
 	if cfg.AssetsEnabled {
@@ -157,6 +158,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		}
 		media = integration.MediaReferenceManager{Manager: asset.SQLReferenceManager{}}
 		assetResolver = integration.ReferencedAssetResolver{DB: db}
+		publishedAssetResolver = integration.ReferencedAssetResolver{DB: db}
 		assetService, err = asset.NewService(asset.Dependencies{DB: db, Transactor: transactor, Repository: asset.SQLRepository{}, Store: objectStore, Audit: auditWriter, Config: asset.Config{AllowedMimeTypes: cfg.AssetMimeTypes, MaxSize: cfg.AssetMaxSize, UploadTTL: cfg.S3UploadTTL, DownloadTTL: cfg.S3DownloadTTL}})
 		if err != nil {
 			return fmt.Errorf("初始化素材服务: %w", err)
@@ -166,7 +168,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		DB: db, Transactor: transactor, Repository: content.NewRepository(), ModelRepository: schemaRepository, Audit: auditWriter,
 		Media: media, Assets: assetResolver,
 	})
-	publishedReader := content.NewPublishedContentReader(db, schemaRepository)
+	publishedReader := content.NewPublishedContentReader(db, schemaRepository, publishedAssetResolver)
 	clientService := client.NewService(client.Dependencies{
 		DB: db, Transactor: transactor, Repository: client.NewRepository(), Authorizer: authorizer, Audit: auditWriter,
 	})

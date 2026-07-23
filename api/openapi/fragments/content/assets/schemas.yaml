@@ -6,6 +6,27 @@ $defs:
     type: string
     minLength: 1
     description: 内容媒体值中的不透明素材 ID；客户端通过素材路由下载。
+  PublishedReferencedAsset:
+    type: object
+    additionalProperties: false
+    required: [id, object_key, filename, mime_type, size, sha256, etag]
+    properties:
+      id:
+        $ref: "#/$defs/AssetID"
+      object_key:
+        type: string
+        pattern: "^assets/ast_[a-f0-9]{32}/[a-f0-9]{32}$"
+        description: 已发布素材在 S3 兼容对象存储中的稳定对象 Key，供受信任的发布流水线映射或推送 CDN；不是可直接访问的 URL，不包含 Bucket、Endpoint 或凭据。
+      filename: { type: string, minLength: 1, maxLength: 255 }
+      mime_type: { type: string, minLength: 1, maxLength: 255 }
+      size: { type: integer, minimum: 1, maximum: 104857600 }
+      sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+      etag: { type: string, minLength: 1 }
+  PublishedReferencedAssets:
+    type: object
+    description: 当前发布 Revision 的活动媒体字段所引用素材，以素材 ID 为键；同一素材只出现一次。
+    additionalProperties:
+      $ref: "#/$defs/PublishedReferencedAsset"
   SingleMediaValue:
     description: single_media 字段值；缺省或 null 表示无素材。
     oneOf:

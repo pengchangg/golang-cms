@@ -105,7 +105,7 @@ $defs:
   ExpandedEntry:
     type: object
     additionalProperties: false
-    required: [id, model_id, model_key, revision_id, content, published_at, updated_at]
+    required: [id, model_id, model_key, revision_id, content, referenced_assets, published_at, updated_at]
     properties:
       id: { type: string, minLength: 1 }
       model_id: { type: string, minLength: 1 }
@@ -113,6 +113,8 @@ $defs:
       revision_id: { type: string, minLength: 1 }
       content:
         $ref: "#/$defs/DynamicContent"
+      referenced_assets:
+        $ref: ./assets/schemas.yaml#/$defs/PublishedReferencedAssets
       published_at: { type: string, format: date-time }
       updated_at: { type: string, format: date-time }
   ExpandedRelations:
@@ -128,7 +130,7 @@ $defs:
     type: object
     additionalProperties: false
     required:
-      [id, model_id, model_key, revision_id, revision_number, content, expanded, published_at, updated_at]
+      [id, model_id, model_key, revision_id, revision_number, content, expanded, referenced_assets, published_at, updated_at]
     properties:
       id: { type: string, minLength: 1 }
       model_id: { type: string, minLength: 1 }
@@ -139,6 +141,8 @@ $defs:
         $ref: "#/$defs/DynamicContent"
       expanded:
         $ref: "#/$defs/ExpandedRelations"
+      referenced_assets:
+        $ref: ./assets/schemas.yaml#/$defs/PublishedReferencedAssets
       published_at: { type: string, format: date-time }
       updated_at:
         type: string

@@ -257,7 +257,30 @@ curl --fail-with-body \
 
 ## 7. 素材下载
 
-内容中的媒体字段保存素材 ID。素材功能启用时，可通过以下端点取得短时签名下载地址：
+内容中的媒体字段保存素材 ID。每个发布条目及展开条目的 `referenced_assets` 以素材 ID 为键，返回当前活动媒体字段实际引用的素材：
+
+```json
+{
+  "content": {
+    "cover": "ast_0123456789abcdef0123456789abcdef"
+  },
+  "referenced_assets": {
+    "ast_0123456789abcdef0123456789abcdef": {
+      "id": "ast_0123456789abcdef0123456789abcdef",
+      "object_key": "assets/ast_0123456789abcdef0123456789abcdef/0123456789abcdef0123456789abcdef",
+      "filename": "cover.png",
+      "mime_type": "image/png",
+      "size": 123456,
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "etag": "对象存储返回的值"
+    }
+  }
+}
+```
+
+`object_key` 是供受信任发布流水线映射或推送 CDN 的稳定对象 Key，不是可直接访问的 URL，不包含 Bucket、Endpoint 或访问凭据。不要把它拼接到未经约定的对象存储地址。
+
+素材功能启用时，也可通过以下端点取得短时签名下载地址：
 
 ```bash
 ASSET_ID='ast_xxx'

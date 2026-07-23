@@ -320,7 +320,14 @@ func TestContentHTTPFourGETQueryBearerETagAnd304(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := content.PublishedModel{ID: "model-a", Key: "articles", DisplayName: "Articles", Description: "", UpdatedAt: service.now(), Fields: []content.PublishedField{}}
-	entry := content.PublishedEntry{ID: "entry-1", ModelID: "model-a", ModelKey: "articles", RevisionID: "revision-1", RevisionNumber: 1, Content: json.RawMessage(`{"z":1,"a":2}`), Expanded: map[string]any{}, PublishedAt: service.now(), UpdatedAt: service.now()}
+	entry := content.PublishedEntry{
+		ID: "entry-1", ModelID: "model-a", ModelKey: "articles", RevisionID: "revision-1", RevisionNumber: 1,
+		Content: json.RawMessage(`{"z":1,"a":2,"cover":"ast_0123456789abcdef0123456789abcdef"}`), Expanded: map[string]any{},
+		ReferencedAssets: map[string]content.PublishedReferencedAsset{
+			"ast_0123456789abcdef0123456789abcdef": {ID: "ast_0123456789abcdef0123456789abcdef", ObjectKey: "assets/ast_0123456789abcdef0123456789abcdef/0123456789abcdef0123456789abcdef", Filename: "cover.png", MimeType: "image/png", Size: 10, SHA256: strings.Repeat("0", 64), ETag: "etag"},
+		},
+		PublishedAt: service.now(), UpdatedAt: service.now(),
+	}
 	reader := &fakeReader{models: []content.PublishedModel{model}, entry: entry}
 	mux := http.NewServeMux()
 	NewContentHandler(service, reader).RegisterRoutes(mux)
@@ -333,6 +340,9 @@ func TestContentHTTPFourGETQueryBearerETagAnd304(t *testing.T) {
 		handler.ServeHTTP(response, request)
 		if response.Code != http.StatusOK || response.Header().Get("ETag") == "" || response.Header().Get("Cache-Control") != "private, no-cache" {
 			t.Fatalf("%s status=%d headers=%v body=%s", path, response.Code, response.Header(), response.Body.String())
+		}
+		if strings.Contains(path, "/entries") && !strings.Contains(response.Body.String(), `"object_key":"assets/ast_0123456789abcdef0123456789abcdef/0123456789abcdef0123456789abcdef"`) {
+			t.Fatalf("%s 未返回发布素材 object_key: %s", path, response.Body.String())
 		}
 		etag := response.Header().Get("ETag")
 		conditional := httptest.NewRequest(http.MethodGet, path, nil)

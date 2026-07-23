@@ -32,6 +32,10 @@ components:
       $ref: ./fragments/shared/error.yaml#/$defs/ErrorResponse
     AssetID:
       $ref: ./fragments/content/assets/schemas.yaml#/$defs/AssetID
+    PublishedReferencedAsset:
+      $ref: ./fragments/content/assets/schemas.yaml#/$defs/PublishedReferencedAsset
+    PublishedReferencedAssets:
+      $ref: ./fragments/content/assets/schemas.yaml#/$defs/PublishedReferencedAssets
     SingleMediaValue:
       $ref: ./fragments/content/assets/schemas.yaml#/$defs/SingleMediaValue
     MultiMediaValue:

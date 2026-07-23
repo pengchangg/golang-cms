@@ -20,10 +20,11 @@ import (
 type SQLPublishedContentReader struct {
 	db     database.Querier
 	models schema.Repository
+	assets PublishedAssetResolver
 }
 
-func NewPublishedContentReader(db database.Querier, models schema.Repository) *SQLPublishedContentReader {
-	return &SQLPublishedContentReader{db: db, models: models}
+func NewPublishedContentReader(db database.Querier, models schema.Repository, assets PublishedAssetResolver) *SQLPublishedContentReader {
+	return &SQLPublishedContentReader{db: db, models: models, assets: assets}
 }
 
 var _ PublishedContentReader = (*SQLPublishedContentReader)(nil)
@@ -137,6 +138,9 @@ func (r *SQLPublishedContentReader) GetPublishedEntry(ctx context.Context, model
 		return PublishedEntry{}, publishedStorageError(ctx, "裁剪已发布内容", err)
 	}
 	if err = r.expandEntries(ctx, []*PublishedEntry{&entry}, model.Fields, expand, normalizedScope(allowedModelIDs)); err != nil {
+		return PublishedEntry{}, err
+	}
+	if err = r.resolvePublishedAssets(ctx, []*PublishedEntry{&entry}, map[string][]schema.ContentField{model.ID: model.Fields}); err != nil {
 		return PublishedEntry{}, err
 	}
 	return entry, nil
@@ -280,7 +284,131 @@ func (r *SQLPublishedContentReader) ListPublishedEntries(ctx context.Context, mo
 	if err = r.expandEntries(ctx, pointers, model.Fields, query.Expand, normalizedScope(allowedModelIDs)); err != nil {
 		return PublishedEntryPage{}, err
 	}
+	if err = r.resolvePublishedAssets(ctx, pointers, map[string][]schema.ContentField{model.ID: model.Fields}); err != nil {
+		return PublishedEntryPage{}, err
+	}
 	return result, nil
+}
+
+func (r *SQLPublishedContentReader) resolvePublishedAssets(ctx context.Context, entries []*PublishedEntry, fieldsByModel map[string][]schema.ContentField) error {
+	type target struct {
+		revisionID string
+		modelID    string
+		content    json.RawMessage
+		assign     func(map[string]PublishedReferencedAsset)
+	}
+	targets := []target{}
+	for _, entry := range entries {
+		entry.ReferencedAssets = map[string]PublishedReferencedAsset{}
+		targets = append(targets, target{entry.RevisionID, entry.ModelID, entry.Content, func(values map[string]PublishedReferencedAsset) { entry.ReferencedAssets = values }})
+		for key, value := range entry.Expanded {
+			switch expanded := value.(type) {
+			case ExpandedEntry:
+				item := expanded
+				targets = append(targets, target{item.RevisionID, item.ModelID, item.Content, func(values map[string]PublishedReferencedAsset) {
+					item.ReferencedAssets = values
+					entry.Expanded[key] = item
+				}})
+			case []ExpandedEntry:
+				items := append([]ExpandedEntry(nil), expanded...)
+				for i := range items {
+					index := i
+					item := items[i]
+					targets = append(targets, target{item.RevisionID, item.ModelID, item.Content, func(values map[string]PublishedReferencedAsset) {
+						items[index].ReferencedAssets = values
+						entry.Expanded[key] = items
+					}})
+				}
+			}
+		}
+	}
+	for _, item := range targets {
+		item.assign(map[string]PublishedReferencedAsset{})
+	}
+	if r.assets == nil {
+		return nil
+	}
+	for _, item := range targets {
+		if _, ok := fieldsByModel[item.modelID]; ok {
+			continue
+		}
+		model, err := r.models.GetModel(ctx, r.db, item.modelID)
+		if err != nil {
+			return err
+		}
+		fieldsByModel[item.modelID] = model.Fields
+	}
+	revisionIDs := make([]string, 0, len(targets))
+	seen := map[string]struct{}{}
+	for _, item := range targets {
+		if _, ok := seen[item.revisionID]; !ok {
+			seen[item.revisionID] = struct{}{}
+			revisionIDs = append(revisionIDs, item.revisionID)
+		}
+	}
+	resolved, err := r.assets.ResolvePublishedAssets(ctx, revisionIDs)
+	if err != nil {
+		return publishedStorageError(ctx, "批量查询发布引用素材", err)
+	}
+	for _, item := range targets {
+		assetIDs, err := publishedAssetIDs(item.content, fieldsByModel[item.modelID])
+		if err != nil {
+			return publishedStorageError(ctx, "解析发布引用素材", err)
+		}
+		values := map[string]PublishedReferencedAsset{}
+		for _, assetID := range assetIDs {
+			if value, ok := resolved[item.revisionID][assetID]; ok {
+				values[assetID] = value
+			}
+		}
+		item.assign(values)
+	}
+	return nil
+}
+
+func publishedAssetIDs(content json.RawMessage, fields []schema.ContentField) ([]string, error) {
+	var object map[string]any
+	if err := json.Unmarshal(content, &object); err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	var walk func(map[string]any, []schema.ContentField)
+	walk = func(value map[string]any, fields []schema.ContentField) {
+		for _, field := range fields {
+			item, exists := value[field.Key]
+			if !exists || item == nil || field.Status != schema.StatusActive {
+				continue
+			}
+			switch field.Type {
+			case schema.FieldTypeSingleMedia:
+				if id, ok := item.(string); ok {
+					ids = append(ids, id)
+				}
+			case schema.FieldTypeMultiMedia:
+				if items, ok := item.([]any); ok {
+					for _, value := range items {
+						if id, ok := value.(string); ok {
+							ids = append(ids, id)
+						}
+					}
+				}
+			case schema.FieldTypeObject:
+				if child, ok := item.(map[string]any); ok {
+					walk(child, field.Children)
+				}
+			case schema.FieldTypeRepeatableGroup:
+				if groups, ok := item.([]any); ok {
+					for _, group := range groups {
+						if child, ok := group.(map[string]any); ok {
+							walk(child, field.Children)
+						}
+					}
+				}
+			}
+		}
+	}
+	walk(object, fields)
+	return ids, nil
 }
 
 // ExplainPublishedEntries 返回代表性发布列表查询，便于在真实数据集上检查索引计划。

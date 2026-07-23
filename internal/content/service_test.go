@@ -286,8 +286,20 @@ type memoryAssetResolver struct {
 	items map[string]map[string]ReferencedAsset
 }
 
+type memoryPublishedAssetResolver struct {
+	calls       int
+	revisionIDs []string
+	items       map[string]map[string]PublishedReferencedAsset
+}
+
 func (r *memoryAssetResolver) ResolveReferencedAssets(_ context.Context, _ []string) (map[string]map[string]ReferencedAsset, error) {
 	r.calls++
+	return r.items, nil
+}
+
+func (r *memoryPublishedAssetResolver) ResolvePublishedAssets(_ context.Context, revisionIDs []string) (map[string]map[string]PublishedReferencedAsset, error) {
+	r.calls++
+	r.revisionIDs = append([]string(nil), revisionIDs...)
 	return r.items, nil
 }
 
@@ -786,6 +798,65 @@ func TestExpandedEntryIsNonRecursiveAndOmitsRevisionNumber(t *testing.T) {
 	}
 	if _, ok := target["expanded"]; ok {
 		t.Fatal("ExpandedEntry 不应递归包含 expanded")
+	}
+}
+
+func TestPublishedContentResolvesReferencedAssetsInOneBatch(t *testing.T) {
+	rootFields := []schema.ContentField{
+		{ID: "fld_cover", Key: "cover", Type: schema.FieldTypeSingleMedia, Status: schema.StatusActive},
+		{ID: "fld_old", Key: "old", Type: schema.FieldTypeSingleMedia, Status: schema.StatusArchived},
+		{ID: "fld_group", Key: "group", Type: schema.FieldTypeObject, Status: schema.StatusActive, Children: []schema.ContentField{{ID: "fld_gallery", Key: "gallery", Type: schema.FieldTypeMultiMedia, Status: schema.StatusActive}}},
+	}
+	targetFields := []schema.ContentField{{ID: "fld_image", Key: "image", Type: schema.FieldTypeSingleMedia, Status: schema.StatusActive}}
+	asset := func(id, key string) PublishedReferencedAsset {
+		return PublishedReferencedAsset{ID: id, ObjectKey: key, Filename: id + ".png", MimeType: "image/png", Size: 10, SHA256: strings.Repeat("0", 64), ETag: "etag"}
+	}
+	resolver := &memoryPublishedAssetResolver{items: map[string]map[string]PublishedReferencedAsset{
+		"rev_root":   {"ast_cover": asset("ast_cover", "assets/ast_cover/root"), "ast_gallery": asset("ast_gallery", "assets/ast_gallery/root"), "ast_old": asset("ast_old", "assets/ast_old/root")},
+		"rev_target": {"ast_target": asset("ast_target", "assets/ast_target/target")},
+	}}
+	reader := &SQLPublishedContentReader{assets: resolver}
+	entry := PublishedEntry{
+		ModelID: "mdl_root", RevisionID: "rev_root", Content: json.RawMessage(`{"cover":"ast_cover","old":"ast_old","group":{"gallery":["ast_gallery","ast_cover"]}}`),
+		Expanded: map[string]any{"related": ExpandedEntry{ModelID: "mdl_target", RevisionID: "rev_target", Content: json.RawMessage(`{"image":"ast_target"}`)}},
+	}
+	if err := reader.resolvePublishedAssets(context.Background(), []*PublishedEntry{&entry}, map[string][]schema.ContentField{"mdl_root": rootFields, "mdl_target": targetFields}); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.calls != 1 || strings.Join(resolver.revisionIDs, ",") != "rev_root,rev_target" {
+		t.Fatalf("发布素材未一次批量解析: calls=%d revisions=%v", resolver.calls, resolver.revisionIDs)
+	}
+	if len(entry.ReferencedAssets) != 2 || entry.ReferencedAssets["ast_cover"].ObjectKey != "assets/ast_cover/root" || entry.ReferencedAssets["ast_gallery"].ObjectKey != "assets/ast_gallery/root" {
+		t.Fatalf("主条目素材字典错误: %#v", entry.ReferencedAssets)
+	}
+	if _, exists := entry.ReferencedAssets["ast_old"]; exists {
+		t.Fatal("已归档字段的素材不应暴露")
+	}
+	expanded := entry.Expanded["related"].(ExpandedEntry)
+	if len(expanded.ReferencedAssets) != 1 || expanded.ReferencedAssets["ast_target"].ObjectKey != "assets/ast_target/target" {
+		t.Fatalf("展开条目素材字典错误: %#v", expanded.ReferencedAssets)
+	}
+}
+
+func TestPublishedContentUsesEmptyAssetDictionaryWhenAssetsDisabled(t *testing.T) {
+	entry := PublishedEntry{ModelID: "mdl_1", RevisionID: "rev_1", Content: json.RawMessage(`{}`), Expanded: map[string]any{"related": ExpandedEntry{ModelID: "mdl_2", RevisionID: "rev_2", Content: json.RawMessage(`{}`)}}}
+	reader := &SQLPublishedContentReader{}
+	if err := reader.resolvePublishedAssets(context.Background(), []*PublishedEntry{&entry}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if entry.ReferencedAssets == nil || entry.Expanded["related"].(ExpandedEntry).ReferencedAssets == nil {
+		t.Fatal("素材功能关闭时必须返回空素材字典")
+	}
+}
+
+func TestPublishedAssetIDsAllowsNullRepeatableGroupItems(t *testing.T) {
+	fields := []schema.ContentField{{Key: "items", Type: schema.FieldTypeRepeatableGroup, Status: schema.StatusActive, Children: []schema.ContentField{{Key: "image", Type: schema.FieldTypeSingleMedia, Status: schema.StatusActive}}}}
+	ids, err := publishedAssetIDs(json.RawMessage(`{"items":[null,{"image":"ast_1"}]}`), fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != "ast_1" {
+		t.Fatalf("重复组素材解析错误: %v", ids)
 	}
 }
 
