@@ -5,7 +5,7 @@ $defs:
   AssetID:
     type: string
     minLength: 1
-    description: 内容媒体值中的不透明素材 ID；客户端通过素材路由下载。
+    description: 内容媒体字段或富文本媒体节点中的不透明素材 ID；客户端通过 GET /assets/{asset_id} 下载。
   PublishedReferencedAsset:
     type: object
     additionalProperties: false
@@ -24,7 +24,7 @@ $defs:
       etag: { type: string, minLength: 1 }
   PublishedReferencedAssets:
     type: object
-    description: 当前发布 Revision 的活动媒体字段所引用素材，以素材 ID 为键；同一素材只出现一次。
+    description: 当前发布 Revision 的活动媒体字段及富文本 image、audio、video 节点所引用素材，以素材 ID 为键；同一素材只出现一次。键可直接代入 GET /assets/{asset_id}，由 Content API 返回短时下载重定向。
     additionalProperties:
       $ref: "#/$defs/PublishedReferencedAsset"
   SingleMediaValue:

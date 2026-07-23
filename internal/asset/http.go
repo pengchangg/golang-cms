@@ -88,7 +88,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query()
 	for key, values := range query {
-		if (key != "status" && key != "mime_type" && key != "limit" && key != "cursor") || len(values) != 1 {
+		if (key != "status" && key != "mime_type" && key != "kind" && key != "limit" && key != "cursor") || len(values) != 1 {
 			httpx.WriteError(w, r, appError(apperror.KindInvalidArgument, "invalid_query", "素材查询无效"))
 			return
 		}
@@ -102,7 +102,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	input := ListQuery{MimeType: query.Get("mime_type"), Limit: limit, Cursor: query.Get("cursor")}
+	input := ListQuery{MimeType: query.Get("mime_type"), Kind: AssetKind(query.Get("kind")), Limit: limit, Cursor: query.Get("cursor")}
 	if value := query.Get("status"); value != "" {
 		status := Status(value)
 		input.Status = &status

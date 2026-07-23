@@ -9,6 +9,7 @@ x-integration-status: integrated
     x-integration-status: integrated
     operationId: downloadPublishedAsset
     summary: 下载 API Key 授权发布内容或配置引用的素材
+    description: asset_id 可取自发布条目或展开条目的 referenced_assets 键，也可取自 content 内媒体字段及富文本 image、audio、video 节点的 attrs.asset_id；仅当前授权发布 Revision 实际引用的素材可下载。
     parameters:
       - name: Authorization
         in: header

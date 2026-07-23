@@ -231,6 +231,7 @@ export interface AuditEvent {
 
 export type AssetStatus = 'quarantined' | 'available' | 'archived'
 export type AssetPreviewKind = 'image' | 'pdf' | 'video' | 'audio' | 'text' | 'none'
+export type AssetKind = 'image' | 'audio' | 'video'
 export interface ReferencedAsset {
   id: string; filename: string; mime_type: string; size: number
   status: AssetStatus; preview_kind: AssetPreviewKind

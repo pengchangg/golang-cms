@@ -13,19 +13,69 @@ import (
 
 type SQLReferenceManager struct{}
 
-func (SQLReferenceManager) ValidateAvailable(ctx context.Context, q database.Querier, ids []string) error {
+func (SQLReferenceManager) ValidateAvailable(ctx context.Context, q database.Querier, references []Reference, baseRevisionID string) error {
+	kinds := map[string]map[string]bool{}
+	counts := map[string]int{}
+	for _, reference := range references {
+		counts[reference.AssetID]++
+		if kinds[reference.AssetID] == nil {
+			kinds[reference.AssetID] = map[string]bool{}
+		}
+		if reference.Kind != "" {
+			kinds[reference.AssetID][reference.Kind] = true
+		}
+	}
+	ids := make([]string, 0, len(kinds))
+	for id := range kinds {
+		ids = append(ids, id)
+	}
 	ids = uniqueSorted(ids)
 	for _, id := range ids {
 		var status Status
-		err := q.QueryRowContext(ctx, `SELECT status FROM assets WHERE id=? FOR UPDATE`, id).Scan(&status)
-		if errors.Is(err, sql.ErrNoRows) || err == nil && status != StatusAvailable {
+		var mimeType string
+		err := q.QueryRowContext(ctx, `SELECT status,mime_type FROM assets WHERE id=? FOR UPDATE`, id).Scan(&status, &mimeType)
+		if errors.Is(err, sql.ErrNoRows) {
 			return appError(apperror.KindConflict, "asset_not_available", "素材不存在或不可用")
 		}
 		if err != nil {
 			return fmt.Errorf("校验素材可用状态: %w", err)
 		}
+		if status == StatusArchived && baseRevisionID != "" {
+			var inherited int
+			err = q.QueryRowContext(ctx, `SELECT COUNT(*) FROM asset_references WHERE revision_id=? AND asset_id=?`, baseRevisionID, id).Scan(&inherited)
+			if err != nil {
+				return fmt.Errorf("校验归档素材继承关系: %w", err)
+			}
+			if !canInheritArchivedReferences(inherited, counts[id]) {
+				return appError(apperror.KindConflict, "asset_not_available", "归档素材只能继承 base Revision 中已有的引用数量")
+			}
+		} else if status != StatusAvailable {
+			return appError(apperror.KindConflict, "asset_not_available", "素材不存在或不可用")
+		}
+		for kind := range kinds[id] {
+			if !validRichTextMedia(kind, mimeType) {
+				return appError(apperror.KindConflict, "asset_media_type_invalid", "素材类型不适用于富文本媒体节点")
+			}
+		}
 	}
 	return nil
+}
+
+func canInheritArchivedReferences(inherited, requested int) bool {
+	return requested <= inherited
+}
+
+func validRichTextMedia(kind, mimeType string) bool {
+	switch kind {
+	case "image":
+		return mimeType == "image/jpeg" || mimeType == "image/png" || mimeType == "image/gif" || mimeType == "image/webp" || mimeType == "image/avif"
+	case "audio":
+		return PreviewKindFor(mimeType) == PreviewAudio
+	case "video":
+		return PreviewKindFor(mimeType) == PreviewVideo
+	default:
+		return false
+	}
 }
 
 func (SQLReferenceManager) InsertRevisionReferences(ctx context.Context, q database.Querier, values []Reference) error {

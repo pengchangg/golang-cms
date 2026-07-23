@@ -126,6 +126,12 @@ func (SQLRepository) List(ctx context.Context, q database.Querier, input ListQue
 		query += ` AND mime_type=?`
 		args = append(args, input.MimeType)
 	}
+	if mimeTypes := mimeTypesForAssetKind(input.Kind); len(mimeTypes) > 0 {
+		query += ` AND mime_type IN (` + placeholders(len(mimeTypes)) + `)`
+		for _, mimeType := range mimeTypes {
+			args = append(args, mimeType)
+		}
+	}
 	if cursor != nil {
 		query += ` AND (created_at<? OR (created_at=? AND id<?))`
 		args = append(args, cursor.CreatedAt, cursor.CreatedAt, cursor.ID)
@@ -149,6 +155,19 @@ func (SQLRepository) List(ctx context.Context, q database.Querier, input ListQue
 		items = append(items, value)
 	}
 	return items, rows.Err()
+}
+
+func mimeTypesForAssetKind(kind AssetKind) []string {
+	switch kind {
+	case AssetKindImage:
+		return []string{"image/jpeg", "image/png", "image/gif", "image/webp", "image/avif"}
+	case AssetKindVideo:
+		return []string{"video/mp4", "video/webm"}
+	case AssetKindAudio:
+		return []string{"audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/webm"}
+	default:
+		return nil
+	}
 }
 
 func normalizeAsset(value *Asset, etag sql.NullString, confirmed, archived sql.NullTime) {

@@ -446,7 +446,7 @@ func (s *Service) createDraftInTx(ctx context.Context, q database.Querier, princ
 		return Entry{}, err
 	}
 	derivativesReady := batch != nil
-	if err = s.writeRevisionDerivatives(ctx, q, revision, model.Fields, derivativesReady, derivativesReady); err != nil {
+	if err = s.writeRevisionDerivatives(ctx, q, revision, model.Fields, "", derivativesReady, derivativesReady); err != nil {
 		return Entry{}, err
 	}
 	values, err := uniqueValues(content, model.Fields)
@@ -538,7 +538,7 @@ func (s *Service) UpdateEntry(ctx context.Context, principal identity.Principal,
 		if err := s.repository.CreateRevision(ctx, q, revision); err != nil {
 			return err
 		}
-		if err := s.writeRevisionDerivatives(ctx, q, revision, model.Fields, true, false); err != nil {
+		if err := s.writeRevisionDerivatives(ctx, q, revision, model.Fields, current.ID, true, false); err != nil {
 			return err
 		}
 		if err := s.repository.SetDraftPointer(ctx, q, modelID, entryID, revisionID); err != nil {
@@ -640,7 +640,7 @@ func (s *Service) ArchiveEntry(ctx context.Context, principal identity.Principal
 	})
 }
 
-func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Querier, revision Revision, fields []schema.ContentField, prechecked ...bool) error {
+func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Querier, revision Revision, fields []schema.ContentField, baseRevisionID string, prechecked ...bool) error {
 	references, err := mediaReferences(revision.Content, revision, fields)
 	if err != nil {
 		return err
@@ -657,13 +657,13 @@ func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Queri
 		}
 	}
 	if !mediaPrechecked {
-		if err = precheckMedia(ctx, q, s.media, references); err != nil {
+		if err = precheckMedia(ctx, q, s.media, references, baseRevisionID); err != nil {
 			return err
 		}
 	}
 	if len(references) > 0 {
 		if s.media == nil {
-			return fmt.Errorf("媒体引用管理器未装配")
+			return conflict("assets_disabled", "素材功能未启用")
 		}
 		if err = s.media.InsertRevisionReferences(ctx, q, references); err != nil {
 			return err
@@ -675,14 +675,14 @@ func (s *Service) writeRevisionDerivatives(ctx context.Context, q database.Queri
 	return s.repository.CreateRelations(ctx, q, relations)
 }
 
-func precheckMedia(ctx context.Context, q database.Querier, checker MediaPrechecker, references []MediaReference) error {
+func precheckMedia(ctx context.Context, q database.Querier, checker MediaPrechecker, references []MediaReference, baseRevisionID string) error {
 	if len(references) == 0 {
 		return nil
 	}
 	if checker == nil {
-		return fmt.Errorf("媒体引用管理器未装配")
+		return conflict("assets_disabled", "素材功能未启用")
 	}
-	return checker.ValidateAvailable(ctx, q, references)
+	return checker.ValidateAvailable(ctx, q, references, baseRevisionID)
 }
 
 func (s *Service) precheckDraftBatch(ctx context.Context, q database.Querier, modelID string, source DraftSource) (*draftBatchPrecheck, error) {
@@ -699,7 +699,7 @@ func (s *Service) precheckDraftBatch(ctx context.Context, q database.Querier, mo
 			relationSet[relation.TargetModelID+"\x00"+relation.TargetEntryID] = relation
 		}
 		for _, reference := range references {
-			mediaSet[reference.AssetID] = reference
+			mediaSet[reference.AssetID+"\x00"+reference.Kind] = reference
 		}
 		if len(relationSet)+len(mediaSet) > maxImportIdentifiers {
 			var failures validationErrors
@@ -736,7 +736,7 @@ func (s *Service) precheckDraftBatch(ctx context.Context, q database.Querier, mo
 	if err = s.repository.ValidateRelationTargets(ctx, q, allRelations); err != nil {
 		return nil, err
 	}
-	if err = precheckMedia(ctx, q, s.media, allReferences); err != nil {
+	if err = precheckMedia(ctx, q, s.media, allReferences, ""); err != nil {
 		return nil, err
 	}
 	relations := make(map[string]bool, len(relationSet))
@@ -744,8 +744,8 @@ func (s *Service) precheckDraftBatch(ctx context.Context, q database.Querier, mo
 		relations[key] = true
 	}
 	assets := make(map[string]bool, len(mediaSet))
-	for key := range mediaSet {
-		assets[key] = true
+	for _, reference := range mediaSet {
+		assets[reference.AssetID] = true
 	}
 	return &draftBatchPrecheck{model: model, lockedModels: lockedModels, relations: relations, assets: assets}, nil
 }
@@ -792,6 +792,11 @@ func draftIdentifiers(raw json.RawMessage, modelID string, fields []schema.Conte
 							references = append(references, MediaReference{ModelID: modelID, FieldID: field.ID, AssetID: id})
 						}
 					}
+				}
+			case schema.FieldTypeRichText:
+				var document any
+				if json.Unmarshal(item, &document) == nil {
+					appendRichTextMediaReferences(&references, document, Revision{ModelID: modelID}, field.ID, "")
 				}
 			case schema.FieldTypeObject:
 				var child map[string]json.RawMessage
@@ -923,7 +928,7 @@ func (s *Service) workflow(ctx context.Context, principal identity.Principal, me
 			}
 			if len(references) > 0 {
 				if s.media == nil {
-					return fmt.Errorf("媒体引用管理器未装配")
+					return conflict("assets_disabled", "素材功能未启用")
 				}
 				if err = s.media.ValidatePublishableRevision(ctx, q, revisionID); err != nil {
 					return err

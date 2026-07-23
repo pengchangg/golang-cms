@@ -138,11 +138,12 @@ type MediaReference struct {
 	AssetID     string
 	JSONPointer string
 	Position    int
+	Kind        string
 }
 
 // MediaPrechecker 支持在写入前独立预检并锁定素材。
 type MediaPrechecker interface {
-	ValidateAvailable(context.Context, database.Querier, []MediaReference) error
+	ValidateAvailable(context.Context, database.Querier, []MediaReference, string) error
 }
 
 // MediaReferenceManager 由素材模块实现，内容模块只消费事务感知的窄接口。

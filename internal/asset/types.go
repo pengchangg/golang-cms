@@ -11,6 +11,7 @@ import (
 type Status string
 
 type PreviewKind string
+type AssetKind string
 type ContentDisposition string
 
 const (
@@ -23,6 +24,9 @@ const (
 	PreviewAudio          PreviewKind        = "audio"
 	PreviewText           PreviewKind        = "text"
 	PreviewNone           PreviewKind        = "none"
+	AssetKindImage        AssetKind          = "image"
+	AssetKindAudio        AssetKind          = "audio"
+	AssetKindVideo        AssetKind          = "video"
 	DispositionInline     ContentDisposition = "inline"
 	DispositionAttachment ContentDisposition = "attachment"
 )
@@ -107,6 +111,7 @@ type Upload struct {
 type ListQuery struct {
 	Status   *Status
 	MimeType string
+	Kind     AssetKind
 	Limit    int
 	Cursor   string
 }
@@ -124,11 +129,12 @@ type Reference struct {
 	AssetID     string
 	JSONPointer string
 	Position    int
+	Kind        string
 }
 
 // ReferenceManager 是内容事务访问素材引用的唯一边界。
 type ReferenceManager interface {
-	ValidateAvailable(context.Context, database.Querier, []string) error
+	ValidateAvailable(context.Context, database.Querier, []Reference, string) error
 	InsertRevisionReferences(context.Context, database.Querier, []Reference) error
 	ValidatePublishableRevision(context.Context, database.Querier, string) error
 }

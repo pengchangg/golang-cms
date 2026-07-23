@@ -70,18 +70,18 @@ func (r ReferencedAssetResolver) ResolvePublishedAssets(ctx context.Context, rev
 
 type MediaReferenceManager struct{ Manager asset.ReferenceManager }
 
-func (a MediaReferenceManager) ValidateAvailable(ctx context.Context, q database.Querier, values []content.MediaReference) error {
-	ids := make([]string, len(values))
+func (a MediaReferenceManager) ValidateAvailable(ctx context.Context, q database.Querier, values []content.MediaReference, baseRevisionID string) error {
+	references := make([]asset.Reference, len(values))
 	for i, value := range values {
-		ids[i] = value.AssetID
+		references[i] = asset.Reference{AssetID: value.AssetID, Kind: value.Kind}
 	}
-	return a.Manager.ValidateAvailable(ctx, q, ids)
+	return a.Manager.ValidateAvailable(ctx, q, references, baseRevisionID)
 }
 
 func (a MediaReferenceManager) InsertRevisionReferences(ctx context.Context, q database.Querier, values []content.MediaReference) error {
 	references := make([]asset.Reference, len(values))
 	for i, value := range values {
-		references[i] = asset.Reference{RevisionID: value.RevisionID, EntryID: value.EntryID, ModelID: value.ModelID, FieldID: value.FieldID, AssetID: value.AssetID, JSONPointer: value.JSONPointer, Position: value.Position}
+		references[i] = asset.Reference{RevisionID: value.RevisionID, EntryID: value.EntryID, ModelID: value.ModelID, FieldID: value.FieldID, AssetID: value.AssetID, JSONPointer: value.JSONPointer, Position: value.Position, Kind: value.Kind}
 	}
 	return a.Manager.InsertRevisionReferences(ctx, q, references)
 }

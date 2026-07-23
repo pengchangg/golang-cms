@@ -23,4 +23,17 @@ describe('富文本规范化', () => {
     expect(richTextToEditor(backend)).toEqual(editor)
     expect(richTextFromEditor(editor)).toEqual(backend)
   })
+
+  it('媒体节点只保留素材 ID 和图片替代文本', () => {
+    const value = { type: 'doc', content: [
+      { type: 'image', attrs: { asset_id: 'ast_image', alt: '封面', src: 'https://example.com/a.jpg' }, content: [] },
+      { type: 'audio', attrs: { asset_id: 'ast_audio', mime_type: 'audio/mpeg' } },
+      { type: 'video', attrs: { asset_id: 'ast_video', filename: 'a.mp4' } },
+    ] }
+    expect(normalizeRichText(value)).toEqual({ type: 'doc', content: [
+      { type: 'image', attrs: { asset_id: 'ast_image', alt: '封面' } },
+      { type: 'audio', attrs: { asset_id: 'ast_audio' } },
+      { type: 'video', attrs: { asset_id: 'ast_video' } },
+    ] })
+  })
 })

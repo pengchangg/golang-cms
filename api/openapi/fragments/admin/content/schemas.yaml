@@ -6,122 +6,9 @@ $defs:
     enum: [draft, archived]
   DynamicContent:
     type: object
-    description: 以模型根字段 key 为属性名；具体类型和约束由服务端按当前模型校验。single_media 和 multi_media（包括嵌套字段）分别遵循根 OpenAPI components.schemas.SingleMediaValue 和 components.schemas.MultiMediaValue，其中素材 ID 遵循 components.schemas.AssetID。
-  RichTextMark:
-    type: object
-    additionalProperties: false
-    required: [type]
-    properties:
-      type:
-        type: string
-        enum: [bold, italic, underline, strike, code]
-  RichTextTextNode:
-    type: object
-    additionalProperties: false
-    required: [type, text]
-    properties:
-      type: { const: text }
-      text: { type: string }
-      marks:
-        type: array
-        uniqueItems: true
-        items:
-          $ref: "#/$defs/RichTextMark"
-  RichTextHardBreakNode:
-    type: object
-    additionalProperties: false
-    required: [type]
-    properties:
-      type: { const: hard_break }
-  RichTextInlineNode:
-    oneOf:
-      - $ref: "#/$defs/RichTextTextNode"
-      - $ref: "#/$defs/RichTextHardBreakNode"
-  RichTextParagraphNode:
-    type: object
-    additionalProperties: false
-    required: [type, content]
-    properties:
-      type: { const: paragraph }
-      content:
-        type: array
-        items:
-          $ref: "#/$defs/RichTextInlineNode"
-  RichTextHeadingNode:
-    type: object
-    additionalProperties: false
-    required: [type, attrs, content]
-    properties:
-      type: { const: heading }
-      attrs:
-        type: object
-        additionalProperties: false
-        required: [level]
-        properties:
-          level: { type: integer, minimum: 1, maximum: 6 }
-      content:
-        type: array
-        items:
-          $ref: "#/$defs/RichTextInlineNode"
-  RichTextCodeBlockNode:
-    type: object
-    additionalProperties: false
-    required: [type, content]
-    properties:
-      type: { const: code_block }
-      content:
-        type: array
-        items:
-          $ref: "#/$defs/RichTextTextNode"
-  RichTextListNode:
-    type: object
-    additionalProperties: false
-    required: [type, content]
-    properties:
-      type:
-        type: string
-        enum: [bullet_list, ordered_list]
-      content:
-        type: array
-        items:
-          $ref: "#/$defs/RichTextListItemNode"
-  RichTextListItemNode:
-    type: object
-    additionalProperties: false
-    required: [type, content]
-    properties:
-      type: { const: list_item }
-      content:
-        type: array
-        items:
-          $ref: "#/$defs/RichTextBlockNode"
-  RichTextBlockquoteNode:
-    type: object
-    additionalProperties: false
-    required: [type, content]
-    properties:
-      type: { const: blockquote }
-      content:
-        type: array
-        items:
-          $ref: "#/$defs/RichTextBlockNode"
-  RichTextBlockNode:
-    oneOf:
-      - $ref: "#/$defs/RichTextParagraphNode"
-      - $ref: "#/$defs/RichTextHeadingNode"
-      - $ref: "#/$defs/RichTextCodeBlockNode"
-      - $ref: "#/$defs/RichTextListNode"
-      - $ref: "#/$defs/RichTextBlockquoteNode"
+    description: 以模型根字段 key 为属性名；具体类型和约束由服务端按当前模型校验。rich_text、single_media 和 multi_media（包括嵌套字段）分别遵循根 OpenAPI components.schemas.RichTextDocument、components.schemas.SingleMediaValue 和 components.schemas.MultiMediaValue，其中素材 ID 遵循 components.schemas.AssetID。
   RichTextDocument:
-    type: object
-    additionalProperties: false
-    required: [type, content]
-    properties:
-      type: { const: doc }
-      content:
-        type: array
-        items:
-          $ref: "#/$defs/RichTextBlockNode"
+    $ref: ../../shared/rich-text.yaml#/$defs/RichTextDocument
   ContentRevision:
     type: object
     additionalProperties: false
@@ -159,6 +46,7 @@ $defs:
       current_published_revision_id: { type: [string, "null"], minLength: 1 }
       referenced_assets:
         type: object
+        description: 当前草稿 Revision 的媒体字段及富文本 image、audio、video 节点实际引用的素材，以素材 ID 为键；同一素材只出现一次。
         additionalProperties:
           $ref: "#/$defs/ReferencedAsset"
       expanded:
@@ -195,6 +83,7 @@ $defs:
           - type: "null"
       referenced_assets:
         type: object
+        description: 当前草稿 Revision 的媒体字段及富文本 image、audio、video 节点实际引用的素材，以素材 ID 为键；同一素材只出现一次。
         additionalProperties:
           $ref: "#/$defs/ReferencedAsset"
   ReferencedAsset:

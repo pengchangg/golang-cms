@@ -16,7 +16,13 @@ x-integration-status: integrated
           $ref: ./schemas.yaml#/$defs/AssetStatus
       - name: mime_type
         in: query
+        description: 按小写规范 MIME 精确筛选；不从文件扩展名推断。与 kind 同时提供时必须同时满足。
         schema: { type: string, minLength: 1, maxLength: 255 }
+      - name: kind
+        in: query
+        description: 按内置规范 MIME 集合筛选 image、audio 或 video；具体集合见 AssetMediaKind。与 mime_type 同时提供时取交集，不按文件扩展名或 preview_kind 筛选。
+        schema:
+          $ref: ./schemas.yaml#/$defs/AssetMediaKind
       - &limit
         name: limit
         in: query

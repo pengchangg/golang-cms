@@ -32,10 +32,20 @@ type memoryRepository struct {
 	expandCalls int
 }
 
-type mediaRecorder struct{ events *[]string }
+type mediaRecorder struct {
+	events         *[]string
+	baseRevisionID *string
+	references     *[]MediaReference
+}
 
-func (m mediaRecorder) ValidateAvailable(context.Context, database.Querier, []MediaReference) error {
+func (m mediaRecorder) ValidateAvailable(_ context.Context, _ database.Querier, references []MediaReference, baseRevisionID string) error {
 	*m.events = append(*m.events, "asset")
+	if m.baseRevisionID != nil {
+		*m.baseRevisionID = baseRevisionID
+	}
+	if m.references != nil {
+		*m.references = append(*m.references, references...)
+	}
 	return nil
 }
 func (m mediaRecorder) InsertRevisionReferences(context.Context, database.Querier, []MediaReference) error {
@@ -943,7 +953,8 @@ func TestUpdateLocksSourceEntryThenRelationTargetsThenAssets(t *testing.T) {
 	repository.entries["ent_source"] = EntrySummary{ID: "ent_source", ModelID: "mdl_1", Status: StatusDraft, CurrentDraftRevisionID: "rev_base"}
 	repository.entries["ent_target"] = EntrySummary{ID: "ent_target", ModelID: targetModelID, Status: StatusDraft}
 	repository.revisions["ent_source"] = []Revision{{ID: "rev_base", EntryID: "ent_source", ModelID: "mdl_1", Number: 1, Content: json.RawMessage(`{}`), WorkflowStatus: WorkflowDraft}}
-	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": model, targetModelID: {ContentModelSummary: schema.ContentModelSummary{ID: targetModelID, Status: schema.StatusActive}}}}, Media: mediaRecorder{events: &events}, Audit: &auditRecorder{}})
+	baseRevisionID := ""
+	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": model, targetModelID: {ContentModelSummary: schema.ContentModelSummary{ID: targetModelID, Status: schema.StatusActive}}}}, Media: mediaRecorder{events: &events, baseRevisionID: &baseRevisionID}, Audit: &auditRecorder{}})
 	service.newID = func(prefix string) (string, error) { return prefix + "next", nil }
 
 	_, err := service.UpdateEntry(context.Background(), contentPrincipal(permissionUpdate), testMeta(), "mdl_1", "ent_source", UpdateEntryRequest{BaseRevisionID: "rev_base", Content: json.RawMessage(`{"related":"ent_target","image":"ast_1"}`)})
@@ -953,6 +964,19 @@ func TestUpdateLocksSourceEntryThenRelationTargetsThenAssets(t *testing.T) {
 	if strings.Join(events[:3], ",") != "entry,target,asset" {
 		t.Fatalf("更新锁顺序应为源条目、关系目标、素材，实际为 %v", events)
 	}
+	if baseRevisionID != "rev_base" {
+		t.Fatalf("更新素材校验必须携带 base Revision，实际为 %q", baseRevisionID)
+	}
+}
+
+func TestCreateWithMediaReturnsStableErrorWhenAssetsDisabled(t *testing.T) {
+	model := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{{ID: "fld_image", Key: "image", Type: schema.FieldTypeSingleMedia, Status: schema.StatusActive}}}
+	repository := newMemoryRepository()
+	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": model}}, Audit: &auditRecorder{}})
+	service.newID = func(prefix string) (string, error) { return prefix + "1", nil }
+
+	_, err := service.CreateEntry(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", CreateEntryRequest{Content: json.RawMessage(`{"image":"ast_1"}`)})
+	assertApplicationCode(t, err, "assets_disabled")
 }
 
 func TestImportPrechecksAllRelationTargetsBeforeAnyAsset(t *testing.T) {
@@ -982,6 +1006,27 @@ func TestImportPrechecksAllRelationTargetsBeforeAnyAsset(t *testing.T) {
 	}
 	if len(events) < 2 || events[0] != "target" || events[1] != "asset" {
 		t.Fatalf("批量保存必须先锁全部关系目标再锁素材，实际为 %v", events)
+	}
+}
+
+func TestImportPrechecksEveryRichTextMediaKindForSameAsset(t *testing.T) {
+	events := []string{}
+	references := []MediaReference{}
+	model := schema.ContentModel{ContentModelSummary: schema.ContentModelSummary{ID: "mdl_1", Status: schema.StatusActive}, Fields: []schema.ContentField{{ID: "fld_body", Key: "body", Type: schema.FieldTypeRichText, Status: schema.StatusActive}}}
+	repository := newMemoryRepository()
+	service := NewService(Dependencies{Repository: repository, Transactor: &directTx{}, ModelRepository: memoryModels{models: map[string]schema.ContentModel{"mdl_1": model}}, Media: mediaRecorder{events: &events, references: &references}, Audit: &auditRecorder{}})
+	service.newID = func(prefix string) (string, error) {
+		return fmt.Sprintf("%s%d", prefix, len(repository.revisions)), nil
+	}
+
+	err := service.ImportDrafts(context.Background(), contentPrincipal(permissionCreate), testMeta(), "mdl_1", func(yield func(ImportDraft) error) error {
+		return yield(ImportDraft{Content: json.RawMessage(`{"body":{"type":"doc","content":[{"type":"image","attrs":{"asset_id":"ast_shared","alt":""}},{"type":"audio","attrs":{"asset_id":"ast_shared"}}]}}`)})
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(references) != 2 || references[0].AssetID != "ast_shared" || references[1].AssetID != "ast_shared" || references[0].Kind == references[1].Kind {
+		t.Fatalf("同一素材的每个富文本媒体 kind 都必须预检: %#v", references)
 	}
 }
 

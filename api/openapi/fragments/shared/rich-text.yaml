@@ -1,0 +1,164 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/shared/rich-text.yaml
+$defs:
+  RichTextMark:
+    type: object
+    additionalProperties: false
+    required: [type]
+    properties:
+      type:
+        type: string
+        enum: [bold, italic, underline, strike, code]
+  RichTextTextNode:
+    type: object
+    additionalProperties: false
+    required: [type, text]
+    properties:
+      type: { const: text }
+      text: { type: string }
+      marks:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/RichTextMark"
+  RichTextHardBreakNode:
+    type: object
+    additionalProperties: false
+    required: [type]
+    properties:
+      type: { const: hard_break }
+  RichTextInlineNode:
+    oneOf:
+      - $ref: "#/$defs/RichTextTextNode"
+      - $ref: "#/$defs/RichTextHardBreakNode"
+  RichTextParagraphNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: paragraph }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextInlineNode"
+  RichTextHeadingNode:
+    type: object
+    additionalProperties: false
+    required: [type, attrs, content]
+    properties:
+      type: { const: heading }
+      attrs:
+        type: object
+        additionalProperties: false
+        required: [level]
+        properties:
+          level: { type: integer, minimum: 1, maximum: 6 }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextInlineNode"
+  RichTextCodeBlockNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: code_block }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextTextNode"
+  RichTextListNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type:
+        type: string
+        enum: [bullet_list, ordered_list]
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextListItemNode"
+  RichTextListItemNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: list_item }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextBlockNode"
+  RichTextBlockquoteNode:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: blockquote }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextBlockNode"
+  RichTextImageNode:
+    type: object
+    additionalProperties: false
+    required: [type, attrs]
+    properties:
+      type: { const: image }
+      attrs:
+        type: object
+        additionalProperties: false
+        required: [asset_id, alt]
+        properties:
+          asset_id:
+            $ref: ../content/assets/schemas.yaml#/$defs/AssetID
+          alt:
+            type: string
+            maxLength: 1000
+            description: 图片替代文本；允许空字符串，但属性不可缺省。
+  RichTextAudioNode:
+    type: object
+    additionalProperties: false
+    required: [type, attrs]
+    properties:
+      type: { const: audio }
+      attrs:
+        type: object
+        additionalProperties: false
+        required: [asset_id]
+        properties:
+          asset_id:
+            $ref: ../content/assets/schemas.yaml#/$defs/AssetID
+  RichTextVideoNode:
+    type: object
+    additionalProperties: false
+    required: [type, attrs]
+    properties:
+      type: { const: video }
+      attrs:
+        type: object
+        additionalProperties: false
+        required: [asset_id]
+        properties:
+          asset_id:
+            $ref: ../content/assets/schemas.yaml#/$defs/AssetID
+  RichTextBlockNode:
+    oneOf:
+      - $ref: "#/$defs/RichTextParagraphNode"
+      - $ref: "#/$defs/RichTextHeadingNode"
+      - $ref: "#/$defs/RichTextCodeBlockNode"
+      - $ref: "#/$defs/RichTextListNode"
+      - $ref: "#/$defs/RichTextBlockquoteNode"
+      - $ref: "#/$defs/RichTextImageNode"
+      - $ref: "#/$defs/RichTextAudioNode"
+      - $ref: "#/$defs/RichTextVideoNode"
+  RichTextDocument:
+    type: object
+    additionalProperties: false
+    required: [type, content]
+    properties:
+      type: { const: doc }
+      content:
+        type: array
+        items:
+          $ref: "#/$defs/RichTextBlockNode"

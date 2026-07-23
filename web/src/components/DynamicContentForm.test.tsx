@@ -22,6 +22,7 @@ describe('动态内容表单', () => {
     rerender(<DynamicContentForm fields={[field('rich_text')]} content={{ rich_text: { type: 'doc' } }} onChange={onChange} />)
     expect(await screen.findByRole('textbox', { name: 'rich_text' })).toBeVisible()
     expect(await screen.findByRole('toolbar', { name: 'rich_text 格式工具栏' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: '粗体' })).toBeVisible()
   })
 
   it('单媒体提供素材选择器并保留现有素材 ID', () => {
@@ -52,6 +53,20 @@ describe('动态内容表单', () => {
   it('只读状态禁用 JSON 编辑器', async () => {
     render(<DynamicContentForm fields={[field('json')]} content={{ json: { value: 1 } }} onChange={vi.fn()} disabled />)
     expect(await screen.findByRole('textbox', { name: 'json' })).toHaveAttribute('contenteditable', 'false')
+  })
+
+  it('只读状态禁用富文本工具栏并保持编辑区不可编辑', async () => {
+    render(<DynamicContentForm fields={[field('rich_text')]} content={{ rich_text: { type: 'doc', content: [] } }} onChange={vi.fn()} disabled />)
+    expect(await screen.findByRole('textbox', { name: 'rich_text' })).toHaveAttribute('contenteditable', 'false')
+    expect(screen.getByRole('button', { name: '粗体' })).toBeDisabled()
+  })
+
+  it('富文本媒体节点可以加载且不会暴露悬浮菜单', async () => {
+    render(<DynamicContentForm fields={[field('rich_text')]} content={{ rich_text: { type: 'doc', content: [{ type: 'image', attrs: { asset_id: 'ast_cover', alt: '封面' } }] } }} onChange={vi.fn()} referencedAssets={{ ast_cover: { id: 'ast_cover', filename: 'cover.png', mime_type: 'image/png', size: 123, status: 'available', preview_kind: 'image' } }} />)
+    expect(await screen.findByAltText('封面')).toBeVisible()
+    expect(screen.getByText('cover.png')).toBeVisible()
+    expect(screen.queryByRole('toolbar', { name: /选区/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('listbox', { name: '插入内容块' })).not.toBeInTheDocument()
   })
 
   it('可重复分组递归渲染媒体选择器', () => {

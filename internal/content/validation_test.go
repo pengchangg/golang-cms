@@ -111,6 +111,54 @@ func TestValidateRichTextUsesRecursiveWhitelist(t *testing.T) {
 	}
 }
 
+func TestValidateRichTextAllowsOnlyAtomicBlockMediaNodes(t *testing.T) {
+	fields := []schema.ContentField{{ID: "fld_body", Key: "body", Type: schema.FieldTypeRichText, Status: schema.StatusActive}}
+	valid := json.RawMessage(`{"body":{"type":"doc","content":[{"type":"image","attrs":{"asset_id":"ast_image","alt":"封面"}},{"type":"audio","attrs":{"asset_id":"ast_audio"}},{"type":"video","attrs":{"asset_id":"ast_video"}}]}}`)
+	content, err := validateContent(valid, fields)
+	if err != nil {
+		t.Fatalf("合法媒体块应通过: %v", err)
+	}
+	refs, err := mediaReferences(content, Revision{ID: "rev_1", EntryID: "ent_1", ModelID: "mdl_1"}, fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 3 || refs[0].AssetID != "ast_image" || refs[0].Kind != "image" || refs[0].JSONPointer != "/body/content/0/attrs/asset_id" || refs[0].Position != 0 || refs[2].JSONPointer != "/body/content/2/attrs/asset_id" {
+		t.Fatalf("富文本媒体引用不符合预期: %#v", refs)
+	}
+
+	invalid := json.RawMessage(`{"body":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"image","attrs":{"asset_id":"ast_inline","alt":""}}]},{"type":"image","attrs":{"asset_id":"ast_extra","alt":"","title":"x"},"content":[]},{"type":"audio","attrs":{"asset_id":"ast_audio","alt":"x"}}]}}`)
+	_, err = validateContent(invalid, fields)
+	assertValidationCodes(t, err, []string{
+		"/content/body/content/0/content/0/type:invalid_value",
+		"/content/body/content/1/attrs/title:unknown_property",
+		"/content/body/content/1/content:unknown_property",
+		"/content/body/content/2/attrs/alt:unknown_property",
+	})
+}
+
+func TestValidateRichTextLimitsImageAlt(t *testing.T) {
+	fields := []schema.ContentField{{Key: "body", Type: schema.FieldTypeRichText, Status: schema.StatusActive}}
+	raw, err := json.Marshal(map[string]any{"body": map[string]any{"type": "doc", "content": []any{map[string]any{"type": "image", "attrs": map[string]any{"asset_id": "ast_image", "alt": strings.Repeat("图", 1001)}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = validateContent(raw, fields)
+	assertValidationCodes(t, err, []string{"/content/body/content/0/attrs/alt:too_long"})
+}
+
+func TestRichTextMediaReferencesStayInDraftAndPublishedScans(t *testing.T) {
+	fields := []schema.ContentField{{ID: "fld_body", Key: "body", Type: schema.FieldTypeRichText, Status: schema.StatusActive}}
+	raw := json.RawMessage(`{"body":{"type":"doc","content":[{"type":"blockquote","content":[{"type":"image","attrs":{"asset_id":"ast_1","alt":"说明"}}]}]}}`)
+	relations, draftRefs := draftIdentifiers(raw, "mdl_1", fields)
+	if len(relations) != 0 || len(draftRefs) != 1 || draftRefs[0].AssetID != "ast_1" || draftRefs[0].Kind != "image" {
+		t.Fatalf("CSV 草稿标识扫描不符合预期: relations=%#v refs=%#v", relations, draftRefs)
+	}
+	ids, err := publishedAssetIDs(raw, fields)
+	if err != nil || len(ids) != 1 || ids[0] != "ast_1" {
+		t.Fatalf("发布素材扫描不符合预期: ids=%#v err=%v", ids, err)
+	}
+}
+
 func assertValidationCodes(t *testing.T, err error, expected []string) {
 	t.Helper()
 	applicationError, ok := err.(*apperror.Error)

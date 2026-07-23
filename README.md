@@ -95,4 +95,4 @@ podman run --rm internal-cms:test version
 
 同步 CSV 导出最多 10,000 行、50 MiB，全进程最多 2 个且同一用户最多 1 个并发请求，生成和传输总期限为 120 秒。内容 API 对已认证 Key 和 Key/IP 组合执行进程内频率与并发保护，并设置全进程并发上限；共享代理出口下不同 Key 不共用纯 IP 配额。
 
-不使用素材时，可以将运行时 `APP_ASSETS_ENABLED=false`，并在构建前端或镜像时同时设置 `VITE_ASSETS_ENABLED=false`（例如 `make image VITE_ASSETS_ENABLED=false`）。此时前端不展示素材和媒体选择入口，后端不注册素材路由；同步 CSV 导入导出仍然可用。`api/openapi/admin.yaml` 与 `api/openapi/content.yaml` 仍是完整 V1 聚合契约，不随部署开关裁剪。
+不使用对象存储时，可以将运行时 `APP_ASSETS_ENABLED=false`，并在构建前端或镜像时同时设置 `VITE_ASSETS_ENABLED=false`（例如 `make image VITE_ASSETS_ENABLED=false`）。此时前端不展示素材和媒体插入、替换、下载入口，后端不注册素材路由，但仍维护 Revision 的素材引用与元数据，使已有媒体内容可以无损读取并在新 Revision 中继承；不能新增不存在于 base Revision 的归档引用。同步 CSV 导入导出仍然可用。`api/openapi/admin.yaml` 与 `api/openapi/content.yaml` 仍是完整 V1 聚合契约，不随部署开关裁剪。

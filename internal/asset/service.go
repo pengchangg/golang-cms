@@ -278,7 +278,7 @@ func (s *Service) List(ctx context.Context, principal identity.Principal, input 
 	if err := requirePermission(principal, permissionView); err != nil {
 		return List{}, err
 	}
-	if input.Limit < 1 || input.Limit > 100 || input.Status != nil && !validStatus(*input.Status) {
+	if input.Limit < 1 || input.Limit > 100 || input.Status != nil && !validStatus(*input.Status) || input.Kind != "" && !validAssetKind(input.Kind) {
 		return List{}, appError(apperror.KindInvalidArgument, "invalid_query", "素材查询无效")
 	}
 	if input.MimeType != "" {
@@ -306,6 +306,10 @@ func (s *Service) List(ctx context.Context, principal identity.Principal, input 
 		result.NextCursor = &encoded
 	}
 	return result, nil
+}
+
+func validAssetKind(kind AssetKind) bool {
+	return kind == AssetKindImage || kind == AssetKindAudio || kind == AssetKindVideo
 }
 
 func (s *Service) AdminDownload(ctx context.Context, principal identity.Principal, meta RequestMeta, id string) (SignedRequest, error) {

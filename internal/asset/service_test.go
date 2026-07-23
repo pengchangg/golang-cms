@@ -32,7 +32,10 @@ func (t testTransactor) WithinTx(ctx context.Context, _ *sql.TxOptions, fn func(
 	return fn(t.q)
 }
 
-type memoryAssetRepository struct{ values map[string]Asset }
+type memoryAssetRepository struct {
+	values        map[string]Asset
+	lastListQuery ListQuery
+}
 
 func (r *memoryAssetRepository) Create(_ context.Context, _ database.Querier, value Asset) error {
 	r.values[value.ID] = value
@@ -75,11 +78,22 @@ func (r *memoryAssetRepository) Archive(_ context.Context, _ database.Querier, i
 	return nil
 }
 func (r *memoryAssetRepository) List(_ context.Context, _ database.Querier, input ListQuery, limit int, _ *Cursor) ([]Asset, error) {
+	r.lastListQuery = input
 	result := []Asset{}
 	for _, value := range r.values {
-		if input.Status == nil || value.Status == *input.Status {
-			result = append(result, value)
+		if input.Status != nil && value.Status != *input.Status || input.MimeType != "" && value.MimeType != input.MimeType {
+			continue
 		}
+		if mimeTypes := mimeTypesForAssetKind(input.Kind); len(mimeTypes) > 0 {
+			matched := false
+			for _, mimeType := range mimeTypes {
+				matched = matched || value.MimeType == mimeType
+			}
+			if !matched {
+				continue
+			}
+		}
+		result = append(result, value)
 	}
 	if len(result) > limit {
 		result = result[:limit]
@@ -328,6 +342,22 @@ func TestServiceValidationAndPermission(t *testing.T) {
 	assertCode(t, err, "permission_denied")
 	_, err = service.CreateUpload(context.Background(), identity.Principal{SystemPermissions: []string{permissionUpload}}, RequestMeta{}, CreateUploadRequest{Filename: "../secret", MimeType: "application/octet-stream", Size: 11, SHA256: "bad"})
 	assertCode(t, err, "file_too_large")
+}
+
+func TestServiceListValidatesAndPassesKind(t *testing.T) {
+	repository := &memoryAssetRepository{values: map[string]Asset{
+		"ast_image": {ID: "ast_image", MimeType: "image/avif", Status: StatusAvailable},
+		"ast_audio": {ID: "ast_audio", MimeType: "audio/mpeg", Status: StatusAvailable},
+	}}
+	service, _ := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: repository, Store: NewMemoryStore(time.Minute, time.Minute), Audit: &memoryAudit{}, Config: Config{AllowedMimeTypes: []string{"image/avif"}, MaxSize: 1, UploadTTL: time.Minute, DownloadTTL: time.Minute}})
+	principal := identity.Principal{SystemPermissions: []string{permissionView}}
+
+	result, err := service.List(context.Background(), principal, ListQuery{Kind: AssetKindImage, Limit: 20})
+	if err != nil || len(result.Items) != 1 || result.Items[0].ID != "ast_image" || repository.lastListQuery.Kind != AssetKindImage {
+		t.Fatalf("图片 kind 列表结果错误: result=%+v query=%+v err=%v", result, repository.lastListQuery, err)
+	}
+	_, err = service.List(context.Background(), principal, ListQuery{Kind: AssetKind("document"), Limit: 20})
+	assertCode(t, err, "invalid_query")
 }
 
 func TestConfirmConcurrencyLimitsAndRelease(t *testing.T) {

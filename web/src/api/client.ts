@@ -216,7 +216,7 @@ export const api = {
   revokeAPIKey: (id: string) => request<void>(`/api-keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   rotateAPIKey: (id: string, body: RotateAPIKeyRequest = {}) => request<APIKeySecret>(`/api-keys/${encodeURIComponent(id)}/rotate`, { ...json('POST', body), cache: 'no-store' }),
   listAuditEvents: (filters: Record<string, string | undefined>) => request<CursorResponse<AuditEvent>>(`/audit/events${queryString(filters)}`),
-  listAssets: (filters: { status?: AssetStatus; mime_type?: string; limit?: number; cursor?: string } = {}) => request<CursorResponse<Asset>>(`/assets${queryString(filters)}`),
+  listAssets: (filters: { status?: AssetStatus; mime_type?: string; kind?: 'image' | 'audio' | 'video'; limit?: number; cursor?: string } = {}) => request<CursorResponse<Asset>>(`/assets${queryString(filters)}`),
   getAsset: (id: string) => request<Asset>(`/assets/${encodeURIComponent(id)}`),
   createAssetUpload: (body: CreateAssetUploadRequest) => request<AssetUpload>('/assets/uploads', { ...json('POST', body), cache: 'no-store' }),
   confirmAssetUpload: (id: string) => request<Asset>(`/assets/${encodeURIComponent(id)}/confirm`, json('POST', {})),

@@ -1,11 +1,15 @@
 package asset
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"cms/internal/identity"
 )
 
 func TestHandlerRegistersOnlyAdminRoutes(t *testing.T) {
@@ -37,6 +41,37 @@ func TestHandlerRegistersOnlyAdminRoutes(t *testing.T) {
 	_, pattern := mux.Handler(request)
 	if pattern != "" {
 		t.Fatalf("素材管理 Handler 不应注册客户端路由: %s", pattern)
+	}
+}
+
+func TestHandlerListAcceptsKindAndRejectsInvalidKind(t *testing.T) {
+	repository := &memoryAssetRepository{values: map[string]Asset{}}
+	service, err := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: repository, Store: NewMemoryStore(time.Minute, time.Minute), Audit: &memoryAudit{}, Config: Config{AllowedMimeTypes: []string{"image/png"}, MaxSize: 1, UploadTTL: time.Minute, DownloadTTL: time.Minute}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(service, func(*http.Request) (identity.Principal, error) {
+		return identity.Principal{SystemPermissions: []string{permissionView}}, nil
+	})
+
+	response := httptest.NewRecorder()
+	handler.list(response, httptest.NewRequest(http.MethodGet, "/api/admin/v1/assets?kind=video", nil))
+	if response.Code != http.StatusOK || repository.lastListQuery.Kind != AssetKindVideo {
+		t.Fatalf("kind 参数未透传: code=%d query=%+v body=%s", response.Code, repository.lastListQuery, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	handler.list(response, httptest.NewRequest(http.MethodGet, "/api/admin/v1/assets?kind=document", nil))
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusBadRequest || body.Error.Code != "invalid_query" {
+		t.Fatalf("非法 kind 错误不稳定: code=%d error=%q body=%s", response.Code, body.Error.Code, response.Body.String())
 	}
 }
 

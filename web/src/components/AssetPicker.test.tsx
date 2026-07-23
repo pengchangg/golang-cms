@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -32,6 +32,14 @@ describe('素材选择器上传', () => {
     await userEvent.click(screen.getByRole('button', { name: '选择素材' }))
     expect(await screen.findByRole('button', { name: '上传并选中' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '新封面.png' })).toBeEnabled()
+  })
+
+  it('按媒体类型在服务端分页筛选素材', async () => {
+    vi.spyOn(api, 'listAssets').mockResolvedValue({ items: [uploaded], next_cursor: null })
+    render(<AssetPicker multiple={false} value={null} onChange={vi.fn()} kind="image" triggerLabel="插入图片" />)
+    await userEvent.click(screen.getByRole('button', { name: '插入图片' }))
+    expect(api.listAssets).toHaveBeenCalledWith({ status: 'available', kind: 'image', cursor: undefined, limit: 20 })
+    await waitFor(() => expect(screen.getByRole('dialog', { name: '选择可用图片' })).toBeVisible())
   })
 
   it('表单变为只读时关闭已打开的选择和上传弹窗', async () => {

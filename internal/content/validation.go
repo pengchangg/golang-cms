@@ -406,17 +406,44 @@ func mediaReferences(content json.RawMessage, revision Revision, fields []schema
 				for position, assetID := range item.([]any) {
 					result = append(result, MediaReference{RevisionID: revision.ID, EntryID: revision.EntryID, ModelID: revision.ModelID, FieldID: field.ID, AssetID: assetID.(string), JSONPointer: pointer, Position: position})
 				}
+			case schema.FieldTypeRichText:
+				appendRichTextMediaReferences(&result, item, revision, field.ID, pointer)
 			case schema.FieldTypeObject:
-				walk(item.(map[string]any), field.Children, pointer)
+				if child, ok := item.(map[string]any); ok {
+					walk(child, field.Children, pointer)
+				}
 			case schema.FieldTypeRepeatableGroup:
-				for position, group := range item.([]any) {
-					walk(group.(map[string]any), field.Children, fmt.Sprintf("%s/%d", pointer, position))
+				groups, _ := item.([]any)
+				for position, group := range groups {
+					if child, ok := group.(map[string]any); ok {
+						walk(child, field.Children, fmt.Sprintf("%s/%d", pointer, position))
+					}
 				}
 			}
 		}
 	}
 	walk(object, fields, "")
 	return result, nil
+}
+
+func appendRichTextMediaReferences(result *[]MediaReference, value any, revision Revision, fieldID, pointer string) {
+	node, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	typeName, _ := node["type"].(string)
+	if typeName == "image" || typeName == "audio" || typeName == "video" {
+		attrs, _ := node["attrs"].(map[string]any)
+		assetID, _ := attrs["asset_id"].(string)
+		if assetID != "" {
+			*result = append(*result, MediaReference{RevisionID: revision.ID, EntryID: revision.EntryID, ModelID: revision.ModelID, FieldID: fieldID, AssetID: assetID, JSONPointer: pointer + "/attrs/asset_id", Position: 0, Kind: typeName})
+		}
+		return
+	}
+	children, _ := node["content"].([]any)
+	for i, child := range children {
+		appendRichTextMediaReferences(result, child, revision, fieldID, fmt.Sprintf("%s/content/%d", pointer, i))
+	}
 }
 
 func validateRichTextNode(node map[string]any, path, parent string, failures *validationErrors) {
@@ -426,11 +453,11 @@ func validateRichTextNode(node map[string]any, path, parent string, failures *va
 		return
 	}
 	allowedChildren := map[string]map[string]bool{
-		"doc":          {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true},
+		"doc":          {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true, "image": true, "audio": true, "video": true},
 		"bullet_list":  {"list_item": true},
 		"ordered_list": {"list_item": true},
-		"list_item":    {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true},
-		"blockquote":   {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true},
+		"list_item":    {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true, "image": true, "audio": true, "video": true},
+		"blockquote":   {"paragraph": true, "heading": true, "bullet_list": true, "ordered_list": true, "blockquote": true, "code_block": true, "image": true, "audio": true, "video": true},
 		"paragraph":    {"text": true, "hard_break": true},
 		"heading":      {"text": true, "hard_break": true},
 		"code_block":   {"text": true},
@@ -447,6 +474,8 @@ func validateRichTextNode(node map[string]any, path, parent string, failures *va
 	case "text":
 		allowedProperties["text"], allowedProperties["marks"] = true, true
 	case "hard_break":
+	case "image", "audio", "video":
+		allowedProperties["attrs"] = true
 	default:
 		failures.add(path+"/type", "invalid_value", "未知富文本节点类型")
 	}
@@ -462,6 +491,10 @@ func validateRichTextNode(node map[string]any, path, parent string, failures *va
 		} else if level, ok := attrs["level"].(json.Number); !ok || !map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true, "6": true}[level.String()] {
 			failures.add(path+"/attrs/level", "invalid_value", "heading level 必须是 1 至 6 的整数")
 		}
+	}
+	if typeName == "image" || typeName == "audio" || typeName == "video" {
+		validateRichTextMediaAttrs(node["attrs"], path+"/attrs", typeName, failures)
+		return
 	}
 	if typeName == "text" {
 		if _, ok := node["text"].(string); !ok {
@@ -486,6 +519,33 @@ func validateRichTextNode(node map[string]any, path, parent string, failures *va
 			continue
 		}
 		validateRichTextNode(object, childPath, typeName, failures)
+	}
+}
+
+func validateRichTextMediaAttrs(value any, path, kind string, failures *validationErrors) {
+	attrs, ok := value.(map[string]any)
+	if !ok {
+		failures.add(path, "invalid_type", "媒体节点 attrs 必须是 object")
+		return
+	}
+	allowed := map[string]bool{"asset_id": true}
+	if kind == "image" {
+		allowed["alt"] = true
+	}
+	for key := range attrs {
+		if !allowed[key] {
+			failures.add(path+"/"+escapePointer(key), "unknown_property", "媒体节点 attrs 包含未允许属性")
+		}
+	}
+	if assetID, ok := attrs["asset_id"].(string); !ok || assetID == "" {
+		failures.add(path+"/asset_id", "invalid_type", "媒体节点 asset_id 必须是非空字符串")
+	}
+	if kind == "image" {
+		if alt, ok := attrs["alt"].(string); !ok {
+			failures.add(path+"/alt", "invalid_type", "image alt 必须是字符串")
+		} else if utf8.RuneCountInString(alt) > 1000 {
+			failures.add(path+"/alt", "too_long", "image alt 最多 1000 个字符")
+		}
 	}
 }
 

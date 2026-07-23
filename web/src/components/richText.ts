@@ -1,9 +1,10 @@
 const containerTypes = new Set(['doc', 'paragraph', 'heading', 'code_block', 'bullet_list', 'ordered_list', 'list_item', 'blockquote'])
+const mediaTypes = new Set(['image', 'audio', 'video'])
 const markTypes = new Set(['bold', 'italic', 'underline', 'strike', 'code'])
 
 export interface RichTextNode {
   type: string
-  attrs?: { level?: number }
+  attrs?: { level?: number; asset_id?: string; alt?: string }
   content?: RichTextNode[]
   text?: string
   marks?: Array<{ type: string }>
@@ -27,6 +28,12 @@ export function normalizeRichText(value: unknown): RichTextNode {
     return { type, text: typeof source.text === 'string' ? source.text : '', ...(marks?.length ? { marks } : {}) }
   }
   if (type === 'hard_break') return { type }
+  if (mediaTypes.has(type)) {
+    const assetID = typeof source.attrs?.asset_id === 'string' ? source.attrs.asset_id : ''
+    return type === 'image'
+      ? { type, attrs: { asset_id: assetID, alt: typeof source.attrs?.alt === 'string' ? source.attrs.alt : '' } }
+      : { type, attrs: { asset_id: assetID } }
+  }
   if (!containerTypes.has(type)) return { type: 'paragraph', content: [] }
   const content = Array.isArray(source.content) ? source.content.map(normalizeRichText) : []
   if (type === 'heading') {

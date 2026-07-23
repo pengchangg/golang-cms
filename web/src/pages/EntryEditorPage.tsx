@@ -29,6 +29,7 @@ function EntryEditor({ principal, modelId, entryId }: { principal: Principal; mo
   const [reason, setReason] = useState('')
   const [acting, setActing] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [saveFailed, setSaveFailed] = useState(false)
   const [fieldValidity, setFieldValidity] = useState<Record<string, boolean>>({})
   const writeLock = useRef(false)
   const allowNavigation = useRef(false)
@@ -88,6 +89,7 @@ function EntryEditor({ principal, modelId, entryId }: { principal: Principal; mo
     try {
       const result = entryId && entry.data ? await api.updateEntry(modelId, entryId, entry.data.current_draft_revision_id, content) : await api.createEntry(modelId, content)
       message.success('草稿已保存为新 Revision')
+      setSaveFailed(false)
       setDraft(undefined)
       if (!entryId) {
         allowNavigation.current = true
@@ -98,6 +100,7 @@ function EntryEditor({ principal, modelId, entryId }: { principal: Principal; mo
         reloadEvents()
       }
     } catch (error) {
+      setSaveFailed(true)
       if (error instanceof ApiError && error.code === 'draft_revision_conflict') message.error('草稿已被其他人更新，请重新载入后再编辑')
       else message.error(apiErrorMessage(error, '保存草稿失败'))
     } finally {
@@ -115,7 +118,7 @@ function EntryEditor({ principal, modelId, entryId }: { principal: Principal; mo
   </Space> : null
 
   return <>
-    <PageHeader eyebrow="版本工作流" title={entryId ? '内容与审核' : '新建草稿'} description="每个动作锁定明确 Revision，工作流事件不可变并保留驳回理由。" extra={<Space wrap><Button disabled={writing} onClick={() => navigate(`/content/${modelId}`)}>返回列表</Button>{actionButtons}<Button type="primary" loading={saving} disabled={writing || !canWrite || !canEditStructure || !editable || !formValid || entry.data?.status === 'archived'} onClick={save}>保存草稿</Button></Space>} />
+    <PageHeader eyebrow="版本工作流" title={entryId ? '内容与审核' : '新建草稿'} description="每个动作锁定明确 Revision，工作流事件不可变并保留驳回理由。" extra={<Space wrap><Typography.Text className="save-state" type={saveFailed ? 'danger' : hasUnsavedChanges ? 'warning' : 'secondary'}>{saving ? '正在保存' : saveFailed ? '保存失败，本地修改仍保留' : hasUnsavedChanges ? '有未保存修改' : entryId ? '已保存' : '尚未保存'}</Typography.Text><Button disabled={writing} onClick={() => navigate(`/content/${modelId}`)}>返回列表</Button>{actionButtons}<Button type="primary" loading={saving} disabled={writing || !canWrite || !canEditStructure || !editable || !formValid || entry.data?.status === 'archived'} onClick={save}>保存草稿</Button></Space>} />
     <PendingApiNotice />
     {workflowStatus ? <div className="workflow-state"><Tag>{labels[workflowStatus]}</Tag><Typography.Text type="secondary">工作头 <code>{revisionId}</code></Typography.Text></div> : null}
     {hasUnsavedChanges ? <Alert className="editor-notice" type="warning" showIcon title="有未保存的修改" description="请先保存为新 Revision，才能提交审核；当前已保存的旧 Revision 不会被送审。" /> : null}
@@ -126,7 +129,7 @@ function EntryEditor({ principal, modelId, entryId }: { principal: Principal; mo
     {entry.data?.status === 'archived' ? <Alert type="warning" showIcon title="归档内容不可编辑" /> : null}
     <div className="entry-workspace">
       <DataState loading={entry.loading || (canViewModel && model.loading)} error={entry.error ?? (canViewModel ? model.error : undefined)} retry={() => { model.reload(); entry.reload() }}>
-        {canEditStructure ? <DynamicContentForm fields={model.data!.fields} content={content} onChange={setDraft} disabled={writing || !canWrite || !editable || entry.data?.status === 'archived'} canSelectAssets={hasSystemPermission(principal, 'assets.view')} canUploadAssets={hasSystemPermission(principal, 'assets.view') && hasSystemPermission(principal, 'assets.upload')} referencedAssets={entry.data?.referenced_assets} canViewModel={(targetModelId) => hasModelPermission(principal, targetModelId, 'content.view')} onFieldValidityChange={(path, valid) => setFieldValidity((current) => current[path] === valid ? current : { ...current, [path]: valid })} /> : entry.data ? <pre aria-label="只读内容数据">{JSON.stringify(entry.data.current_draft_revision.content, null, 2)}</pre> : null}
+        {canEditStructure ? <DynamicContentForm fields={model.data!.fields} content={content} onChange={setDraft} disabled={writing || !canWrite || !editable || entry.data?.status === 'archived'} canSelectAssets={hasSystemPermission(principal, 'assets.view')} canUploadAssets={hasSystemPermission(principal, 'assets.view') && hasSystemPermission(principal, 'assets.upload')} referencedAssets={entry.data?.referenced_assets} canViewModel={(targetModelId) => hasModelPermission(principal, targetModelId, 'content.view')} onFieldValidityChange={(path, valid) => setFieldValidity((current) => current[path] === valid ? current : { ...current, [path]: valid })} modelId={modelId} entryId={entryId} /> : entry.data ? <pre aria-label="只读内容数据">{JSON.stringify(entry.data.current_draft_revision.content, null, 2)}</pre> : null}
       </DataState>
       {entryId ? <aside className="workflow-history" aria-label="版本工作流事件">
         <Typography.Title level={3}>版本事件</Typography.Title>

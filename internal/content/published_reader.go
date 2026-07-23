@@ -374,47 +374,14 @@ func (r *SQLPublishedContentReader) resolvePublishedAssets(ctx context.Context, 
 }
 
 func publishedAssetIDs(content json.RawMessage, fields []schema.ContentField) ([]string, error) {
-	var object map[string]any
-	if err := json.Unmarshal(content, &object); err != nil {
+	references, err := mediaReferences(content, Revision{}, fields)
+	if err != nil {
 		return nil, err
 	}
-	ids := []string{}
-	var walk func(map[string]any, []schema.ContentField)
-	walk = func(value map[string]any, fields []schema.ContentField) {
-		for _, field := range fields {
-			item, exists := value[field.Key]
-			if !exists || item == nil || field.Status != schema.StatusActive {
-				continue
-			}
-			switch field.Type {
-			case schema.FieldTypeSingleMedia:
-				if id, ok := item.(string); ok {
-					ids = append(ids, id)
-				}
-			case schema.FieldTypeMultiMedia:
-				if items, ok := item.([]any); ok {
-					for _, value := range items {
-						if id, ok := value.(string); ok {
-							ids = append(ids, id)
-						}
-					}
-				}
-			case schema.FieldTypeObject:
-				if child, ok := item.(map[string]any); ok {
-					walk(child, field.Children)
-				}
-			case schema.FieldTypeRepeatableGroup:
-				if groups, ok := item.([]any); ok {
-					for _, group := range groups {
-						if child, ok := group.(map[string]any); ok {
-							walk(child, field.Children)
-						}
-					}
-				}
-			}
-		}
+	ids := make([]string, len(references))
+	for i, reference := range references {
+		ids[i] = reference.AssetID
 	}
-	walk(object, fields)
 	return ids, nil
 }
 

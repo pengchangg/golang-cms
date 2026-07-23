@@ -147,9 +147,9 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	userService := identity.NewUserService(identity.UserDependencies{DB: db, Transactor: securityTransactor, Authorizer: authorizer, Audit: auditWriter})
 	roleService := permission.NewService(permission.Dependencies{DB: db, Transactor: securityTransactor, Authorizer: authorizer, Audit: auditWriter, Users: userService, Models: modelAdapter, ConfigNamespaces: configurationProvider, ActiveConfigNamespaceIDs: configurationProvider})
 	configurationService := configuration.NewService(configuration.Dependencies{DB: db, Transactor: securityTransactor, Repository: configurationRepository, Authorizer: authorizer, Audit: auditWriter})
-	var media content.MediaReferenceManager
-	var assetResolver content.ReferencedAssetResolver
-	var publishedAssetResolver content.PublishedAssetResolver
+	media := content.MediaReferenceManager(integration.MediaReferenceManager{Manager: asset.SQLReferenceManager{}})
+	assetResolver := content.ReferencedAssetResolver(integration.ReferencedAssetResolver{DB: db})
+	publishedAssetResolver := content.PublishedAssetResolver(integration.ReferencedAssetResolver{DB: db})
 	var assetService *asset.Service
 	var objectStore *asset.S3Store
 	if cfg.AssetsEnabled {
@@ -160,9 +160,6 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		if err = objectStore.CheckPrivateBucket(ctx); err != nil {
 			return fmt.Errorf("检查 S3 兼容对象存储 Bucket: %w", err)
 		}
-		media = integration.MediaReferenceManager{Manager: asset.SQLReferenceManager{}}
-		assetResolver = integration.ReferencedAssetResolver{DB: db}
-		publishedAssetResolver = integration.ReferencedAssetResolver{DB: db}
 		assetService, err = asset.NewService(asset.Dependencies{DB: db, Transactor: transactor, Repository: asset.SQLRepository{}, Store: objectStore, Audit: auditWriter, Config: asset.Config{AllowedMimeTypes: cfg.AssetMimeTypes, MaxSize: cfg.AssetMaxSize, UploadTTL: cfg.S3UploadTTL, DownloadTTL: cfg.S3DownloadTTL}})
 		if err != nil {
 			return fmt.Errorf("初始化素材服务: %w", err)
