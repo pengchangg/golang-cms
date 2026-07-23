@@ -83,7 +83,7 @@ x-integration-status: integrated
       "401": *unauthenticated
       "403": *forbidden
       "404": &notFound
-        description: API Key 或模型不存在。
+        description: API Key、模型或配置命名空间不存在。
         content:
           application/json:
             schema:

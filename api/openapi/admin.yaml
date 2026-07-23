@@ -79,6 +79,34 @@ paths:
     $ref: ./fragments/admin/api-keys/paths.yaml#/~1api-keys~1{api_key_id}
   /api-keys/{api_key_id}/rotate:
     $ref: ./fragments/admin/api-keys/paths.yaml#/~1api-keys~1{api_key_id}~1rotate
+  /configurations:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations
+  /configurations/{namespace_id}:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}
+  /configurations/{namespace_id}/items:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items
+  /configurations/{namespace_id}/items/{item_id}:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}
+  /configurations/{namespace_id}/items/{item_id}/value:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1value
+  /configurations/{namespace_id}/items/{item_id}/revisions:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1revisions
+  /configurations/{namespace_id}/items/{item_id}/revisions/{revision_id}:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1revisions~1{revision_id}
+  /configurations/{namespace_id}/items/{item_id}/workflow-events:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1workflow-events
+  /configurations/{namespace_id}/items/{item_id}/drafts:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1drafts
+  /configurations/{namespace_id}/items/{item_id}/draft:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1draft
+  /configurations/{namespace_id}/items/{item_id}/submit:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1submit
+  /configurations/{namespace_id}/items/{item_id}/approve:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1approve
+  /configurations/{namespace_id}/items/{item_id}/reject:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1reject
+  /configurations/{namespace_id}/items/{item_id}/unpublish:
+    $ref: ./fragments/admin/configurations/paths.yaml#/~1configurations~1{namespace_id}~1items~1{item_id}~1unpublish
   /assets:
     $ref: ./fragments/admin/assets/paths.yaml#/~1assets
   /assets/uploads:

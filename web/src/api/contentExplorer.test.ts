@@ -6,7 +6,7 @@ import type { SessionResponse } from './types'
 
 const apiKey = `cmsk_abcdefghijkl_${'x'.repeat(43)}`
 const session: SessionResponse = {
-  principal: { user_id: 'usr_1', display_name: '调试用户', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: ['api_keys.view'], model_permissions: [] },
+  principal: { user_id: 'usr_1', display_name: '调试用户', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: ['api_keys.view'], model_permissions: [], config_namespace_permissions: [] },
   content_models: [],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-22T10:00:00Z',
@@ -33,10 +33,23 @@ describe('Content API 调试请求层', () => {
     expect(response).toMatchObject({ status: 200, durationMs: 16.4, data: { items: [] }, headers: { etag: '"sha256-test"', 'x-request-id': 'req_content' } })
   })
 
-  it.each(['/assets/ast_1', '/models/articles/drafts', '//outside.example/models', '/models\\articles'])('拒绝白名单外路径 %s', async (path) => {
+  it.each(['/assets/ast_1', '/models/articles/drafts', '//outside.example/models', '/models\\articles', '/configurations/site/../../models'])('拒绝白名单外路径 %s', async (path) => {
     vi.stubGlobal('fetch', vi.fn())
     await expect(requestContentAPI(path, apiKey)).rejects.toThrow()
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('允许读取配置命名空间和配置单项', async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ maintenance: false }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await requestContentAPI('/configurations/website', apiKey)
+    await requestContentAPI('/configurations/website/home.hero', apiKey)
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      '/api/content/v1/configurations/website',
+      '/api/content/v1/configurations/website/home.hero',
+    ])
   })
 
   it('Content API 401 不清除管理会话', async () => {

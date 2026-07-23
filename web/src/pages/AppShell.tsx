@@ -21,6 +21,9 @@ const EntriesPage = lazy(() => import('./EntriesPage'))
 const EntryEditorPage = lazy(() => import('./EntryEditorPage'))
 const AuditPage = lazy(() => import('./AuditPage'))
 const APIKeysPage = lazy(() => import('./APIKeysPage'))
+const ConfigurationsPage = lazy(() => import('./ConfigurationsPage'))
+const ConfigurationNamespacePage = lazy(() => import('./ConfigurationNamespacePage'))
+const ConfigurationItemPage = lazy(() => import('./ConfigurationItemPage'))
 const APIExplorerPage = (
   import.meta.env.VITE_CONTENT_API_EXPLORER_ENABLED === 'true' ||
   (import.meta.env.VITE_CONTENT_API_EXPLORER_ENABLED === undefined && import.meta.env.DEV)
@@ -83,6 +86,9 @@ export default function AppShell() {
   const contentRoute = (permission: ModelPermission, child: ReactNode) => (
     <PermissionRoute principal={principal} model={{ id: location.pathname.split('/')[2] ?? '', permission }}>{child}</PermissionRoute>
   )
+  const configurationRoute = (child: ReactNode) => (
+    <PermissionRoute principal={principal} configNamespace={{ id: location.pathname.split('/')[2] ?? '', permission: 'config.view' }}>{child}</PermissionRoute>
+  )
 
   return (
     <Layout className="app-shell">
@@ -112,6 +118,9 @@ export default function AppShell() {
               <Route path="roles" element={systemRoute(rolePagePermissions, <RolesPage principal={principal} />)} />
               <Route path="models" element={systemRoute('models.view', <ModelsPage principal={principal} />)} />
               <Route path="models/:modelId" element={systemRoute('models.view', <ModelDesignerPage principal={principal} />)} />
+              <Route path="configurations" element={systemRoute('configurations.view', <ConfigurationsPage principal={principal} />)} />
+              <Route path="configurations/:namespaceId" element={systemRoute('configurations.view', <ConfigurationNamespacePage principal={principal} />)} />
+              <Route path="configurations/:namespaceId/items/:itemId" element={configurationRoute(<ConfigurationItemPage principal={principal} />)} />
               <Route path="content/:modelId" element={contentRoute('content.view', <EntriesPage principal={principal} />)} />
               <Route path="content/:modelId/new" element={contentRoute('content.create', <EntryEditorPage principal={principal} />)} />
               <Route path="content/:modelId/:entryId" element={contentRoute('content.view', <EntryEditorPage principal={principal} />)} />

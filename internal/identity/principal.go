@@ -21,11 +21,17 @@ type ModelPermissions struct {
 	Permissions []string `json:"permissions"`
 }
 
+type ConfigNamespacePermissions struct {
+	ConfigNamespaceID string   `json:"config_namespace_id"`
+	Permissions       []string `json:"permissions"`
+}
+
 type PermissionSet struct {
-	System         []string
-	Models         []ModelPermissions
-	EmergencyAdmin bool
-	HighRiskRole   bool
+	System                     []string
+	Models                     []ModelPermissions
+	ConfigNamespacePermissions []ConfigNamespacePermissions
+	EmergencyAdmin             bool
+	HighRiskRole               bool
 }
 
 type LockedRoleSelection struct {
@@ -35,14 +41,15 @@ type LockedRoleSelection struct {
 }
 
 type Principal struct {
-	UserID            string             `json:"user_id"`
-	DisplayName       string             `json:"display_name"`
-	Email             *string            `json:"email"`
-	AuthMethod        AuthMethod         `json:"auth_method"`
-	EmergencyAdmin    bool               `json:"is_emergency_admin"`
-	HighRiskRole      bool               `json:"has_high_risk_role"`
-	SystemPermissions []string           `json:"system_permissions"`
-	ModelPermissions  []ModelPermissions `json:"model_permissions"`
+	UserID                     string                       `json:"user_id"`
+	DisplayName                string                       `json:"display_name"`
+	Email                      *string                      `json:"email"`
+	AuthMethod                 AuthMethod                   `json:"auth_method"`
+	EmergencyAdmin             bool                         `json:"is_emergency_admin"`
+	HighRiskRole               bool                         `json:"has_high_risk_role"`
+	SystemPermissions          []string                     `json:"system_permissions"`
+	ModelPermissions           []ModelPermissions           `json:"model_permissions"`
+	ConfigNamespacePermissions []ConfigNamespacePermissions `json:"config_namespace_permissions"`
 }
 
 type PermissionProvider interface {
@@ -75,6 +82,18 @@ func (p Principal) CanDelegate(permissions PermissionSet) bool {
 			}
 		}
 	}
+	configNamespaces := make(map[string]map[string]struct{}, len(p.ConfigNamespacePermissions))
+	for _, grant := range p.ConfigNamespacePermissions {
+		configNamespaces[grant.ConfigNamespaceID] = stringSet(grant.Permissions)
+	}
+	for _, grant := range permissions.ConfigNamespacePermissions {
+		allowed := configNamespaces[grant.ConfigNamespaceID]
+		for _, code := range grant.Permissions {
+			if _, ok := allowed[code]; !ok {
+				return false
+			}
+		}
+	}
 	return true
 }
 
@@ -89,6 +108,7 @@ func stringSet(values []string) map[string]struct{} {
 var systemPermissionCodes = map[string]struct{}{
 	"users.view": {}, "users.manage": {}, "roles.view": {}, "roles.manage": {},
 	"models.view": {}, "models.create": {}, "models.update": {}, "models.archive": {},
+	"configurations.view": {}, "configurations.create": {}, "configurations.update": {}, "configurations.archive": {},
 	"assets.view": {}, "assets.upload": {}, "assets.update": {}, "assets.archive": {},
 	"api_keys.view": {}, "api_keys.create": {}, "api_keys.revoke": {}, "audit.view": {},
 }
@@ -98,18 +118,46 @@ var modelPermissionCodes = map[string]struct{}{
 	"content.submit": {}, "content.review": {}, "content.publish": {}, "content.unpublish": {},
 }
 
+var configNamespacePermissionCodes = map[string]struct{}{
+	"config.view": {}, "config.create": {}, "config.update": {}, "config.archive": {},
+	"config.submit": {}, "config.review": {}, "config.publish": {}, "config.unpublish": {},
+}
+
 // NewPrincipal 规范化外部权限提供者返回的权限并集，不在身份模块内伪造 RBAC。
 func NewPrincipal(userID, displayName string, email *string, method AuthMethod, permissions PermissionSet) Principal {
 	return Principal{
-		UserID:            userID,
-		DisplayName:       displayName,
-		Email:             email,
-		AuthMethod:        method,
-		EmergencyAdmin:    permissions.EmergencyAdmin,
-		HighRiskRole:      permissions.HighRiskRole,
-		SystemPermissions: validUniqueSorted(permissions.System, systemPermissionCodes),
-		ModelPermissions:  normalizeModels(permissions.Models),
+		UserID:                     userID,
+		DisplayName:                displayName,
+		Email:                      email,
+		AuthMethod:                 method,
+		EmergencyAdmin:             permissions.EmergencyAdmin,
+		HighRiskRole:               permissions.HighRiskRole,
+		SystemPermissions:          validUniqueSorted(permissions.System, systemPermissionCodes),
+		ModelPermissions:           normalizeModels(permissions.Models),
+		ConfigNamespacePermissions: normalizeConfigNamespaces(permissions.ConfigNamespacePermissions),
 	}
+}
+
+func normalizeConfigNamespaces(values []ConfigNamespacePermissions) []ConfigNamespacePermissions {
+	merged := make(map[string][]string, len(values))
+	for _, value := range values {
+		if value.ConfigNamespaceID != "" {
+			merged[value.ConfigNamespaceID] = append(merged[value.ConfigNamespaceID], value.Permissions...)
+		}
+	}
+	namespaces := make([]string, 0, len(merged))
+	for namespace := range merged {
+		namespaces = append(namespaces, namespace)
+	}
+	sort.Strings(namespaces)
+	result := make([]ConfigNamespacePermissions, 0, len(namespaces))
+	for _, namespace := range namespaces {
+		permissions := validUniqueSorted(merged[namespace], configNamespacePermissionCodes)
+		if len(permissions) != 0 {
+			result = append(result, ConfigNamespacePermissions{ConfigNamespaceID: namespace, Permissions: permissions})
+		}
+	}
+	return result
 }
 
 func validUniqueSorted(values []string, allowed map[string]struct{}) []string {

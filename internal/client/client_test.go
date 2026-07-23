@@ -56,14 +56,15 @@ func (a *auditLog) Append(_ context.Context, _ database.Querier, event audit.Eve
 }
 
 type memoryRepository struct {
-	keys     map[string]APIKey
-	models   map[string]bool
-	touches  int
-	touchErr error
+	keys       map[string]APIKey
+	models     map[string]bool
+	namespaces map[string]string
+	touches    int
+	touchErr   error
 }
 
 func newMemoryRepository() *memoryRepository {
-	return &memoryRepository{keys: map[string]APIKey{}, models: map[string]bool{"model-a": true, "model-b": true}}
+	return &memoryRepository{keys: map[string]APIKey{}, models: map[string]bool{"model-a": true, "model-b": true}, namespaces: map[string]string{"cns_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "site", "cns_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": "private"}}
 }
 func (m *memoryRepository) List(_ context.Context, _ database.Querier, status APIKeyStatus, limit int, cursor *APIKeyCursor, now time.Time) ([]APIKey, error) {
 	result := []APIKey{}
@@ -104,6 +105,14 @@ func (m *memoryRepository) ValidateActiveModels(_ context.Context, _ database.Qu
 	}
 	return nil
 }
+func (m *memoryRepository) ValidateActiveConfigNamespaces(_ context.Context, _ database.Querier, ids []string) error {
+	for _, id := range ids {
+		if _, ok := m.namespaces[id]; !ok {
+			return appError(apperror.KindNotFound, "resource_not_found", "配置命名空间不存在")
+		}
+	}
+	return nil
+}
 func (m *memoryRepository) Create(_ context.Context, _ database.Querier, key APIKey) error {
 	m.keys[key.ID] = cloneKey(key)
 	return nil
@@ -132,6 +141,7 @@ func (m *memoryRepository) TouchLastUsed(_ context.Context, _ database.Querier, 
 }
 func cloneKey(key APIKey) APIKey {
 	key.ModelIDs = append([]string(nil), key.ModelIDs...)
+	key.ConfigNamespaceIDs = append([]string(nil), key.ConfigNamespaceIDs...)
 	key.Salt = append([]byte(nil), key.Salt...)
 	key.Hash = append([]byte(nil), key.Hash...)
 	return key
@@ -166,7 +176,7 @@ func testService() (*Service, *memoryRepository, *auditLog) {
 	return service, repository, audits
 }
 func adminPrincipal() identity.Principal {
-	return identity.Principal{UserID: "user-1", SystemPermissions: []string{"api_keys.create", "api_keys.revoke", "api_keys.view"}, ModelPermissions: []identity.ModelPermissions{{ModelID: "model-a", Permissions: []string{"content.view"}}, {ModelID: "model-b", Permissions: []string{"content.view"}}}}
+	return identity.Principal{UserID: "user-1", SystemPermissions: []string{"api_keys.create", "api_keys.revoke", "api_keys.view"}, ModelPermissions: []identity.ModelPermissions{{ModelID: "model-a", Permissions: []string{"content.view"}}, {ModelID: "model-b", Permissions: []string{"content.view"}}}, ConfigNamespacePermissions: []identity.ConfigNamespacePermissions{{ConfigNamespaceID: "cns_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Permissions: []string{"config.view"}}}}
 }
 
 func TestAPIKeyLifecycleFormatHashRotationAndAudit(t *testing.T) {
@@ -238,6 +248,63 @@ func TestAPIKeyValidationPermissionExpirationAndRevocation(t *testing.T) {
 	assertCode(t, authenticateError(service, "bad"), "invalid_api_key")
 	delete(repository.keys, created.ID)
 	assertCode(t, authenticateError(service, created.Key), "invalid_api_key")
+}
+
+func TestAPIKeyConfigNamespaceScopesCreateRotateAuthenticateAndAudit(t *testing.T) {
+	service, repository, audits := testService()
+	principal := adminPrincipal()
+	principal.ConfigNamespacePermissions = append(principal.ConfigNamespacePermissions, identity.ConfigNamespacePermissions{ConfigNamespaceID: "cns_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Permissions: []string{"config.view"}})
+	a := "cns_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	b := "cns_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	created, err := service.Create(context.Background(), principal, RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}, ConfigNamespaceIDs: []string{b, a, b}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(created.ConfigNamespaceIDs, ","); got != a+","+b {
+		t.Fatalf("创建范围未去重排序: %v", created.ConfigNamespaceIDs)
+	}
+	authenticated, err := service.Authenticate(context.Background(), created.Key)
+	if err != nil || strings.Join(authenticated.ConfigNamespaceIDs, ",") != a+","+b {
+		t.Fatalf("鉴权范围=%v err=%v", authenticated.ConfigNamespaceIDs, err)
+	}
+
+	inherited, err := service.Rotate(context.Background(), principal, RequestMeta{}, created.ID, RotateAPIKeyRequest{})
+	if err != nil || strings.Join(inherited.ConfigNamespaceIDs, ",") != a+","+b {
+		t.Fatalf("轮换未继承范围: %#v err=%v", inherited, err)
+	}
+	empty := []string{}
+	cleared, err := service.Rotate(context.Background(), principal, RequestMeta{}, inherited.ID, RotateAPIKeyRequest{ConfigNamespaceIDs: &empty})
+	if err != nil || len(cleared.ConfigNamespaceIDs) != 0 {
+		t.Fatalf("轮换未清空范围: %#v err=%v", cleared, err)
+	}
+	if len(repository.keys[cleared.ID].ConfigNamespaceIDs) != 0 {
+		t.Fatalf("仓储范围未清空: %v", repository.keys[cleared.ID].ConfigNamespaceIDs)
+	}
+	encoded, _ := json.Marshal(audits.events[0].Changes)
+	if !strings.Contains(string(encoded), a) || strings.Contains(string(encoded), `"site"`) || strings.Contains(string(encoded), `"private"`) {
+		t.Fatalf("审计未仅记录命名空间 ID: %s", encoded)
+	}
+}
+
+func TestAPIKeyConfigNamespaceScopeValidationActiveAndPermission(t *testing.T) {
+	service, repository, _ := testService()
+	a := "cns_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	b := "cns_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	_, err := service.Create(context.Background(), adminPrincipal(), RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}, ConfigNamespaceIDs: []string{"bad"}})
+	assertCode(t, err, "validation_failed")
+	tooMany := make([]string, 101)
+	for i := range tooMany {
+		tooMany[i] = a
+	}
+	_, err = service.Create(context.Background(), adminPrincipal(), RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}, ConfigNamespaceIDs: tooMany})
+	assertCode(t, err, "validation_failed")
+	_, err = service.Create(context.Background(), adminPrincipal(), RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}, ConfigNamespaceIDs: []string{b}})
+	assertCode(t, err, "permission_denied")
+	delete(repository.namespaces, a)
+	_, err = service.Create(context.Background(), adminPrincipal(), RequestMeta{}, CreateAPIKeyRequest{Name: "key", ModelIDs: []string{"model-a"}, ConfigNamespaceIDs: []string{a}})
+	assertCode(t, err, "resource_not_found")
 }
 
 func TestAPIKeyCreateRejectsPermissionRevokedBeforeTransaction(t *testing.T) {

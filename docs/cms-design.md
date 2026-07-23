@@ -101,6 +101,7 @@ V1 不包含：
 | `content` | 内容、版本、关联、查询与工作流 |
 | `asset` | 对象存储上传、确认、下载与素材引用 |
 | `client` | API Key、模型访问范围、撤销与轮换 |
+| `configuration` | 非秘密业务配置、命名空间级授权、版本工作流与客户端读取 |
 | `transfer` | 同步 CSV 导入导出与错误报告 |
 | `audit` | 不可变审计事件 |
 | `platform` | 配置、数据库、迁移、HTTP 与日志 |
@@ -287,6 +288,8 @@ V1 使用固定审核流程：
 /api/admin/v1/imports
 /api/admin/v1/exports
 /api/admin/v1/api-keys
+/api/admin/v1/configurations
+/api/admin/v1/configurations/{namespace}/items
 /api/admin/v1/audit-events
 ```
 
@@ -300,12 +303,14 @@ GET /api/content/v1/models/{model}
 GET /api/content/v1/models/{model}/entries
 GET /api/content/v1/models/{model}/entries/{id}
 GET /api/content/v1/assets/{id}
+GET /api/content/v1/configurations/{namespace_key}
+GET /api/content/v1/configurations/{namespace_key}/{item_key}
 ```
 
 规则：
 
 - 使用 `Authorization: Bearer <api-key>`。
-- API Key 可以限制允许读取的内容模型。
+- API Key 可以分别限制允许读取的内容模型和配置命名空间。
 - 完整密钥只在创建时显示一次。
 - 数据库只保存带独立盐值的密钥哈希和用于定位的短前缀。
 - 支持名称、过期时间、最后使用时间、撤销和轮换。
@@ -314,6 +319,8 @@ GET /api/content/v1/assets/{id}
 - 支持 `ETag` 和条件请求。
 - API 版本通过 URL 路径管理。
 - 返回统一错误结构、请求 ID 和稳定错误码。
+
+配置命名空间保存可交付给内部客户端的非秘密业务配置，不用于密码、Token、私钥或基础设施凭据。配置项沿用草稿、审核、发布和下线工作流；客户端既可按 `namespace_key` 一次读取命名空间内全部当前发布项，也可按 `namespace_key/item_key` 读取单项。配置命名空间 scope 与模型 scope 分开校验；创建 API Key 当前仍要求至少授权一个模型，配置中的内容引用还要求目标模型位于同一 API Key 的模型 scope。两个读取方式均支持 `ETag` 和 `304`。
 
 统一错误结构：
 

@@ -24,6 +24,10 @@ $defs:
       - models.create
       - models.update
       - models.archive
+      - configurations.view
+      - configurations.create
+      - configurations.update
+      - configurations.archive
       - assets.view
       - assets.upload
       - assets.update
@@ -53,9 +57,34 @@ $defs:
         minLength: 1
       permissions:
         type: array
+        minItems: 1
         uniqueItems: true
         items:
           $ref: "#/$defs/ModelPermissionCode"
+  ConfigNamespacePermissionCode:
+    type: string
+    enum:
+      - config.view
+      - config.create
+      - config.update
+      - config.archive
+      - config.submit
+      - config.review
+      - config.publish
+      - config.unpublish
+  ConfigNamespacePermissionGrant:
+    type: object
+    additionalProperties: false
+    required: [config_namespace_id, permissions]
+    properties:
+      config_namespace_id:
+        type: string
+        pattern: "^cns_[a-f0-9]{32}$"
+      permissions:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/ConfigNamespacePermissionCode"
   Principal:
     type: object
     additionalProperties: false
@@ -68,6 +97,7 @@ $defs:
       - has_high_risk_role
       - system_permissions
       - model_permissions
+      - config_namespace_permissions
     properties:
       user_id:
         type: string
@@ -92,6 +122,10 @@ $defs:
         type: array
         items:
           $ref: "#/$defs/ModelPermissionGrant"
+      config_namespace_permissions:
+        type: array
+        items:
+          $ref: "#/$defs/ConfigNamespacePermissionGrant"
   ValidationDetail:
     type: object
     additionalProperties: false

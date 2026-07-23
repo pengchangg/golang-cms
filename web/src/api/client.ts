@@ -4,6 +4,7 @@ import type {
   ContentModel, ContentModelSummary, CreateAPIKeyRequest, CursorResponse, EntryListQuery,
   EntryListResponse, ErrorResponse, ExportCSVQuery, ModelPermission, Role, RotateAPIKeyRequest, SessionResponse,
   SMSChallenge, SystemPermission, UpdateFieldOrderRequest, User, UserStatus, UserSummary, WorkflowEvent, CreateAssetUploadRequest,
+  ConfigurationConstraints, ConfigurationItem, ConfigurationItemValue, ConfigurationNamespace, ConfigurationRevision, ConfigurationValueType, ConfigurationWorkflowEvent, ConfigNamespacePermission,
 } from './types'
 
 const API_BASE = '/api/admin/v1'
@@ -117,6 +118,35 @@ function json(method: string, body: unknown): RequestInit {
   return { method, body: JSON.stringify(body) }
 }
 
+function configurationDraftJSON(method: string, value: unknown, baseRevisionId?: string): RequestInit {
+  if (typeof value !== 'bigint') return json(method, baseRevisionId ? { base_revision_id: baseRevisionId, value } : { value })
+  const prefix = baseRevisionId ? `"base_revision_id":${JSON.stringify(baseRevisionId)},` : ''
+  return { method, body: `{${prefix}"value":${value.toString()}}` }
+}
+
+async function parseConfigurationItemValue(response: Response): Promise<ConfigurationItemValue> {
+  const text = await response.text()
+  if (!/"value_type"\s*:\s*"integer"/.test(text)) return JSON.parse(text) as ConfigurationItemValue
+  const parsed = JSON.parse(text.replace(/("value"\s*:\s*)(-?\d+)/g, '$1"$2"')) as ConfigurationItemValue
+  if (parsed.current_draft_revision.value_type === 'integer' && typeof parsed.current_draft_revision.value === 'string') parsed.current_draft_revision.value = BigInt(parsed.current_draft_revision.value)
+  if (parsed.current_published_revision?.value_type === 'integer' && typeof parsed.current_published_revision.value === 'string') parsed.current_published_revision.value = BigInt(parsed.current_published_revision.value)
+  return parsed
+}
+
+async function parseConfigurationRevision(response: Response): Promise<ConfigurationRevision> {
+  const text = await response.text()
+  const parsed = JSON.parse(/"value_type"\s*:\s*"integer"/.test(text) ? text.replace(/("value"\s*:\s*)(-?\d+)/g, '$1"$2"') : text) as ConfigurationRevision
+  if (parsed.value_type === 'integer' && typeof parsed.value === 'string') parsed.value = BigInt(parsed.value)
+  return parsed
+}
+
+async function parseConfigurationRevisionList(response: Response): Promise<CursorResponse<ConfigurationRevision>> {
+  const text = await response.text()
+  const parsed = JSON.parse(text.replace(/("value_type"\s*:\s*"integer"(?:(?!"value"\s*:)[\s\S])*?"value"\s*:\s*)(-?\d+)/g, '$1"$2"')) as CursorResponse<ConfigurationRevision>
+  parsed.items.forEach((revision) => { if (revision.value_type === 'integer' && typeof revision.value === 'string') revision.value = BigInt(revision.value) })
+  return parsed
+}
+
 export const api = {
   getSession: () => request<SessionResponse>('/auth/session'),
   localLogin: (username: string, password: string) =>
@@ -139,8 +169,29 @@ export const api = {
   replaceUserRoles: (id: string, role_ids: string[]) => request<User>(`/users/${encodeURIComponent(id)}/roles`, json('PUT', { role_ids })),
   listRoles: () => request<{ items: Role[] }>('/roles'),
   createRole: (body: { key: string; display_name: string; description?: string }) => request<Role>('/roles', json('POST', body)),
+  updateRoleConfigNamespacePermissions: (id: string, grants: Array<{ config_namespace_id: string; permissions: ConfigNamespacePermission[] }>) => request<Role>(`/roles/${encodeURIComponent(id)}`, json('PATCH', { config_namespace_permissions: grants })),
   replaceSystemPermissions: (id: string, permissions: SystemPermission[]) => request<Role>(`/roles/${encodeURIComponent(id)}/system-permissions`, json('PUT', { permissions })),
   replaceModelPermissions: (id: string, grants: Array<{ model_id: string; permissions: ModelPermission[] }>) => request<Role>(`/roles/${encodeURIComponent(id)}/model-permissions`, json('PUT', { grants })),
+  listConfigurationNamespaces: (status?: string) => request<{ items: ConfigurationNamespace[] }>(`/configurations${queryString({ status })}`),
+  getConfigurationNamespace: (id: string) => request<ConfigurationNamespace>(`/configurations/${encodeURIComponent(id)}`),
+  createConfigurationNamespace: (body: { namespace_key: string; display_name: string; description: string }) => request<ConfigurationNamespace>('/configurations', json('POST', body)),
+  updateConfigurationNamespace: (id: string, body: { display_name?: string; description?: string }) => request<ConfigurationNamespace>(`/configurations/${encodeURIComponent(id)}`, json('PATCH', body)),
+  archiveConfigurationNamespace: (id: string) => request<void>(`/configurations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  listConfigurationItems: (namespaceId: string, status?: string) => request<{ items: ConfigurationItem[] }>(`/configurations/${encodeURIComponent(namespaceId)}/items${queryString({ status })}`),
+  getConfigurationItem: (namespaceId: string, itemId: string) => request<ConfigurationItem>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}`),
+  createConfigurationItem: (namespaceId: string, body: { item_key: string; display_name: string; description: string; value_type: ConfigurationValueType; constraints: ConfigurationConstraints }) => request<ConfigurationItem>(`/configurations/${encodeURIComponent(namespaceId)}/items`, json('POST', body)),
+  updateConfigurationItem: (namespaceId: string, itemId: string, body: { display_name?: string; description?: string; constraints?: ConfigurationConstraints }) => request<ConfigurationItem>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}`, json('PATCH', body)),
+  archiveConfigurationItem: (namespaceId: string, itemId: string) => request<void>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}`, { method: 'DELETE' }),
+  getConfigurationItemValue: (namespaceId: string, itemId: string) => request<ConfigurationItemValue>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/value`, {}, parseConfigurationItemValue),
+  listConfigurationRevisions: (namespaceId: string, itemId: string, cursor?: string) => request<CursorResponse<ConfigurationRevision>>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/revisions${queryString({ cursor })}`, {}, parseConfigurationRevisionList),
+  getConfigurationRevision: (namespaceId: string, itemId: string, revisionId: string) => request<ConfigurationRevision>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/revisions/${encodeURIComponent(revisionId)}`, {}, parseConfigurationRevision),
+  listConfigurationWorkflowEvents: (namespaceId: string, itemId: string, cursor?: string) => request<CursorResponse<ConfigurationWorkflowEvent>>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/workflow-events${queryString({ cursor })}`),
+  createConfigurationDraft: (namespaceId: string, itemId: string, value: unknown) => request<ConfigurationItemValue>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/drafts`, configurationDraftJSON('POST', value), parseConfigurationItemValue),
+  updateConfigurationDraft: (namespaceId: string, itemId: string, base_revision_id: string, value: unknown) => request<ConfigurationItemValue>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/draft`, configurationDraftJSON('PATCH', value, base_revision_id), parseConfigurationItemValue),
+  submitConfigurationItem: (namespaceId: string, itemId: string, revision_id: string) => request<ConfigurationItemValue>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/submit`, json('POST', { revision_id }), parseConfigurationItemValue),
+  approveConfigurationItem: (namespaceId: string, itemId: string, revision_id: string) => request<ConfigurationItemValue>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/approve`, json('POST', { revision_id }), parseConfigurationItemValue),
+  rejectConfigurationItem: (namespaceId: string, itemId: string, revision_id: string, reason: string) => request<ConfigurationItemValue>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/reject`, json('POST', { revision_id, reason }), parseConfigurationItemValue),
+  unpublishConfigurationItem: (namespaceId: string, itemId: string, revision_id: string) => request<ConfigurationItemValue>(`/configurations/${encodeURIComponent(namespaceId)}/items/${encodeURIComponent(itemId)}/unpublish`, json('POST', { revision_id }), parseConfigurationItemValue),
   listModels: (status?: string) => request<{ items: ContentModelSummary[] }>(`/models${queryString({ status })}`),
   getModel: (id: string) => request<ContentModel>(`/models/${encodeURIComponent(id)}`),
   createModel: (body: { key: string; display_name: string; description?: string }) => request<ContentModel>('/models', json('POST', body)),

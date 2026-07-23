@@ -9,7 +9,7 @@ $defs:
     type: object
     additionalProperties: false
     required:
-      [id, name, prefix, model_ids, status, expires_at, revoked_at, last_used_at, rotated_from_id, replaced_by_id, created_by, created_at]
+      [id, name, prefix, model_ids, config_namespace_ids, status, expires_at, revoked_at, last_used_at, rotated_from_id, replaced_by_id, created_by, created_at]
     properties:
       id: { type: string, minLength: 1 }
       name: { type: string, minLength: 1, maxLength: 120 }
@@ -19,6 +19,11 @@ $defs:
         minItems: 1
         uniqueItems: true
         items: { type: string, minLength: 1 }
+      config_namespace_ids:
+        type: array
+        maxItems: 100
+        uniqueItems: true
+        items: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
       status:
         $ref: "#/$defs/APIKeyStatus"
       expires_at: { type: [string, "null"], format: date-time }
@@ -32,7 +37,7 @@ $defs:
     type: object
     additionalProperties: false
     required:
-      [id, name, prefix, model_ids, status, expires_at, revoked_at, last_used_at, rotated_from_id, replaced_by_id, created_by, created_at, key]
+      [id, name, prefix, model_ids, config_namespace_ids, status, expires_at, revoked_at, last_used_at, rotated_from_id, replaced_by_id, created_by, created_at, key]
     properties:
       id: { type: string, minLength: 1 }
       name: { type: string, minLength: 1, maxLength: 120 }
@@ -42,6 +47,11 @@ $defs:
         minItems: 1
         uniqueItems: true
         items: { type: string, minLength: 1 }
+      config_namespace_ids:
+        type: array
+        maxItems: 100
+        uniqueItems: true
+        items: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
       status:
         $ref: "#/$defs/APIKeyStatus"
       expires_at: { type: [string, "null"], format: date-time }
@@ -66,6 +76,11 @@ $defs:
         minItems: 1
         uniqueItems: true
         items: { type: string, minLength: 1 }
+      config_namespace_ids:
+        type: array
+        maxItems: 100
+        uniqueItems: true
+        items: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
       expires_at: { type: [string, "null"], format: date-time }
   RotateAPIKeyRequest:
     type: object
@@ -77,6 +92,12 @@ $defs:
         minItems: 1
         uniqueItems: true
         items: { type: string, minLength: 1 }
+      config_namespace_ids:
+        type: array
+        maxItems: 100
+        uniqueItems: true
+        items: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
+        description: 省略时继承旧 Key 的配置命名空间范围；显式传入空数组时清空范围。
       expires_at: { type: [string, "null"], format: date-time }
   APIKeyListResponse:
     type: object

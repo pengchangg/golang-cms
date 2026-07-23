@@ -16,6 +16,7 @@ const session: SessionResponse = {
     is_emergency_admin: false, has_high_risk_role: false,
     system_permissions: ['assets.view'],
     model_permissions: [{ model_id: 'mdl_1', permissions: ['content.view', 'content.create'] }],
+    config_namespace_permissions: [],
   },
   content_models: [{ id: 'mdl_1', key: 'articles', display_name: '文章' }],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',

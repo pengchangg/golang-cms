@@ -25,7 +25,7 @@ COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 VITE_ASSETS_ENABLED ?= true
 
-.PHONY: dev dev-db dev-web dev-migrate dev-ensure-admin dev-reset-admin dev-stop dev-clean test-schema-tx test-asset-tx verify verify-upgrade verify-migrations verify-image image
+.PHONY: dev dev-db dev-web dev-migrate dev-ensure-admin dev-reset-admin dev-stop dev-clean test-schema-tx test-asset-tx test-configuration-tx verify verify-upgrade verify-migrations verify-image image
 
 dev: dev-web dev-ensure-admin
 	@test '$(DEV_ASSETS_ENABLED)' = 'false' || test -r '$(DEV_ASSETS_ENV_FILE)' || { printf '缺少 S3 兼容对象存储本地配置：%s\n请从 .env.assets.local.example 复制并填写，或使用 DEV_ASSETS_ENABLED=false。\n' '$(DEV_ASSETS_ENV_FILE)'; exit 1; }
@@ -93,6 +93,11 @@ test-asset-tx:
 	@test -n '$(CMS_TEST_MYSQL_DSN)' || { printf '%s\n' '缺少 CMS_TEST_MYSQL_DSN（必须指向已完成迁移的专用 MySQL 测试库）'; exit 1; }
 	@go test -count=1 -timeout 30s -run 'TestClientAssetDownloadUsesSingleConnectionTransaction|TestClientAssetDownloadSerializesWithRevocation' ./internal/integration
 
+test-configuration-tx:
+	@test '$(origin CMS_TEST_MYSQL_DSN)' != 'command line' || { printf '%s\n' '禁止在 make 命令行传递 CMS_TEST_MYSQL_DSN；请通过环境变量注入'; exit 1; }
+	@test -n '$(CMS_TEST_MYSQL_DSN)' || { printf '%s\n' '缺少 CMS_TEST_MYSQL_DSN（必须指向已完成迁移的专用 MySQL 测试库）'; exit 1; }
+	@go test -count=1 -timeout 30s -run 'TestClientAssetDownloadAllowsPublishedConfigurationReference' ./internal/integration
+
 verify:
 	@test '$(origin CMS_VERIFY_MYSQL_DSN)' != 'command line' || { printf '%s\n' '禁止在 make 命令行传递 CMS_VERIFY_MYSQL_DSN；请通过环境变量或 CI secret 注入'; exit 1; }
 	@test -n '$(CMS_VERIFY_MYSQL_DSN)' || { printf '%s\n' '缺少 CMS_VERIFY_MYSQL_DSN（完整门禁必须使用专用空 MySQL 8.0 数据库）'; exit 1; }
@@ -108,6 +113,7 @@ verify:
 	@$(MAKE) verify-migrations
 	@CMS_TEST_MYSQL_DSN="$${CMS_VERIFY_MYSQL_DSN}" $(MAKE) test-schema-tx
 	@CMS_TEST_MYSQL_DSN="$${CMS_VERIFY_MYSQL_DSN}" $(MAKE) test-asset-tx
+	@CMS_TEST_MYSQL_DSN="$${CMS_VERIFY_MYSQL_DSN}" $(MAKE) test-configuration-tx
 	@env -u CMS_VERIFY_MYSQL_DSN $(MAKE) verify-image
 
 verify-migrations:

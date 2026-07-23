@@ -5,7 +5,7 @@ import { ApiError, api, safeReturnTo, uploadAssetFile } from './client'
 import type { SessionResponse } from './types'
 
 const session: SessionResponse = {
-  principal: { user_id: 'usr_test', display_name: '测试用户', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: [], model_permissions: [] },
+  principal: { user_id: 'usr_test', display_name: '测试用户', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: [], model_permissions: [], config_namespace_permissions: [] },
   content_models: [],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-18T10:00:00Z',
@@ -18,6 +18,18 @@ afterEach(() => {
 })
 
 describe('API Client', () => {
+  it('配置 integer 值以 BigInt 无损读取和写入', async () => {
+    authStore.setSession(session)
+    const body = '{"item":{"id":"cit_1","namespace_id":"cns_1","item_key":"limit","display_name":"上限","description":"","value_type":"integer","constraints":{"required":true},"status":"active","created_by":"usr_1","created_at":"2026-07-23T00:00:00Z","updated_at":"2026-07-23T00:00:00Z"},"current_draft_revision":{"id":"crv_1","item_id":"cit_1","namespace_id":"cns_1","revision_number":1,"value_type":"integer","constraints":{"required":true},"value":9223372036854775807,"workflow_status":"draft","created_by":"usr_1","submitted_by":null,"submitted_at":null,"created_at":"2026-07-23T00:00:00Z"},"current_published_revision_id":null}'
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(body, { headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await api.getConfigurationItemValue('cns_1', 'cit_1')
+    expect(result.current_draft_revision.value).toBe(9223372036854775807n)
+    await api.updateConfigurationDraft('cns_1', 'cit_1', 'crv_1', -9223372036854775808n)
+    expect((fetchMock.mock.calls[1][1] as RequestInit).body).toBe('{"base_revision_id":"crv_1","value":-9223372036854775808}')
+  })
+
   it('固定同源凭据并为写请求附加内存中的 CSRF Token', async () => {
     authStore.setSession(session)
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))

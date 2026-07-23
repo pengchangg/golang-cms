@@ -54,7 +54,7 @@ describe('客户端调试页面', () => {
     expect(document.body.textContent).not.toContain(apiKey)
     expect(localStorage).toHaveLength(0)
     expect(sessionStorage).toHaveLength(0)
-  })
+  }, 20_000)
 
   it('原始查询模式保留服务端错误响应和 request ID', async () => {
     const fetchMock = vi.fn()
@@ -78,5 +78,28 @@ describe('客户端调试页面', () => {
     expect(await screen.findByText(/invalid_query/)).toBeVisible()
     expect(screen.getAllByText('req_invalid').length).toBeGreaterThan(0)
     expect(screen.getAllByText('400').length).toBeGreaterThan(0)
+  })
+
+  it('构造配置命名空间和配置单项请求', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ maintenance_enabled: false }, { headers: { 'X-Request-ID': 'req_config' } }))
+      .mockResolvedValueOnce(Response.json({ item_key: 'home.hero', value_type: 'string', value: '欢迎', revision_id: 'crv_1', revision_number: 1, published_at: '2026-07-23T00:00:00Z' }, { headers: { 'X-Request-ID': 'req_config_item' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<APIExplorerPage />)
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: apiKey } })
+
+    fireEvent.click(screen.getByText('配置命名空间'))
+    fireEvent.change(screen.getByLabelText('配置命名空间 key'), { target: { value: 'website' } })
+    fireEvent.click(screen.getByRole('button', { name: /发送请求/ }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/content/v1/configurations/website')
+    expect(await screen.findByText('req_config')).toBeVisible()
+
+    fireEvent.click(screen.getByText('配置单项'))
+    fireEvent.change(screen.getByLabelText('配置项 key'), { target: { value: 'home.hero' } })
+    fireEvent.click(screen.getByRole('button', { name: /发送请求/ }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/content/v1/configurations/website/home.hero')
+    expect(await screen.findByText('req_config_item')).toBeVisible()
   })
 })

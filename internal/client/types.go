@@ -14,20 +14,21 @@ const (
 )
 
 type APIKey struct {
-	ID            string       `json:"id"`
-	Name          string       `json:"name"`
-	Prefix        string       `json:"prefix"`
-	ModelIDs      []string     `json:"model_ids"`
-	Status        APIKeyStatus `json:"status"`
-	ExpiresAt     *time.Time   `json:"expires_at"`
-	RevokedAt     *time.Time   `json:"revoked_at"`
-	LastUsedAt    *time.Time   `json:"last_used_at"`
-	RotatedFromID *string      `json:"rotated_from_id"`
-	ReplacedByID  *string      `json:"replaced_by_id"`
-	CreatedBy     string       `json:"created_by"`
-	CreatedAt     time.Time    `json:"created_at"`
-	Salt          []byte       `json:"-"`
-	Hash          []byte       `json:"-"`
+	ID                 string       `json:"id"`
+	Name               string       `json:"name"`
+	Prefix             string       `json:"prefix"`
+	ModelIDs           []string     `json:"model_ids"`
+	ConfigNamespaceIDs []string     `json:"config_namespace_ids"`
+	Status             APIKeyStatus `json:"status"`
+	ExpiresAt          *time.Time   `json:"expires_at"`
+	RevokedAt          *time.Time   `json:"revoked_at"`
+	LastUsedAt         *time.Time   `json:"last_used_at"`
+	RotatedFromID      *string      `json:"rotated_from_id"`
+	ReplacedByID       *string      `json:"replaced_by_id"`
+	CreatedBy          string       `json:"created_by"`
+	CreatedAt          time.Time    `json:"created_at"`
+	Salt               []byte       `json:"-"`
+	Hash               []byte       `json:"-"`
 }
 
 type APIKeySecret struct {
@@ -41,10 +42,11 @@ type APIKeyList struct {
 }
 
 type CreateAPIKeyRequest struct {
-	Name         string     `json:"name"`
-	ModelIDs     []string   `json:"model_ids"`
-	ExpiresAt    *time.Time `json:"expires_at"`
-	expiresAtSet bool
+	Name               string     `json:"name"`
+	ModelIDs           []string   `json:"model_ids"`
+	ConfigNamespaceIDs []string   `json:"config_namespace_ids"`
+	ExpiresAt          *time.Time `json:"expires_at"`
+	expiresAtSet       bool
 }
 
 func (r *CreateAPIKeyRequest) UnmarshalJSON(data []byte) error {
@@ -54,7 +56,7 @@ func (r *CreateAPIKeyRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	for key := range properties {
-		if key != "name" && key != "model_ids" && key != "expires_at" {
+		if key != "name" && key != "model_ids" && key != "config_namespace_ids" && key != "expires_at" {
 			return &json.UnmarshalTypeError{Value: "unknown field " + key}
 		}
 	}
@@ -87,9 +89,10 @@ func (o *optionalTime) UnmarshalJSON(data []byte) error {
 }
 
 type RotateAPIKeyRequest struct {
-	Name      *string      `json:"name"`
-	ModelIDs  *[]string    `json:"model_ids"`
-	ExpiresAt optionalTime `json:"expires_at"`
+	Name               *string      `json:"name"`
+	ModelIDs           *[]string    `json:"model_ids"`
+	ConfigNamespaceIDs *[]string    `json:"config_namespace_ids"`
+	ExpiresAt          optionalTime `json:"expires_at"`
 }
 
 type RequestMeta struct{ RequestID, IP, UserAgent string }
@@ -98,5 +101,6 @@ type AuthenticatedKey struct {
 	ID                 string
 	Prefix             string
 	ModelIDs           []string
+	ConfigNamespaceIDs []string
 	ShouldTouchLastUse bool
 }

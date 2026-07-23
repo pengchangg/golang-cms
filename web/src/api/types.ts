@@ -7,6 +7,10 @@ export const systemPermissionCodes = [
   'models.create',
   'models.update',
   'models.archive',
+  'configurations.view',
+  'configurations.create',
+  'configurations.update',
+  'configurations.archive',
   'assets.view',
   'assets.upload',
   'assets.update',
@@ -26,6 +30,13 @@ export const modelPermissionCodes = [
 
 export type ModelPermission = (typeof modelPermissionCodes)[number]
 
+export const configNamespacePermissionCodes = [
+  'config.view', 'config.create', 'config.update', 'config.archive',
+  'config.submit', 'config.review', 'config.publish', 'config.unpublish',
+] as const
+
+export type ConfigNamespacePermission = (typeof configNamespacePermissionCodes)[number]
+
 export interface Principal {
   user_id: string
   display_name: string
@@ -37,6 +48,10 @@ export interface Principal {
   model_permissions: Array<{
     model_id: string
     permissions: ModelPermission[]
+  }>
+  config_namespace_permissions: Array<{
+    config_namespace_id: string
+    permissions: ConfigNamespacePermission[]
   }>
 }
 
@@ -99,6 +114,7 @@ export interface Role {
   id: string; key: string; kind: 'custom' | 'high_risk'; display_name: string; description: string
   system_permissions: SystemPermission[]
   model_permissions: Array<{ model_id: string; permissions: ModelPermission[] }>
+  config_namespace_permissions: Array<{ config_namespace_id: string; permissions: ConfigNamespacePermission[] }>
   created_at: string; updated_at: string
 }
 export interface FieldConstraints {
@@ -169,14 +185,43 @@ export interface EntryListResponse extends CursorResponse<ContentEntrySummary> {
 }
 export type APIKeyStatus = 'active' | 'expired' | 'revoked'
 export interface APIKey {
-  id: string; name: string; prefix: string; model_ids: string[]; status: APIKeyStatus
+  id: string; name: string; prefix: string; model_ids: string[]; config_namespace_ids?: string[]; status: APIKeyStatus
   expires_at: string | null; revoked_at: string | null; last_used_at: string | null
   rotated_from_id: string | null; replaced_by_id: string | null
   created_by: string; created_at: string
 }
 export interface APIKeySecret extends APIKey { key: string }
-export interface CreateAPIKeyRequest { name: string; model_ids: string[]; expires_at: string | null }
-export interface RotateAPIKeyRequest { name?: string; model_ids?: string[]; expires_at?: string | null }
+export interface CreateAPIKeyRequest { name: string; model_ids: string[]; config_namespace_ids?: string[]; expires_at: string | null }
+export interface RotateAPIKeyRequest { name?: string; model_ids?: string[]; config_namespace_ids?: string[]; expires_at?: string | null }
+
+export type ConfigurationValueType = 'string' | 'integer' | 'decimal' | 'boolean' | 'json' | 'single_asset' | 'multi_asset' | 'single_relation' | 'multi_relation'
+export interface ConfigurationConstraints {
+  required: boolean; min_length?: number; max_length?: number; pattern?: string; string_enum?: string[]
+  minimum?: string; maximum?: string; integer_enum?: string[]; scale?: number; decimal_enum?: string[]
+  max_bytes?: number; allowed_mime_types?: string[]; max_size?: number; target_model_id?: string
+}
+export interface ConfigurationNamespace {
+  id: string; namespace_key: string; display_name: string; description: string; status: ResourceStatus; created_at: string; updated_at: string
+}
+export interface ConfigurationItem {
+  id: string; namespace_id: string; item_key: string; display_name: string; description: string; value_type: ConfigurationValueType
+  constraints: ConfigurationConstraints; status: ResourceStatus; created_by: string; created_at: string; updated_at: string
+}
+export interface ConfigurationRevision {
+  id: string; item_id: string; namespace_id: string; revision_number: number; value_type: ConfigurationValueType
+  constraints: ConfigurationConstraints; value: unknown; workflow_status: WorkflowStatus; created_by: string
+  submitted_by: string | null; submitted_at: string | null; created_at: string
+}
+export interface ConfigurationItemValue {
+  item: ConfigurationItem; current_draft_revision: ConfigurationRevision
+  current_published_revision_id: string | null; current_published_revision?: ConfigurationRevision | null
+}
+export interface ConfigurationWorkflowEvent {
+  id: string; item_id: string; namespace_id: string; revision_id: string
+  type: 'submitted' | 'approved' | 'rejected' | 'unpublished'
+  from_status: WorkflowStatus; to_status: WorkflowStatus
+  actor_id: string; reason: string | null; occurred_at: string
+}
 export interface AuditEvent {
   id: string; occurred_at: string; request_id: string; actor_type: 'user' | 'system'
   actor_id: string | null; actor_display_name: string | null; action: string; resource_type: string; resource_id: string | null

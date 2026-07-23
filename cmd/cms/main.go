@@ -22,6 +22,7 @@ import (
 	"cms/internal/audit"
 	"cms/internal/auth"
 	"cms/internal/client"
+	"cms/internal/configuration"
 	"cms/internal/content"
 	"cms/internal/identity"
 	"cms/internal/integration"
@@ -124,7 +125,9 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	auditWriter := audit.SQLWriter{}
 	schemaRepository := schema.NewRepository()
 	modelAdapter := schema.PermissionModelAdapter{DB: db, Repository: schemaRepository}
-	permissionProvider := permission.SQLProvider{DB: db, Models: modelAdapter}
+	configurationRepository := configuration.NewRepository()
+	configurationProvider := configuration.NewActiveConfigNamespaceProvider(db, configurationRepository)
+	permissionProvider := permission.SQLProvider{DB: db, Models: modelAdapter, ConfigNamespaces: configurationProvider}
 	smsProvider, err := buildSMSProvider(cfg)
 	if err != nil {
 		return err
@@ -142,7 +145,8 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	securityTransactor := database.RetryDeadlocks(transactor)
 	authorizer := permission.PrincipalAuthorizer{Provider: permissionProvider}
 	userService := identity.NewUserService(identity.UserDependencies{DB: db, Transactor: securityTransactor, Authorizer: authorizer, Audit: auditWriter})
-	roleService := permission.NewService(permission.Dependencies{DB: db, Transactor: securityTransactor, Authorizer: authorizer, Audit: auditWriter, Users: userService, Models: modelAdapter})
+	roleService := permission.NewService(permission.Dependencies{DB: db, Transactor: securityTransactor, Authorizer: authorizer, Audit: auditWriter, Users: userService, Models: modelAdapter, ConfigNamespaces: configurationProvider, ActiveConfigNamespaceIDs: configurationProvider})
+	configurationService := configuration.NewService(configuration.Dependencies{DB: db, Transactor: securityTransactor, Repository: configurationRepository, Authorizer: authorizer, Audit: auditWriter})
 	var media content.MediaReferenceManager
 	var assetResolver content.ReferencedAssetResolver
 	var publishedAssetResolver content.PublishedAssetResolver
@@ -169,6 +173,7 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 		Media: media, Assets: assetResolver,
 	})
 	publishedReader := content.NewPublishedContentReader(db, schemaRepository, publishedAssetResolver)
+	publishedConfigurationReader := configuration.NewPublishedReader(db, transactor, publishedReader)
 	clientService := client.NewService(client.Dependencies{
 		DB: db, Transactor: transactor, Repository: client.NewRepository(), Authorizer: authorizer, Audit: auditWriter,
 	})
@@ -182,10 +187,18 @@ func serve(ctx context.Context, logger *slog.Logger, cfg config.Config, db *sql.
 	audit.NewModule(audit.NewReader(db), auditPrincipalFromRequest).RegisterRoutes(adminMux)
 	schema.NewModule(schemaService, principalFromRequest).RegisterRoutes(adminMux)
 	content.NewModule(contentService, principalFromRequest).RegisterRoutes(adminMux)
+	configuration.NewAdminHandler(configurationService, principalFromRequest).RegisterRoutes(adminMux)
 	client.NewAdminHandler(clientService, principalFromRequest).RegisterRoutes(adminMux)
 	contentMux := http.NewServeMux()
 	contentProtection := client.NewProtection()
 	client.NewContentHandler(clientService, publishedReader, contentProtection).RegisterRoutes(contentMux)
+	configuration.NewContentHandler(publishedConfigurationReader, configuration.AuthenticateFunc(func(ctx context.Context, raw string) (configuration.ContentPrincipal, error) {
+		key, err := clientService.Authenticate(ctx, raw)
+		if err != nil {
+			return configuration.ContentPrincipal{}, err
+		}
+		return configuration.ContentPrincipal{ID: key.ID, ModelIDs: key.ModelIDs, ConfigNamespaceIDs: key.ConfigNamespaceIDs}, nil
+	}), contentProtection).RegisterRoutes(contentMux)
 	if cfg.AssetsEnabled {
 		asset.NewHandler(assetService, principalFromRequest).RegisterRoutes(adminMux)
 		integration.ClientAssetHandler{Tx: transactor, Client: clientService, Assets: assetService, Protection: contentProtection}.RegisterRoutes(contentMux)

@@ -26,6 +26,9 @@ export default function APIKeysPage({ principal }: { principal: Principal }) {
   const readableModelIDs = principal.model_permissions.filter((grant) => grant.permissions.includes('content.view')).map((grant) => grant.model_id)
   const keys = useApiData(() => canView ? api.listAPIKeys(status, cursor) : Promise.resolve({ items: [], next_cursor: null }), [canView, status, cursor])
   const models = useApiData(() => canViewModels ? api.listModels('active') : Promise.resolve({ items: [] }), [canViewModels])
+  const delegableNamespaceIDs = principal.config_namespace_permissions.filter((grant) => grant.permissions.includes('config.view')).map((grant) => grant.config_namespace_id)
+  const canViewNamespaces = hasSystemPermission(principal, 'configurations.view')
+  const namespaces = useApiData(() => canViewNamespaces && delegableNamespaceIDs.length ? api.listConfigurationNamespaces('active') : Promise.resolve({ items: [] }), [canViewNamespaces, delegableNamespaceIDs.join(',')])
 
   function showSecret(value: APIKeySecret) {
     setCreateOpen(false)
@@ -36,8 +39,8 @@ export default function APIKeysPage({ principal }: { principal: Principal }) {
     keys.reload()
   }
 
-  async function create(values: { name: string; model_ids: string[]; expires_at?: { toISOString(): string } }) {
-    const body: CreateAPIKeyRequest = { name: values.name.trim(), model_ids: values.model_ids, expires_at: values.expires_at?.toISOString() ?? null }
+  async function create(values: { name: string; model_ids?: string[]; config_namespace_ids?: string[]; expires_at?: { toISOString(): string } }) {
+    const body: CreateAPIKeyRequest = { name: values.name.trim(), model_ids: values.model_ids ?? [], config_namespace_ids: values.config_namespace_ids ?? [], expires_at: values.expires_at?.toISOString() ?? null }
     setCreating(true)
     try { showSecret(await api.createAPIKey(body)) }
     catch (error) { message.error(apiErrorMessage(error, '创建 API Key 失败')) }
@@ -85,7 +88,7 @@ export default function APIKeysPage({ principal }: { principal: Principal }) {
     <PageHeader
       eyebrow="客户端访问"
       title="API Keys"
-      description="每个 Key 明确限定可读取的模型。完整密钥不持久化，只在创建或轮换后展示一次。"
+      description="每个 Key 明确限定可读取的模型与配置命名空间。完整密钥不持久化，只在创建或轮换后展示一次。"
       extra={<Space>
         <Button type="primary" icon={<KeyOutlined />} disabled={!canCreate || readableModelIDs.length === 0} onClick={() => setCreateOpen(true)}>创建 API Key</Button>
         {!canView && canCreate ? <Button onClick={() => setIDAction('rotate')}>按 ID 轮换</Button> : null}
@@ -98,6 +101,7 @@ export default function APIKeysPage({ principal }: { principal: Principal }) {
       <Table<APIKey> rowKey="id" dataSource={keys.data?.items} pagination={false} scroll={{ x: 900 }} columns={[
         { title: '名称与前缀', render: (_, row) => <div><Typography.Text strong>{row.name}</Typography.Text><br/><code>{row.prefix}</code></div> },
         { title: '模型范围', dataIndex: 'model_ids', render: (ids: string[]) => <Space wrap>{ids.map((id) => <Tag key={id}>{models.data?.items.find((model) => model.id === id)?.display_name ?? id}</Tag>)}</Space> },
+        { title: '配置范围', dataIndex: 'config_namespace_ids', render: (ids: string[] | undefined) => <Space wrap>{(ids ?? []).map((id) => <Tag key={id}>{namespaces.data?.items.find((item) => item.id === id)?.display_name ?? id}</Tag>)}</Space> },
         { title: '状态', dataIndex: 'status', render: (value: APIKeyStatus) => <Tag color={value === 'active' ? 'green' : value === 'expired' ? 'gold' : 'default'}>{statusLabels[value]}</Tag> },
         { title: '最近使用', dataIndex: 'last_used_at', render: (value: string | null) => value ? new Date(value).toLocaleString('zh-CN') : '从未使用' },
         { title: '过期时间', dataIndex: 'expires_at', render: (value: string | null) => value ? new Date(value).toLocaleString('zh-CN') : '永不过期' },
@@ -112,6 +116,7 @@ export default function APIKeysPage({ principal }: { principal: Principal }) {
       <Form form={form} layout="vertical" onFinish={create}>
         <Form.Item label="名称" name="name" rules={[{ required: true }, { max: 120 }]}><Input maxLength={120} /></Form.Item>
         <Form.Item label="模型范围" name="model_ids" rules={[{ required: true, message: '至少选择一个模型' }]}><Select mode="multiple" options={readableModelIDs.map((id) => ({ value: id, label: models.data?.items.find((model) => model.id === id)?.display_name ?? id }))} placeholder={readableModelIDs.length ? '选择当前可读取的模型' : '没有可签发的模型'} /></Form.Item>
+        <Form.Item label="配置命名空间范围" name="config_namespace_ids"><Select mode="multiple" options={delegableNamespaceIDs.map((id) => ({ value: id, label: namespaces.data?.items.find((item) => item.id === id)?.display_name ?? id }))} placeholder={delegableNamespaceIDs.length ? '选择当前可委派的命名空间' : '不授权配置命名空间'} /></Form.Item>
         <Form.Item label="过期时间" name="expires_at"><DatePicker showTime disabledDate={(date) => date.valueOf() <= Date.now()} /></Form.Item>
       </Form>
     </Modal>
@@ -123,6 +128,7 @@ export default function APIKeysPage({ principal }: { principal: Principal }) {
       <Alert type="warning" showIcon title="关闭后无法再次查看" description="此响应按 no-store 获取。不要将密钥粘贴到工单、日志或聊天记录。" />
       <Typography.Paragraph className="secret-value" copyable={{ icon: <CopyOutlined />, tooltips: ['复制完整 Key', '已复制'] }}><code>{secret?.key}</code></Typography.Paragraph>
       <Typography.Text type="secondary">模型范围：{secret?.model_ids.join('、')}</Typography.Text>
+      <br/><Typography.Text type="secondary">配置范围：{secret?.config_namespace_ids?.join('、') || '无'}</Typography.Text>
     </Modal>
   </>
 }

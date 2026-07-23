@@ -29,7 +29,7 @@
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
   post:
     operationId: createAdminRole
-    summary: 创建无授权角色
+    summary: 创建角色及配置命名空间授权
     parameters: &writeHeaders
       - *sessionCookie
       - name: Origin
@@ -48,7 +48,7 @@
             $ref: ./schemas.yaml#/$defs/CreateRoleRequest
     responses:
       "201":
-        description: 角色已创建，授权集合为空。
+        description: 角色已创建。
         content:
           application/json:
             schema:
@@ -94,7 +94,7 @@
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
   patch:
     operationId: updateAdminRole
-    summary: 修改角色显示信息
+    summary: 修改角色显示信息及配置命名空间授权
     parameters: *writeHeaders
     requestBody:
       required: true

@@ -8,6 +8,7 @@ export const workspaceLinks: NavigationItem[] = ([
   { key: 'users', label: '用户管理', path: '/users', permission: 'users.view' },
   { key: 'roles', label: '角色与权限', path: '/roles', permission: rolePagePermissions },
   { key: 'models', label: '内容模型', path: '/models', permission: 'models.view' },
+  { key: 'configurations', label: '配置管理', path: '/configurations', permission: 'configurations.view' },
   { key: 'assets', label: '素材库', path: '/assets', permission: 'assets.view' },
   { key: 'api-keys', label: 'API Keys', path: '/api-keys', permission: apiKeyPagePermissions },
   { key: 'api-explorer', label: '客户端调试', path: '/api-explorer', permission: apiKeyPagePermissions },

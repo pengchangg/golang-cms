@@ -1,0 +1,441 @@
+x-integration-status: integrated
+x-admin-configuration-errors:
+  bad-request: &badRequest
+    description: 查询、游标或请求体校验失败，error.code 为 invalid_query、invalid_cursor 或 validation_failed。
+    content:
+      application/json:
+        schema:
+          oneOf:
+            - $ref: ../identity/schemas.yaml#/$defs/ValidationErrorResponse
+            - $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  unauthenticated: &unauthenticated
+    description: 管理会话无效。
+    content:
+      application/json:
+        schema:
+          $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  forbidden: &forbidden
+    description: 缺少系统配置权限或目标配置命名空间权限。
+    content:
+      application/json:
+        schema:
+          $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  not-found: &notFound
+    description: 配置命名空间、配置项或 Revision 不存在，error.code 为 resource_not_found。
+    content:
+      application/json:
+        schema:
+          $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  conflict: &conflict
+    description: key、归档状态、草稿指针、发布指针或工作流状态冲突。
+    content:
+      application/json:
+        schema:
+          $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+  too-large: &tooLarge
+    description: JSON 请求体超过 128 KiB，error.code 为 request_body_too_large。
+    content:
+      application/json:
+        schema:
+          $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/configurations:
+  get:
+    x-integration-status: integrated
+    operationId: listAdminConfigurationNamespaces
+    summary: 列出配置命名空间
+    parameters:
+      - &sessionCookie
+        name: cms_session
+        in: cookie
+        required: true
+        schema: { type: string, minLength: 1 }
+      - &status
+        name: status
+        in: query
+        schema:
+          $ref: ./schemas.yaml#/$defs/ConfigurationResourceStatus
+    responses:
+      "200":
+        description: 配置命名空间列表。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationNamespaceListResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+  post:
+    x-integration-status: integrated
+    operationId: createAdminConfigurationNamespace
+    summary: 创建配置命名空间
+    parameters: &writeHeaders
+      - *sessionCookie
+      - name: Origin
+        in: header
+        required: true
+        schema: { type: string, format: uri }
+      - name: X-CSRF-Token
+        in: header
+        required: true
+        schema: { type: string, minLength: 32 }
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateConfigurationNamespaceRequest
+    responses:
+      "201":
+        description: 配置命名空间已创建。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationNamespace
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "409": *conflict
+      "413": *tooLarge
+/configurations/{namespace_id}:
+  parameters: &namespaceId
+    - name: namespace_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
+  get:
+    x-integration-status: integrated
+    operationId: getAdminConfigurationNamespace
+    summary: 获取配置命名空间
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 配置命名空间详情。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationNamespace
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+  patch:
+    x-integration-status: integrated
+    operationId: updateAdminConfigurationNamespace
+    summary: 修改配置命名空间显示信息
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateConfigurationNamespaceRequest
+    responses:
+      "200":
+        description: 配置命名空间已更新。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationNamespace
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+      "413": *tooLarge
+  delete:
+    x-integration-status: integrated
+    operationId: archiveAdminConfigurationNamespace
+    summary: 归档空配置命名空间
+    parameters: *writeHeaders
+    responses:
+      "204": { description: 配置命名空间已归档。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+/configurations/{namespace_id}/items:
+  parameters: *namespaceId
+  get:
+    x-integration-status: integrated
+    operationId: listAdminConfigurationItems
+    summary: 列出配置项定义
+    parameters: [*sessionCookie, *status]
+    responses:
+      "200":
+        description: 配置项定义列表。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationItemListResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+  post:
+    x-integration-status: integrated
+    operationId: createAdminConfigurationItem
+    summary: 创建配置项定义
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateConfigurationItemRequest
+    responses:
+      "201":
+        description: 配置项定义已创建。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationItem
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+      "413": *tooLarge
+/configurations/{namespace_id}/items/{item_id}:
+  parameters: &itemId
+    - name: namespace_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
+    - name: item_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^cit_[a-f0-9]{32}$" }
+  get:
+    x-integration-status: integrated
+    operationId: getAdminConfigurationItem
+    summary: 获取配置项定义
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 配置项定义。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationItem
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+  patch:
+    x-integration-status: integrated
+    operationId: updateAdminConfigurationItem
+    summary: 修改配置项定义
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateConfigurationItemRequest
+    responses:
+      "200":
+        description: 配置项定义已更新。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationItem
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+      "413": *tooLarge
+  delete:
+    x-integration-status: integrated
+    operationId: archiveAdminConfigurationItem
+    summary: 归档未发布的配置项
+    parameters: *writeHeaders
+    responses:
+      "204": { description: 配置项已归档。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+/configurations/{namespace_id}/items/{item_id}/value:
+  parameters: *itemId
+  get:
+    x-integration-status: integrated
+    operationId: getAdminConfigurationItemValue
+    summary: 获取配置项当前草稿和发布值
+    parameters: [*sessionCookie]
+    responses:
+      "200": &itemValueResponse
+        description: 配置项定义、当前草稿 Revision 和可选的当前发布 Revision。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationItemValue
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+/configurations/{namespace_id}/items/{item_id}/revisions:
+  parameters: *itemId
+  get:
+    x-integration-status: integrated
+    operationId: listAdminConfigurationRevisions
+    summary: 列出配置 Revision 历史
+    parameters: &paginationParameters
+      - *sessionCookie
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      - name: cursor
+        in: query
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 按 revision_number DESC 返回 Revision。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationRevisionListResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+/configurations/{namespace_id}/items/{item_id}/revisions/{revision_id}:
+  parameters:
+    - name: namespace_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
+    - name: item_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^cit_[a-f0-9]{32}$" }
+    - name: revision_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^crv_[a-f0-9]{32}$" }
+  get:
+    x-integration-status: integrated
+    operationId: getAdminConfigurationRevision
+    summary: 获取配置 Revision
+    parameters: [*sessionCookie]
+    responses:
+      "200":
+        description: 指定配置 Revision。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationRevision
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+/configurations/{namespace_id}/items/{item_id}/workflow-events:
+  parameters: *itemId
+  get:
+    x-integration-status: integrated
+    operationId: listAdminConfigurationWorkflowEvents
+    summary: 列出配置工作流事件
+    parameters: *paginationParameters
+    responses:
+      "200":
+        description: 按 occurred_at DESC、id DESC 返回不可变工作流事件。
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/ConfigurationWorkflowEventListResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+/configurations/{namespace_id}/items/{item_id}/drafts:
+  parameters: *itemId
+  post:
+    x-integration-status: integrated
+    operationId: createAdminConfigurationDraft
+    summary: 创建首个配置草稿 Revision
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/CreateConfigurationDraftRequest
+    responses:
+      "201": *itemValueResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+      "413": *tooLarge
+/configurations/{namespace_id}/items/{item_id}/draft:
+  parameters: *itemId
+  patch:
+    x-integration-status: integrated
+    operationId: updateAdminConfigurationDraft
+    summary: 基于当前 Revision 保存新草稿 Revision
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/UpdateConfigurationDraftRequest
+    responses:
+      "201": *itemValueResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+      "413": *tooLarge
+/configurations/{namespace_id}/items/{item_id}/submit:
+  parameters: *itemId
+  post: &revisionAction
+    x-integration-status: integrated
+    operationId: submitAdminConfigurationRevision
+    summary: 提交当前配置草稿审核
+    parameters: *writeHeaders
+    requestBody: &revisionConditionBody
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/ConfigurationRevisionConditionRequest
+    responses: &revisionActionResponses
+      "200": *itemValueResponse
+      "400": *badRequest
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409": *conflict
+      "413": *tooLarge
+/configurations/{namespace_id}/items/{item_id}/approve:
+  parameters: *itemId
+  post:
+    x-integration-status: integrated
+    operationId: approveAdminConfigurationRevision
+    summary: 审核并发布配置 Revision
+    parameters: *writeHeaders
+    requestBody: *revisionConditionBody
+    responses: *revisionActionResponses
+/configurations/{namespace_id}/items/{item_id}/reject:
+  parameters: *itemId
+  post:
+    x-integration-status: integrated
+    operationId: rejectAdminConfigurationRevision
+    summary: 驳回待审核配置 Revision
+    parameters: *writeHeaders
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ./schemas.yaml#/$defs/RejectConfigurationRevisionRequest
+    responses: *revisionActionResponses
+/configurations/{namespace_id}/items/{item_id}/unpublish:
+  parameters: *itemId
+  post:
+    x-integration-status: integrated
+    operationId: unpublishAdminConfigurationRevision
+    summary: 下线当前发布配置 Revision
+    parameters: *writeHeaders
+    requestBody: *revisionConditionBody
+    responses: *revisionActionResponses

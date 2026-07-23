@@ -6,7 +6,7 @@ const fields = [
   { id: 'fld_cover', key: 'cover', display_name: '封面', description: '', type: 'single_media', required: false, default_value: null, constraints: {}, children: [], status: 'active', created_at: now, updated_at: now },
 ]
 let entries = [{ id: 'ent_welcome', model_id: model.id, status: 'draft', current_draft_revision_id: 'rev_1', current_draft_content: { title: '欢迎使用', body: { type: 'doc', content: [] }, cover: null } as Record<string, unknown>, workflow_status: 'draft', current_published_revision_id: null, referenced_assets: {}, created_by: 'usr_dev_preview', created_at: now, updated_at: now }]
-const roles = [{ id: 'rol_editor', key: 'editor', kind: 'custom', display_name: '内容编辑', description: '维护模型与草稿', system_permissions: ['models.view', 'models.update'], model_permissions: [{ model_id: model.id, permissions: ['content.view', 'content.create', 'content.update'] }], created_at: now, updated_at: now }]
+const roles = [{ id: 'rol_editor', key: 'editor', kind: 'custom', display_name: '内容编辑', description: '维护模型与草稿', system_permissions: ['models.view', 'models.update'], model_permissions: [{ model_id: model.id, permissions: ['content.view', 'content.create', 'content.update'] }], config_namespace_permissions: [], created_at: now, updated_at: now }]
 const mockUser = { id: 'usr_dev_preview', display_name: '开发预览用户', email: null, phone_masked: '138****8000', auth_methods: ['sms'], is_emergency_admin: false, has_high_risk_role: false, status: 'enabled', created_at: now, updated_at: now }
 
 export function enableP1Mock() {

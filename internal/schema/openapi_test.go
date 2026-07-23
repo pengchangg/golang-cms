@@ -118,3 +118,101 @@ func TestOpenAPIWorkflowActionsReturnContentEntry(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPIAggregatesConfigurationRoutes(t *testing.T) {
+	tests := []struct {
+		path  string
+		wants []string
+	}{
+		{
+			path: "../../api/openapi/admin.yaml",
+			wants: []string{
+				"/configurations:",
+				"/configurations/{namespace_id}/items/{item_id}/value:",
+				"/configurations/{namespace_id}/items/{item_id}/drafts:",
+				"/configurations/{namespace_id}/items/{item_id}/unpublish:",
+			},
+		},
+		{
+			path: "../../api/openapi/content.yaml",
+			wants: []string{
+				"/configurations/{namespace_key}:",
+				"/configurations/{namespace_key}/{item_key}:",
+			},
+		},
+	}
+	for _, test := range tests {
+		data, err := os.ReadFile(test.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range test.wants {
+			if !strings.Contains(string(data), want) {
+				t.Fatalf("%s 未聚合配置路径 %q", test.path, want)
+			}
+		}
+	}
+}
+
+func TestOpenAPIConfigurationContractsMatchRuntime(t *testing.T) {
+	files := []struct {
+		path  string
+		wants []string
+	}{
+		{
+			path: "../../api/openapi/fragments/admin/configurations/schemas.yaml",
+			wants: []string{
+				"enum: [string, integer, decimal, boolean, json, single_asset, multi_asset, single_relation, multi_relation]",
+				"required: [id, namespace_key, display_name, description, status, created_at, updated_at]",
+				"oneOf:",
+			},
+		},
+		{
+			path: "../../api/openapi/fragments/content/configurations/schemas.yaml",
+			wants: []string{
+				"required: [item_key, value_type, value, revision_id, revision_number, published_at]",
+				"oneOf:",
+			},
+		},
+		{
+			path: "../../api/openapi/fragments/content/configurations/paths.yaml",
+			wants: []string{
+				"ETag:",
+				`"304":`,
+				`"401":`,
+				`"404":`,
+				`"413":`,
+				`"429":`,
+				`"503":`,
+			},
+		},
+	}
+	for _, file := range files {
+		data, err := os.ReadFile(file.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range file.wants {
+			if !strings.Contains(string(data), want) {
+				t.Fatalf("%s 缺少运行时契约 %q", file.path, want)
+			}
+		}
+	}
+}
+
+func TestOpenAPIExposesConfigurationScopes(t *testing.T) {
+	files := []string{
+		"../../api/openapi/fragments/admin/identity/schemas.yaml",
+		"../../api/openapi/fragments/admin/roles/schemas.yaml",
+		"../../api/openapi/fragments/admin/api-keys/schemas.yaml",
+	}
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "config_namespace") {
+			t.Fatalf("%s 未同步配置命名空间授权字段", path)
+		}
+	}
+}

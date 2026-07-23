@@ -15,7 +15,7 @@ it('审计日志使用 next_cursor 请求下一页并支持返回', async () => 
     .mockResolvedValueOnce({ items: [event], next_cursor: 'audit_2' })
     .mockResolvedValueOnce({ items: [], next_cursor: null })
     .mockResolvedValueOnce({ items: [event], next_cursor: 'audit_2' })
-  const principal: Principal = { user_id: 'usr_1', display_name: '管理员', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: ['audit.view'], model_permissions: [] }
+  const principal: Principal = { user_id: 'usr_1', display_name: '管理员', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: ['audit.view'], model_permissions: [], config_namespace_permissions: [] }
   render(<MemoryRouter><AuditPage principal={principal} /></MemoryRouter>)
   await userEvent.click(await screen.findByRole('button', { name: '下一页' }))
   await waitFor(() => expect(list).toHaveBeenLastCalledWith({ action: '', result: undefined, cursor: 'audit_2' }))

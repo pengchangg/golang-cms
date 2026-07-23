@@ -1,0 +1,288 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/admin/configurations/schemas.yaml
+x-integration-status: integrated
+$defs:
+  ConfigurationResourceStatus:
+    type: string
+    enum: [active, archived]
+  ConfigurationValueType:
+    type: string
+    enum: [string, integer, decimal, boolean, json, single_asset, multi_asset, single_relation, multi_relation]
+  ConfigurationWorkflowStatus:
+    type: string
+    enum: [draft, pending_review, rejected, published, unpublished]
+  ConfigurationKey:
+    type: string
+    pattern: "^[a-z][a-z0-9_]{0,63}$"
+  ConfigurationConstraints:
+    type: object
+    additionalProperties: false
+    required: [required]
+    properties:
+      required: { type: boolean }
+      min_length: { type: integer, minimum: 0 }
+      max_length: { type: integer, minimum: 0 }
+      pattern: { type: string, description: RE2 表达式；UTF-8 编码最大 512 字节。, x-maxBytes: 512 }
+      string_enum:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items: { type: string }
+      minimum:
+        type: string
+        pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+      maximum:
+        type: string
+        pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+      integer_enum:
+        description: 为避免 JSON integer 精度丢失，整数枚举使用无指数十进制字符串。
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          type: string
+          pattern: '^-?(0|[1-9][0-9]*)$'
+      scale: { type: integer, minimum: 0, maximum: 30 }
+      decimal_enum:
+        description: 精确小数枚举使用无指数十进制字符串。
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          type: string
+          pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
+      max_bytes: { type: integer, minimum: 1, maximum: 65536 }
+      allowed_mime_types:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          type: string
+          pattern: '^[a-z0-9!#$&^_.+%*-]+/[a-z0-9!#$&^_.+%*-]+$'
+      max_size: { type: integer, format: int64, minimum: 1, maximum: 5368709120 }
+      target_model_id: { type: string, minLength: 1 }
+  ConfigurationNamespace:
+    type: object
+    additionalProperties: false
+    required: [id, namespace_key, display_name, description, status, created_at, updated_at]
+    properties:
+      id: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
+      namespace_key:
+        $ref: "#/$defs/ConfigurationKey"
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+      status:
+        $ref: "#/$defs/ConfigurationResourceStatus"
+      created_at: { type: string, format: date-time }
+      updated_at: { type: string, format: date-time }
+  ConfigurationNamespaceListResponse:
+    type: object
+    additionalProperties: false
+    required: [items]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/ConfigurationNamespace"
+  ConfigurationItem:
+    type: object
+    additionalProperties: false
+    required: [id, namespace_id, item_key, display_name, description, value_type, constraints, status, created_by, created_at, updated_at]
+    properties:
+      id: { type: string, pattern: "^cit_[a-f0-9]{32}$" }
+      namespace_id: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
+      item_key:
+        $ref: "#/$defs/ConfigurationKey"
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+      value_type:
+        $ref: "#/$defs/ConfigurationValueType"
+      constraints:
+        $ref: "#/$defs/ConfigurationConstraints"
+      status:
+        $ref: "#/$defs/ConfigurationResourceStatus"
+      created_by: { type: string, minLength: 1 }
+      created_at: { type: string, format: date-time }
+      updated_at: { type: string, format: date-time }
+  ConfigurationItemListResponse:
+    type: object
+    additionalProperties: false
+    required: [items]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/ConfigurationItem"
+  ConfigurationValue:
+    description: 值的具体分支由同一配置项的 value_type 决定；decimal 使用无指数十进制字符串。
+    oneOf:
+      - type: "null"
+      - type: string
+      - type: integer
+        format: int64
+      - type: boolean
+      - type: object
+      - type: array
+      - type: number
+        not: { type: integer }
+  ConfigurationRevision:
+    type: object
+    additionalProperties: false
+    required: [id, item_id, namespace_id, revision_number, value_type, constraints, value, workflow_status, created_by, submitted_by, submitted_at, created_at]
+    properties:
+      id: { type: string, pattern: "^crv_[a-f0-9]{32}$" }
+      item_id: { type: string, pattern: "^cit_[a-f0-9]{32}$" }
+      namespace_id: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
+      revision_number: { type: integer, minimum: 1 }
+      value_type:
+        $ref: "#/$defs/ConfigurationValueType"
+      constraints:
+        $ref: "#/$defs/ConfigurationConstraints"
+      value:
+        $ref: "#/$defs/ConfigurationValue"
+      workflow_status:
+        $ref: "#/$defs/ConfigurationWorkflowStatus"
+      created_by: { type: string, minLength: 1 }
+      submitted_by: { type: [string, "null"], minLength: 1 }
+      submitted_at: { type: [string, "null"], format: date-time }
+      created_at: { type: string, format: date-time }
+  ConfigurationRevisionListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/ConfigurationRevision"
+      next_cursor: { type: [string, "null"], minLength: 1 }
+  ConfigurationWorkflowEvent:
+    type: object
+    additionalProperties: false
+    required: [id, item_id, namespace_id, revision_id, type, from_status, to_status, actor_id, reason, occurred_at]
+    properties:
+      id: { type: string, pattern: "^cwe_[a-f0-9]{32}$" }
+      item_id: { type: string, pattern: "^cit_[a-f0-9]{32}$" }
+      namespace_id: { type: string, pattern: "^cns_[a-f0-9]{32}$" }
+      revision_id: { type: string, pattern: "^crv_[a-f0-9]{32}$" }
+      type: { type: string, enum: [submitted, approved, rejected, unpublished] }
+      from_status:
+        $ref: "#/$defs/ConfigurationWorkflowStatus"
+      to_status:
+        $ref: "#/$defs/ConfigurationWorkflowStatus"
+      actor_id: { type: string, minLength: 1 }
+      reason: { type: [string, "null"], minLength: 1, maxLength: 1000 }
+      occurred_at: { type: string, format: date-time }
+  ConfigurationWorkflowEventListResponse:
+    type: object
+    additionalProperties: false
+    required: [items, next_cursor]
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/$defs/ConfigurationWorkflowEvent"
+      next_cursor: { type: [string, "null"], minLength: 1 }
+  EmptyConfigurationRevision:
+    description: 配置项尚未创建草稿时，Go 零值 Revision 的实际 JSON 表示。
+    type: object
+    additionalProperties: false
+    required: [id, item_id, namespace_id, revision_number, value_type, constraints, value, workflow_status, created_by, submitted_by, submitted_at, created_at]
+    properties:
+      id: { const: "" }
+      item_id: { const: "" }
+      namespace_id: { const: "" }
+      revision_number: { const: 0 }
+      value_type: { const: "" }
+      constraints:
+        type: object
+        additionalProperties: false
+        required: [required]
+        properties:
+          required: { const: false }
+      value: { type: "null" }
+      workflow_status: { const: "" }
+      created_by: { const: "" }
+      submitted_by: { type: "null" }
+      submitted_at: { type: "null" }
+      created_at: { const: "0001-01-01T00:00:00Z" }
+  ConfigurationItemValue:
+    type: object
+    additionalProperties: false
+    required: [item, current_draft_revision, current_published_revision_id]
+    properties:
+      item:
+        $ref: "#/$defs/ConfigurationItem"
+      current_draft_revision:
+        oneOf:
+          - $ref: "#/$defs/ConfigurationRevision"
+          - $ref: "#/$defs/EmptyConfigurationRevision"
+      current_published_revision_id: { type: [string, "null"], pattern: "^crv_[a-f0-9]{32}$" }
+      current_published_revision:
+        $ref: "#/$defs/ConfigurationRevision"
+  CreateConfigurationNamespaceRequest:
+    type: object
+    additionalProperties: false
+    required: [namespace_key, display_name]
+    properties:
+      namespace_key:
+        $ref: "#/$defs/ConfigurationKey"
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+  UpdateConfigurationNamespaceRequest:
+    type: object
+    additionalProperties: false
+    minProperties: 1
+    properties:
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+  CreateConfigurationItemRequest:
+    type: object
+    additionalProperties: false
+    required: [item_key, display_name, value_type]
+    properties:
+      item_key:
+        $ref: "#/$defs/ConfigurationKey"
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+      value_type:
+        $ref: "#/$defs/ConfigurationValueType"
+      constraints:
+        $ref: "#/$defs/ConfigurationConstraints"
+  UpdateConfigurationItemRequest:
+    type: object
+    additionalProperties: false
+    minProperties: 1
+    properties:
+      display_name: { type: string, minLength: 1, maxLength: 120 }
+      description: { type: string, maxLength: 1000 }
+      constraints:
+        $ref: "#/$defs/ConfigurationConstraints"
+  CreateConfigurationDraftRequest:
+    type: object
+    additionalProperties: false
+    required: [value]
+    properties:
+      value:
+        $ref: "#/$defs/ConfigurationValue"
+  UpdateConfigurationDraftRequest:
+    type: object
+    additionalProperties: false
+    required: [base_revision_id, value]
+    properties:
+      base_revision_id: { type: string, pattern: "^crv_[a-f0-9]{32}$" }
+      value:
+        $ref: "#/$defs/ConfigurationValue"
+  ConfigurationRevisionConditionRequest:
+    type: object
+    additionalProperties: false
+    required: [revision_id]
+    properties:
+      revision_id: { type: string, pattern: "^crv_[a-f0-9]{32}$" }
+  RejectConfigurationRevisionRequest:
+    type: object
+    additionalProperties: false
+    required: [revision_id, reason]
+    properties:
+      revision_id: { type: string, pattern: "^crv_[a-f0-9]{32}$" }
+      reason: { type: string, minLength: 1, maxLength: 1000 }

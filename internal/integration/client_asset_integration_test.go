@@ -36,6 +36,57 @@ func TestClientAssetDownloadUsesSingleConnectionTransaction(t *testing.T) {
 	}
 }
 
+func TestClientAssetDownloadAllowsPublishedConfigurationReference(t *testing.T) {
+	db := openClientAssetTestDB(t)
+	fixture := createClientAssetFixture(t, db)
+	now := time.Now().UTC()
+	suffix := fmt.Sprintf("%032x", time.Now().UnixNano())
+	namespaceID, itemID, revisionID := "cns_"+suffix, "cit_"+suffix, "crv_"+suffix
+	var userID string
+	if err := db.QueryRow(`SELECT created_by FROM api_keys WHERE id=?`, fixture.keyID).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO config_namespaces(id,namespace_key,display_name,description,status,created_at,updated_at) VALUES (?,?,'config asset','', 'active',?,?)`, []any{namespaceID, "cfg_" + suffix[:16], now, now}},
+		{`INSERT INTO config_items(id,namespace_id,item_key,display_name,description,value_type,constraints,status,created_by,created_at,updated_at) VALUES (?,?,'hero','hero','','single_asset',CAST('{}' AS JSON),'active',?,?,?)`, []any{itemID, namespaceID, userID, now, now}},
+		{`INSERT INTO config_revisions(id,item_id,namespace_id,revision_number,value_type,constraints,value,workflow_status,created_by,submitted_by,submitted_at,created_at) VALUES (?,?,?,1,'single_asset',CAST('{}' AS JSON),CAST(? AS JSON),'published',?,?,?,?)`, []any{revisionID, itemID, namespaceID, `"` + fixture.assetID + `"`, userID, userID, now, now}},
+		{`INSERT INTO config_published_pointers(item_id,namespace_id,revision_id,published_at) VALUES (?,?,?,?)`, []any{itemID, namespaceID, revisionID, now}},
+		{`INSERT INTO config_asset_references(revision_id,item_id,namespace_id,asset_id,position) VALUES (?,?,?,?,0)`, []any{revisionID, itemID, namespaceID, fixture.assetID}},
+		{`INSERT INTO api_key_config_namespace_scopes(api_key_id,namespace_id) VALUES (?,?)`, []any{fixture.keyID, namespaceID}},
+	} {
+		if _, err := db.Exec(statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`DELETE FROM asset_references WHERE asset_id=?`, fixture.assetID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, statement := range []struct {
+			query string
+			arg   string
+		}{
+			{`DELETE FROM api_key_config_namespace_scopes WHERE namespace_id=?`, namespaceID},
+			{`DELETE FROM config_asset_references WHERE revision_id=?`, revisionID},
+			{`DELETE FROM config_published_pointers WHERE item_id=?`, itemID},
+			{`DELETE FROM config_revisions WHERE id=?`, revisionID},
+			{`DELETE FROM config_items WHERE id=?`, itemID},
+			{`DELETE FROM config_namespaces WHERE id=?`, namespaceID},
+		} {
+			if _, err := db.Exec(statement.query, statement.arg); err != nil {
+				t.Errorf("清理配置素材测试夹具失败: %v", err)
+			}
+		}
+	})
+	response := requestClientAsset(t, newClientAssetTestHandler(t, db, database.NewTransactor(db)), fixture.rawKey, fixture.assetID)
+	if response.Code != http.StatusFound || response.Header().Get("Location") == "" {
+		t.Fatalf("配置素材下载响应=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+}
+
 func TestClientAssetDownloadSerializesWithRevocation(t *testing.T) {
 	t.Run("撤销先持锁时下载拒绝", func(t *testing.T) {
 		db := openClientAssetTestDB(t)

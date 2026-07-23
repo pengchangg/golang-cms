@@ -22,6 +22,7 @@ type Repository interface {
 	Get(context.Context, database.Querier, string, bool, time.Time) (APIKey, error)
 	FindByPrefix(context.Context, database.Querier, string, bool, time.Time) (APIKey, error)
 	ValidateActiveModels(context.Context, database.Querier, []string) error
+	ValidateActiveConfigNamespaces(context.Context, database.Querier, []string) error
 	Create(context.Context, database.Querier, APIKey) error
 	Revoke(context.Context, database.Querier, string, string, time.Time) error
 	TouchLastUsed(context.Context, database.Querier, string, time.Time) error
@@ -69,11 +70,8 @@ func (SQLRepository) List(ctx context.Context, q database.Querier, status APIKey
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	for i := range items {
-		items[i].ModelIDs, err = modelIDs(ctx, q, items[i].ID)
-		if err != nil {
-			return nil, err
-		}
+	if err := loadScopes(ctx, q, items); err != nil {
+		return nil, err
 	}
 	return items, nil
 }
@@ -91,6 +89,10 @@ func (SQLRepository) Get(ctx context.Context, q database.Querier, id string, loc
 		return item, fmt.Errorf("查询 API Key: %w", err)
 	}
 	item.ModelIDs, err = modelIDs(ctx, q, id)
+	if err != nil {
+		return item, err
+	}
+	item.ConfigNamespaceIDs, err = configNamespaceIDs(ctx, q, id)
 	return item, err
 }
 
@@ -104,6 +106,10 @@ func (SQLRepository) FindByPrefix(ctx context.Context, q database.Querier, prefi
 		return item, err
 	}
 	item.ModelIDs, err = modelIDs(ctx, q, item.ID)
+	if err != nil {
+		return item, err
+	}
+	item.ConfigNamespaceIDs, err = configNamespaceIDs(ctx, q, item.ID)
 	return item, err
 }
 
@@ -123,6 +129,25 @@ func (SQLRepository) ValidateActiveModels(ctx context.Context, q database.Querie
 	return nil
 }
 
+func (SQLRepository) ValidateActiveConfigNamespaces(ctx context.Context, q database.Querier, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	marks := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		marks[i], args[i] = "?", id
+	}
+	var count int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM config_namespaces WHERE status='active' AND id IN (`+strings.Join(marks, ",")+`)`, args...).Scan(&count); err != nil {
+		return err
+	}
+	if count != len(ids) {
+		return appError(apperror.KindNotFound, "resource_not_found", "配置命名空间不存在")
+	}
+	return nil
+}
+
 func (SQLRepository) Create(ctx context.Context, q database.Querier, key APIKey) error {
 	_, err := q.ExecContext(ctx, `INSERT INTO api_keys (id,name,prefix,salt,secret_hash,expires_at,rotated_from_id,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)`, key.ID, key.Name, key.Prefix, key.Salt, key.Hash, key.ExpiresAt, key.RotatedFromID, key.CreatedBy, key.CreatedAt)
 	if err != nil {
@@ -131,6 +156,11 @@ func (SQLRepository) Create(ctx context.Context, q database.Querier, key APIKey)
 	for _, modelID := range key.ModelIDs {
 		if _, err := q.ExecContext(ctx, `INSERT INTO api_key_model_scopes (api_key_id,model_id) VALUES (?,?)`, key.ID, modelID); err != nil {
 			return fmt.Errorf("创建 API Key 模型范围: %w", err)
+		}
+	}
+	for _, namespaceID := range key.ConfigNamespaceIDs {
+		if _, err := q.ExecContext(ctx, `INSERT INTO api_key_config_namespace_scopes (api_key_id,namespace_id) VALUES (?,?)`, key.ID, namespaceID); err != nil {
+			return fmt.Errorf("创建 API Key 配置命名空间范围: %w", err)
 		}
 	}
 	return nil
@@ -207,4 +237,61 @@ func modelIDs(ctx context.Context, q database.Querier, id string) ([]string, err
 		result = append(result, value)
 	}
 	return result, rows.Err()
+}
+
+func configNamespaceIDs(ctx context.Context, q database.Querier, id string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT namespace_id FROM api_key_config_namespace_scopes WHERE api_key_id=? ORDER BY namespace_id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []string{}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+func loadScopes(ctx context.Context, q database.Querier, items []APIKey) error {
+	if len(items) == 0 {
+		return nil
+	}
+	marks := make([]string, len(items))
+	args := make([]any, len(items))
+	indexes := make(map[string]int, len(items))
+	for i := range items {
+		marks[i], args[i], indexes[items[i].ID] = "?", items[i].ID, i
+		items[i].ModelIDs = []string{}
+		items[i].ConfigNamespaceIDs = []string{}
+	}
+	if err := appendScopes(ctx, q, `SELECT api_key_id,model_id FROM api_key_model_scopes WHERE api_key_id IN (`+strings.Join(marks, ",")+`) ORDER BY api_key_id,model_id`, args, func(keyID, scopeID string) {
+		i := indexes[keyID]
+		items[i].ModelIDs = append(items[i].ModelIDs, scopeID)
+	}); err != nil {
+		return err
+	}
+	return appendScopes(ctx, q, `SELECT api_key_id,namespace_id FROM api_key_config_namespace_scopes WHERE api_key_id IN (`+strings.Join(marks, ",")+`) ORDER BY api_key_id,namespace_id`, args, func(keyID, scopeID string) {
+		i := indexes[keyID]
+		items[i].ConfigNamespaceIDs = append(items[i].ConfigNamespaceIDs, scopeID)
+	})
+}
+
+func appendScopes(ctx context.Context, q database.Querier, query string, args []any, appendScope func(string, string)) error {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var keyID, scopeID string
+		if err := rows.Scan(&keyID, &scopeID); err != nil {
+			return err
+		}
+		appendScope(keyID, scopeID)
+	}
+	return rows.Err()
 }

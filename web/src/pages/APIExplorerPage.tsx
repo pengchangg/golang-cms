@@ -8,12 +8,13 @@ import {
 } from '../api/contentExplorer'
 import { PageHeader } from '../components/Page'
 
-type Operation = 'models' | 'model' | 'entries' | 'entry'
+type Operation = 'models' | 'model' | 'entries' | 'entry' | 'configuration' | 'configurationItem'
 type FilterOperator = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in'
 
 const API_KEY_PATTERN = /^cmsk_[a-z2-7]{12}_[A-Za-z0-9_-]{43}$/
 const operationLabels: Record<Operation, string> = {
   models: '发现模型', model: '模型定义', entries: '内容列表', entry: '内容详情',
+  configuration: '配置命名空间', configurationItem: '配置单项',
 }
 const comparableTypes = new Set(['integer', 'decimal', 'date', 'datetime'])
 const relationTypes = new Set(['single_relation', 'multi_relation'])
@@ -47,6 +48,8 @@ export default function APIExplorerPage() {
   const [operation, setOperation] = useState<Operation>('models')
   const [modelKey, setModelKey] = useState('')
   const [entryID, setEntryID] = useState('')
+  const [namespaceKey, setNamespaceKey] = useState('')
+  const [configurationKey, setConfigurationKey] = useState('')
   const [limit, setLimit] = useState(20)
   const [cursor, setCursor] = useState('')
   const [filterField, setFilterField] = useState('')
@@ -85,13 +88,22 @@ export default function APIExplorerPage() {
   function clearConnection() {
     controllerRef.current?.abort()
     generationRef.current += 1
-    setAPIKey(''); setModels([]); setModel(undefined); setModelKey(''); setEntryID('')
+    setAPIKey(''); setModels([]); setModel(undefined); setModelKey(''); setEntryID(''); setNamespaceKey(''); setConfigurationKey('')
     setResponse(undefined); setNetworkError(''); setRequestPath('/models'); setOperation('models'); setSending(false)
     clearQuery()
   }
 
   function buildPath(target = operation, nextCursor = cursor) {
     if (target === 'models') return '/models'
+    if (target === 'configuration' || target === 'configurationItem') {
+      if (!namespaceKey.trim()) throw new Error('请输入配置命名空间 key')
+      const namespacePath = `/configurations/${encodeURIComponent(namespaceKey.trim())}`
+      if (target === 'configurationItem') {
+        if (!configurationKey.trim()) throw new Error('请输入配置项 key')
+        return `${namespacePath}/${encodeURIComponent(configurationKey.trim())}`
+      }
+      return namespacePath
+    }
     if (!modelKey) throw new Error('请先选择模型')
     const modelPath = `/models/${encodeURIComponent(modelKey)}`
     if (target === 'model') return modelPath
@@ -149,7 +161,7 @@ export default function APIExplorerPage() {
     ? (response.data as PublishedEntryPage).next_cursor : null
 
   return <>
-    <PageHeader eyebrow="开发工具" title="客户端调试" description="使用真实 API Key 模拟客户端，只读取当前已发布内容。密钥只保存在当前页面内存中。" />
+    <PageHeader eyebrow="开发工具" title="客户端调试" description="使用真实 API Key 模拟客户端，只读取当前已发布内容和配置。密钥只保存在当前页面内存中。" />
     <Alert className="explorer-notice" type="warning" showIcon title="仅限受控开发环境" description="请求不会经过管理 API，也不会读取草稿。不要在共享屏幕、录屏或浏览器扩展可读取的环境中粘贴生产密钥。" />
     <section className="explorer-connection" aria-label="客户端连接">
       <div><Typography.Text className="eyebrow">01 / 凭据</Typography.Text><Typography.Title level={2}>连接内容 API</Typography.Title></div>
@@ -164,8 +176,10 @@ export default function APIExplorerPage() {
       <section className="explorer-request" aria-label="请求构造器">
         <div className="explorer-section-heading"><div><Typography.Text className="eyebrow">02 / REQUEST</Typography.Text><Typography.Title level={2}>构造请求</Typography.Title></div><Tag color="green">GET</Tag></div>
         <Radio.Group aria-label="Content API 操作" optionType="button" buttonStyle="solid" value={operation} onChange={(event) => { setOperation(event.target.value); setCursor('') }} options={Object.entries(operationLabels).map(([value, label]) => ({ value, label }))} />
-        {operation !== 'models' ? <label className="explorer-control"><span>内容模型</span><Select aria-label="内容模型" showSearch value={modelKey || undefined} placeholder={models.length ? '选择 API Key 可见模型' : '请先发现模型'} disabled={!models.length} onChange={(value) => void chooseModel(value)} options={models.map((item) => ({ value: item.key, label: `${item.display_name} · ${item.key}` }))} /></label> : null}
+        {operation !== 'models' && operation !== 'configuration' && operation !== 'configurationItem' ? <label className="explorer-control"><span>内容模型</span><Select aria-label="内容模型" showSearch value={modelKey || undefined} placeholder={models.length ? '选择 API Key 可见模型' : '请先发现模型'} disabled={!models.length} onChange={(value) => void chooseModel(value)} options={models.map((item) => ({ value: item.key, label: `${item.display_name} · ${item.key}` }))} /></label> : null}
         {operation === 'entry' ? <label className="explorer-control"><span>内容 ID</span><Input aria-label="内容 ID" value={entryID} onChange={(event) => setEntryID(event.target.value)} placeholder="ent_..." /></label> : null}
+        {operation === 'configuration' || operation === 'configurationItem' ? <label className="explorer-control"><span>配置命名空间 key</span><Input aria-label="配置命名空间 key" value={namespaceKey} onChange={(event) => setNamespaceKey(event.target.value)} placeholder="例如 website" /></label> : null}
+        {operation === 'configurationItem' ? <label className="explorer-control"><span>配置项 key</span><Input aria-label="配置项 key" value={configurationKey} onChange={(event) => setConfigurationKey(event.target.value)} placeholder="例如 home.hero" /></label> : null}
         {(operation === 'entries' || operation === 'entry') && modelKey && !model ? <div className="explorer-inline-state"><Spin size="small" /> 正在读取模型定义</div> : null}
         {operation === 'entries' && model ? <>
           <Checkbox checked={rawMode} onChange={(event) => { setRawMode(event.target.checked); setCursor('') }}>原始查询参数模式</Checkbox>

@@ -1,0 +1,124 @@
+x-integration-status: integrated
+x-configuration-rate-limited: &rateLimited
+  description: API Key 或 Key/IP 组合超过频率或并发额度，error.code 为 content_rate_limited 或 content_concurrency_limited。
+  headers:
+    Retry-After:
+      required: true
+      schema: { type: integer, minimum: 1 }
+  content:
+    application/json:
+      schema:
+        $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+x-configuration-busy: &contentBusy
+  description: 内容 API 全进程并发已达上限，error.code 为 content_api_busy。
+  headers:
+    Retry-After:
+      required: true
+      schema: { type: integer, minimum: 1 }
+  content:
+    application/json:
+      schema:
+        $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+/configurations/{namespace_key}:
+  parameters: &namespaceKey
+    - name: namespace_key
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z][a-z0-9_.-]{0,119}$" }
+  get:
+    x-integration-status: integrated
+    operationId: getPublishedConfigurationNamespace
+    summary: 读取授权命名空间的全部已发布配置
+    parameters:
+      - &authorization
+        name: Authorization
+        in: header
+        required: true
+        schema:
+          type: string
+          pattern: "^Bearer cmsk_[a-z2-7]{12}_[A-Za-z0-9_-]{43}$"
+      - &ifNoneMatch
+        name: If-None-Match
+        in: header
+        schema: { type: string, minLength: 1 }
+    responses:
+      "200":
+        description: 以 item_key 为键返回命名空间内全部当前发布配置，关系和素材值已展开。
+        headers: &cacheHeaders
+          ETag:
+            required: true
+            schema: { type: string, minLength: 1 }
+          Cache-Control:
+            required: true
+            schema: { const: "private, no-cache" }
+          X-Request-ID:
+            required: true
+            schema: { type: string, minLength: 1 }
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/PublishedConfigurationNamespace
+      "304": &notModified
+        description: If-None-Match 与当前授权响应的 ETag 匹配，无响应体。
+        headers: *cacheHeaders
+      "400": &invalidQuery
+        description: 不接受查询参数，error.code 为 invalid_query。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "401": &unauthenticated
+        description: 缺少、无效、过期或已撤销的 API Key。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "404": &notFound
+        description: 命名空间不存在、已归档、不在 API Key scope，或展开目标不可发布，error.code 为 published_configuration_not_found。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "413": &tooLarge
+        description: 展开后的配置响应超过 8 MiB，error.code 为 configuration_response_too_large。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "429": *rateLimited
+      "503": *contentBusy
+/configurations/{namespace_key}/{item_key}:
+  parameters:
+    - name: namespace_key
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+    - name: item_key
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,63}$" }
+  get:
+    x-integration-status: integrated
+    operationId: getPublishedConfigurationItem
+    summary: 读取单项已发布配置
+    parameters: [*authorization, *ifNoneMatch]
+    responses:
+      "200":
+        description: 返回当前发布配置项，关系和素材值已展开。
+        headers: *cacheHeaders
+        content:
+          application/json:
+            schema:
+              $ref: ./schemas.yaml#/$defs/PublishedConfigurationItem
+      "304": *notModified
+      "400": *invalidQuery
+      "401": *unauthenticated
+      "404": *notFound
+      "413":
+        description: 展开后的单项配置响应超过 1,114,112 bytes，error.code 为 configuration_response_too_large。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "429": *rateLimited
+      "503": *contentBusy

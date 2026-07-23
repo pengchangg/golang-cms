@@ -10,7 +10,7 @@ $defs:
   Role:
     type: object
     additionalProperties: false
-    required: [id, key, kind, display_name, description, system_permissions, model_permissions, created_at, updated_at]
+    required: [id, key, kind, display_name, description, system_permissions, model_permissions, config_namespace_permissions, created_at, updated_at]
     properties:
       id: { type: string, minLength: 1 }
       key:
@@ -28,6 +28,10 @@ $defs:
         type: array
         items:
           $ref: ../identity/schemas.yaml#/$defs/ModelPermissionGrant
+      config_namespace_permissions:
+        type: array
+        items:
+          $ref: ../identity/schemas.yaml#/$defs/ConfigNamespacePermissionGrant
       created_at: { type: string, format: date-time }
       updated_at: { type: string, format: date-time }
   CreateRoleRequest:
@@ -39,6 +43,11 @@ $defs:
         $ref: "#/$defs/RoleKey"
       display_name: { type: string, minLength: 1, maxLength: 120 }
       description: { type: string, maxLength: 1000, default: "" }
+      config_namespace_permissions:
+        type: array
+        default: []
+        items:
+          $ref: ../identity/schemas.yaml#/$defs/ConfigNamespacePermissionGrant
   UpdateRoleRequest:
     type: object
     additionalProperties: false
@@ -46,6 +55,10 @@ $defs:
     properties:
       display_name: { type: string, minLength: 1, maxLength: 120 }
       description: { type: string, maxLength: 1000 }
+      config_namespace_permissions:
+        type: array
+        items:
+          $ref: ../identity/schemas.yaml#/$defs/ConfigNamespacePermissionGrant
   ReplaceUserRolesRequest:
     type: object
     additionalProperties: false

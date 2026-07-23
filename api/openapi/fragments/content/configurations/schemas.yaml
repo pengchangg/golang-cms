@@ -1,0 +1,50 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://internal-cms.invalid/schemas/content/configurations/schemas.yaml
+x-integration-status: integrated
+$defs:
+  PublishedConfigurationValueType:
+    type: string
+    enum: [string, integer, decimal, boolean, json, single_asset, multi_asset, single_relation, multi_relation]
+  PublishedConfigurationAsset:
+    type: object
+    additionalProperties: false
+    required: [id, object_key, filename, mime_type, size, sha256, etag]
+    properties:
+      id:
+        $ref: ../assets/schemas.yaml#/$defs/AssetID
+      object_key: { type: string, minLength: 1 }
+      filename: { type: string, minLength: 1, maxLength: 255 }
+      mime_type: { type: string, minLength: 1, maxLength: 255 }
+      size: { type: integer, minimum: 1 }
+      sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+      etag: { type: string, minLength: 1 }
+  PublishedConfigurationValue:
+    description: 标量、任意 JSON、已展开素材或已展开发布内容；具体分支由 value_type 决定。
+    oneOf:
+      - type: "null"
+      - type: string
+      - type: integer
+        format: int64
+      - type: boolean
+      - type: object
+      - type: array
+      - type: number
+        not: { type: integer }
+  PublishedConfigurationItem:
+    type: object
+    additionalProperties: false
+    required: [item_key, value_type, value, revision_id, revision_number, published_at]
+    properties:
+      item_key: { type: string, pattern: "^[a-z][a-z0-9_.-]{0,119}$" }
+      value_type:
+        $ref: "#/$defs/PublishedConfigurationValueType"
+      value:
+        $ref: "#/$defs/PublishedConfigurationValue"
+      revision_id: { type: string, pattern: "^crv_[a-f0-9]{32}$" }
+      revision_number: { type: integer, minimum: 1 }
+      published_at: { type: string, format: date-time }
+  PublishedConfigurationNamespace:
+    type: object
+    description: 以 item_key 为属性名、已展开配置值为属性值的字典；未发布或已下线配置项不出现。
+    additionalProperties:
+      $ref: "#/$defs/PublishedConfigurationValue"

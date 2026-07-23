@@ -12,15 +12,27 @@ import (
 )
 
 const (
-	UsersView     = "users.view"
-	UsersManage   = "users.manage"
-	RolesView     = "roles.view"
-	RolesManage   = "roles.manage"
-	ModelsView    = "models.view"
-	ModelsCreate  = "models.create"
-	ModelsUpdate  = "models.update"
-	ModelsArchive = "models.archive"
-	AuditView     = "audit.view"
+	UsersView             = "users.view"
+	UsersManage           = "users.manage"
+	RolesView             = "roles.view"
+	RolesManage           = "roles.manage"
+	ModelsView            = "models.view"
+	ModelsCreate          = "models.create"
+	ModelsUpdate          = "models.update"
+	ModelsArchive         = "models.archive"
+	ConfigurationsView    = "configurations.view"
+	ConfigurationsCreate  = "configurations.create"
+	ConfigurationsUpdate  = "configurations.update"
+	ConfigurationsArchive = "configurations.archive"
+	ConfigView            = "config.view"
+	ConfigCreate          = "config.create"
+	ConfigUpdate          = "config.update"
+	ConfigArchive         = "config.archive"
+	ConfigSubmit          = "config.submit"
+	ConfigReview          = "config.review"
+	ConfigPublish         = "config.publish"
+	ConfigUnpublish       = "config.unpublish"
+	AuditView             = "audit.view"
 )
 
 type Authorizer interface {
@@ -32,18 +44,27 @@ type ActiveModelProvider interface {
 	ActiveModelIDsWith(context.Context, database.Querier) ([]string, error)
 }
 
+type ActiveConfigNamespaceProvider interface {
+	ActiveConfigNamespaceIDs(context.Context) ([]string, error)
+	ActiveConfigNamespaceIDsWith(context.Context, database.Querier) ([]string, error)
+}
+
 var allSystemPermissions = []string{
 	UsersView, UsersManage, RolesView, RolesManage, ModelsView, ModelsCreate, ModelsUpdate, ModelsArchive,
+	ConfigurationsView, ConfigurationsCreate, ConfigurationsUpdate, ConfigurationsArchive,
 	"assets.view", "assets.upload", "assets.update", "assets.archive", "api_keys.view", "api_keys.create",
 	"api_keys.revoke", AuditView,
 }
 
 var systemPermissionSet = makeSet(allSystemPermissions)
 var modelPermissionSet = makeSet([]string{"content.view", "content.create", "content.update", "content.archive", "content.submit", "content.review", "content.publish", "content.unpublish"})
+var allConfigNamespacePermissions = []string{ConfigView, ConfigCreate, ConfigUpdate, ConfigArchive, ConfigSubmit, ConfigReview, ConfigPublish, ConfigUnpublish}
+var configNamespacePermissionSet = makeSet(allConfigNamespacePermissions)
 
 type SQLProvider struct {
-	DB     *sql.DB
-	Models ActiveModelProvider
+	DB               *sql.DB
+	Models           ActiveModelProvider
+	ConfigNamespaces ActiveConfigNamespaceProvider
 }
 
 func (p SQLProvider) Permissions(ctx context.Context, userID string) (identity.PermissionSet, error) {
@@ -118,11 +139,23 @@ func (p SQLProvider) permissions(ctx context.Context, q database.Querier, userID
 		if err != nil {
 			return identity.PermissionSet{}, err
 		}
-		system, models := emergencyPermissions(modelIDs)
-		return identity.PermissionSet{System: system, Models: models, EmergencyAdmin: emergency, HighRiskRole: highRisk}, nil
+		var configNamespaceIDs []string
+		if p.ConfigNamespaces != nil {
+			if lock {
+				configNamespaceIDs, err = p.ConfigNamespaces.ActiveConfigNamespaceIDsWith(ctx, q)
+			} else {
+				configNamespaceIDs, err = p.ConfigNamespaces.ActiveConfigNamespaceIDs(ctx)
+			}
+			if err != nil {
+				return identity.PermissionSet{}, err
+			}
+		}
+		system, models, configNamespaceGrants := emergencyPermissions(modelIDs, configNamespaceIDs)
+		return identity.PermissionSet{System: system, Models: models, ConfigNamespacePermissions: configNamespaceGrants, EmergencyAdmin: emergency, HighRiskRole: highRisk}, nil
 	}
 	system := []string{}
 	models := []identity.ModelPermissions{}
+	configNamespaces := []identity.ConfigNamespacePermissions{}
 	for _, roleID := range roleIDs {
 		systemRows, err := q.QueryContext(ctx, `SELECT permission FROM role_system_permissions WHERE role_id=? ORDER BY permission`+lockSuffix, roleID)
 		if err != nil {
@@ -166,11 +199,32 @@ func (p SQLProvider) permissions(ctx context.Context, q database.Querier, userID
 		if err := modelRows.Close(); err != nil {
 			return identity.PermissionSet{}, err
 		}
+		configRows, err := q.QueryContext(ctx, `SELECT namespace_id, permission FROM role_config_namespace_permissions WHERE role_id=? ORDER BY namespace_id, permission`+lockSuffix, roleID)
+		if err != nil {
+			return identity.PermissionSet{}, err
+		}
+		for configRows.Next() {
+			var namespace, code string
+			if err := configRows.Scan(&namespace, &code); err != nil {
+				configRows.Close()
+				return identity.PermissionSet{}, err
+			}
+			if ValidConfigNamespacePermission(code) {
+				configNamespaces = append(configNamespaces, identity.ConfigNamespacePermissions{ConfigNamespaceID: namespace, Permissions: []string{code}})
+			}
+		}
+		if err := configRows.Err(); err != nil {
+			configRows.Close()
+			return identity.PermissionSet{}, err
+		}
+		if err := configRows.Close(); err != nil {
+			return identity.PermissionSet{}, err
+		}
 	}
-	return identity.PermissionSet{System: system, Models: models}, nil
+	return identity.PermissionSet{System: system, Models: models, ConfigNamespacePermissions: configNamespaces}, nil
 }
 
-func emergencyPermissions(modelIDs []string) ([]string, []identity.ModelPermissions) {
+func emergencyPermissions(modelIDs, configNamespaceIDs []string) ([]string, []identity.ModelPermissions, []identity.ConfigNamespacePermissions) {
 	system := append([]string(nil), allSystemPermissions...)
 	sort.Strings(system)
 	modelIDs = append([]string(nil), modelIDs...)
@@ -180,7 +234,15 @@ func emergencyPermissions(modelIDs []string) ([]string, []identity.ModelPermissi
 	for _, modelID := range modelIDs {
 		models = append(models, identity.ModelPermissions{ModelID: modelID, Permissions: append([]string(nil), codes...)})
 	}
-	return system, models
+	configNamespaceIDs = append([]string(nil), configNamespaceIDs...)
+	sort.Strings(configNamespaceIDs)
+	configCodes := append([]string(nil), allConfigNamespacePermissions...)
+	sort.Strings(configCodes)
+	configs := make([]identity.ConfigNamespacePermissions, 0, len(configNamespaceIDs))
+	for _, namespaceID := range configNamespaceIDs {
+		configs = append(configs, identity.ConfigNamespacePermissions{ConfigNamespaceID: namespaceID, Permissions: append([]string(nil), configCodes...)})
+	}
+	return system, models, configs
 }
 
 type TransactionalPermissionProvider interface {
@@ -213,8 +275,17 @@ func (a PrincipalAuthorizer) CurrentPrincipal(ctx context.Context, q database.Qu
 
 func ValidSystemPermission(code string) bool { _, ok := systemPermissionSet[code]; return ok }
 func ValidModelPermission(code string) bool  { _, ok := modelPermissionSet[code]; return ok }
+func ValidConfigNamespacePermission(code string) bool {
+	_, ok := configNamespacePermissionSet[code]
+	return ok
+}
 func SystemPermissions() []string {
 	result := append([]string(nil), allSystemPermissions...)
+	sort.Strings(result)
+	return result
+}
+func ConfigNamespacePermissions() []string {
+	result := append([]string(nil), allConfigNamespacePermissions...)
 	sort.Strings(result)
 	return result
 }

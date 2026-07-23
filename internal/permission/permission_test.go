@@ -2,8 +2,13 @@ package permission
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"io"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"cms/internal/identity"
@@ -15,6 +20,12 @@ type fixedTransactionalPermissions struct{ permissions identity.PermissionSet }
 
 func (p fixedTransactionalPermissions) PermissionsWith(context.Context, database.Querier, string) (identity.PermissionSet, error) {
 	return p.permissions, nil
+}
+
+type fixedConfigNamespaceValidator struct{ err error }
+
+func (v fixedConfigNamespaceValidator) ValidateActiveConfigNamespaces(context.Context, database.Querier, []string) error {
+	return v.err
 }
 
 func TestPrincipalAuthorizerDefaultsToDeny(t *testing.T) {
@@ -51,6 +62,44 @@ func TestReplacementValidationRejectsUnknownAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestConfigNamespaceGrantValidationIsStrictAndSorted(t *testing.T) {
+	grants, namespaceIDs, err := validateConfigNamespaceGrants([]identity.ConfigNamespacePermissions{
+		{ConfigNamespaceID: "cns_b", Permissions: []string{ConfigUpdate, ConfigView}},
+		{ConfigNamespaceID: "cns_a", Permissions: []string{ConfigPublish}},
+	}, "/config_namespace_permissions")
+	if err != nil {
+		t.Fatalf("validateConfigNamespaceGrants() error = %v", err)
+	}
+	if !slices.Equal(namespaceIDs, []string{"cns_a", "cns_b"}) || grants[0].ConfigNamespaceID != "cns_a" || !slices.Equal(grants[1].Permissions, []string{ConfigUpdate, ConfigView}) {
+		t.Fatalf("规范化结果 grants=%v namespaceIDs=%v", grants, namespaceIDs)
+	}
+	for _, invalid := range [][]identity.ConfigNamespacePermissions{
+		{{ConfigNamespaceID: "cns_site", Permissions: []string{"content.view"}}},
+		{{ConfigNamespaceID: "cns_site", Permissions: []string{"config.unknown"}}},
+		{{ConfigNamespaceID: "cns_site", Permissions: []string{ConfigView, ConfigView}}},
+		{{ConfigNamespaceID: "cns_site"}, {ConfigNamespaceID: "cns_site"}},
+		{{ConfigNamespaceID: "", Permissions: []string{ConfigView}}},
+	} {
+		if _, _, err := validateConfigNamespaceGrants(invalid, "/config_namespace_permissions"); err == nil {
+			t.Fatalf("非法授权被接受: %v", invalid)
+		}
+	}
+}
+
+func TestConfigNamespaceMustBeActive(t *testing.T) {
+	service := Service{configNamespaces: fixedConfigNamespaceValidator{err: ErrInvalidConfigNamespaces}}
+	err := service.validateActiveConfigNamespaces(context.Background(), nil, []string{"archived"}, "/config_namespace_permissions")
+	var appError *apperror.Error
+	if !errors.As(err, &appError) || appError.Code != "validation_failed" || appError.Kind != apperror.KindInvalidArgument {
+		t.Fatalf("validateActiveConfigNamespaces() = %v", err)
+	}
+	service.configNamespaces = nil
+	err = service.validateActiveConfigNamespaces(context.Background(), nil, []string{"active"}, "/config_namespace_permissions")
+	if !errors.As(err, &appError) || appError.Kind != apperror.KindInternal {
+		t.Fatalf("未装配 validator 时应拒绝非空授权，得到 %v", err)
+	}
+}
+
 func TestAllDeclaredSystemPermissionsAreValid(t *testing.T) {
 	for _, code := range SystemPermissions() {
 		if !ValidSystemPermission(code) {
@@ -68,7 +117,7 @@ func TestDeprecatedTransferPermissionsAreInvalid(t *testing.T) {
 }
 
 func TestEmergencyPermissionsAlwaysGrantEverything(t *testing.T) {
-	system, models := emergencyPermissions([]string{"mdl_b", "mdl_a"})
+	system, models, configs := emergencyPermissions([]string{"mdl_b", "mdl_a"}, []string{"cns_b", "cns_a"})
 	if len(system) != len(allSystemPermissions) || !slices.IsSorted(system) {
 		t.Fatalf("应急管理员系统权限 = %v", system)
 	}
@@ -89,6 +138,35 @@ func TestEmergencyPermissionsAlwaysGrantEverything(t *testing.T) {
 				t.Fatalf("模型 %s 包含未知权限 %q", model.ModelID, code)
 			}
 		}
+	}
+	if len(configs) != 2 || configs[0].ConfigNamespaceID != "cns_a" || configs[1].ConfigNamespaceID != "cns_b" {
+		t.Fatalf("应急管理员配置命名空间权限 = %v", configs)
+	}
+	for _, config := range configs {
+		if len(config.Permissions) != len(configNamespacePermissionSet) {
+			t.Fatalf("配置命名空间 %s 权限 = %v", config.ConfigNamespaceID, config.Permissions)
+		}
+		for _, code := range config.Permissions {
+			if !ValidConfigNamespacePermission(code) {
+				t.Fatalf("配置命名空间 %s 包含未知权限 %q", config.ConfigNamespaceID, code)
+			}
+		}
+	}
+}
+
+func TestConfigurationPermissionCatalog(t *testing.T) {
+	for _, code := range []string{ConfigurationsView, ConfigurationsCreate, ConfigurationsUpdate, ConfigurationsArchive} {
+		if !ValidSystemPermission(code) {
+			t.Fatalf("配置系统权限 %q 未被识别", code)
+		}
+	}
+	for _, code := range ConfigNamespacePermissions() {
+		if !ValidConfigNamespacePermission(code) {
+			t.Fatalf("配置命名空间权限 %q 未被识别", code)
+		}
+	}
+	if ValidConfigNamespacePermission("content.view") || ValidConfigNamespacePermission("config.unknown") {
+		t.Fatal("非配置命名空间权限被识别")
 	}
 }
 
@@ -164,9 +242,10 @@ func TestOrdinaryPrincipalCannotManageMorePrivilegedTarget(t *testing.T) {
 
 func TestOrdinaryPrincipalCanOnlyDelegatePermissionSubset(t *testing.T) {
 	principal := identity.Principal{
-		UserID:            "usr_actor",
-		SystemPermissions: []string{RolesManage, UsersView},
-		ModelPermissions:  []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{"content.view", "content.update"}}},
+		UserID:                     "usr_actor",
+		SystemPermissions:          []string{RolesManage, UsersView},
+		ModelPermissions:           []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{"content.view", "content.update"}}},
+		ConfigNamespacePermissions: []identity.ConfigNamespacePermissions{{ConfigNamespaceID: "cns_site", Permissions: []string{ConfigView, ConfigUpdate}}},
 	}
 	for _, test := range []struct {
 		name      string
@@ -181,6 +260,9 @@ func TestOrdinaryPrincipalCanOnlyDelegatePermissionSubset(t *testing.T) {
 		{name: "越范围系统权限", requested: identity.PermissionSet{System: []string{AuditView}}},
 		{name: "越范围模型权限", requested: identity.PermissionSet{Models: []identity.ModelPermissions{{ModelID: "mdl_1", Permissions: []string{"content.publish"}}}}},
 		{name: "其他模型权限", requested: identity.PermissionSet{Models: []identity.ModelPermissions{{ModelID: "mdl_2", Permissions: []string{"content.view"}}}}},
+		{name: "命名空间权限子集", requested: identity.PermissionSet{ConfigNamespacePermissions: []identity.ConfigNamespacePermissions{{ConfigNamespaceID: "cns_site", Permissions: []string{ConfigView}}}}, want: true},
+		{name: "越范围命名空间权限", requested: identity.PermissionSet{ConfigNamespacePermissions: []identity.ConfigNamespacePermissions{{ConfigNamespaceID: "cns_site", Permissions: []string{ConfigPublish}}}}},
+		{name: "其他命名空间权限", requested: identity.PermissionSet{ConfigNamespacePermissions: []identity.ConfigNamespacePermissions{{ConfigNamespaceID: "cns_other", Permissions: []string{ConfigView}}}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := canReplaceRoleGrants(principal, test.assigned, test.current, test.requested); got != test.want {
@@ -191,4 +273,77 @@ func TestOrdinaryPrincipalCanOnlyDelegatePermissionSubset(t *testing.T) {
 	if !canReplaceRoleGrants(identity.Principal{HighRiskRole: true}, true, identity.PermissionSet{System: []string{AuditView}}, identity.PermissionSet{System: []string{AuditView}}) {
 		t.Fatal("高危角色受普通权限子集限制")
 	}
+}
+
+func TestSQLProviderLoadsOrdinaryRoleConfigNamespacePermissions(t *testing.T) {
+	db := openPermissionTestDB(t)
+	permissions, err := (SQLProvider{DB: db}).Permissions(context.Background(), "usr_1")
+	if err != nil {
+		t.Fatalf("Permissions() error = %v", err)
+	}
+	principal := identity.NewPrincipal("usr_1", "测试用户", nil, identity.AuthMethodSMS, permissions)
+	if len(principal.ConfigNamespacePermissions) != 1 || principal.ConfigNamespacePermissions[0].ConfigNamespaceID != "cns_site" || !slices.Equal(principal.ConfigNamespacePermissions[0].Permissions, []string{ConfigUpdate, ConfigView}) {
+		t.Fatalf("配置命名空间权限 = %v", principal.ConfigNamespacePermissions)
+	}
+}
+
+var permissionTestDriverID atomic.Uint64
+
+func openPermissionTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	name := "permission_test_" + itoa(int(permissionTestDriverID.Add(1)))
+	sql.Register(name, permissionTestDriver{})
+	db, err := sql.Open(name, "")
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+type permissionTestDriver struct{}
+
+func (permissionTestDriver) Open(string) (driver.Conn, error) { return permissionTestConn{}, nil }
+
+type permissionTestConn struct{}
+
+func (permissionTestConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("不支持 Prepare")
+}
+func (permissionTestConn) Close() error              { return nil }
+func (permissionTestConn) Begin() (driver.Tx, error) { return nil, errors.New("不支持事务") }
+func (permissionTestConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	switch {
+	case strings.Contains(query, "SELECT enabled FROM users"):
+		return &permissionTestRows{columns: []string{"enabled"}, values: [][]driver.Value{{true}}}, nil
+	case strings.Contains(query, "SELECT emergency_admin FROM local_credentials"):
+		return &permissionTestRows{columns: []string{"emergency_admin"}}, nil
+	case strings.Contains(query, "FROM user_roles"):
+		return &permissionTestRows{columns: []string{"id", "kind"}, values: [][]driver.Value{{"rol_1", "custom"}}}, nil
+	case strings.Contains(query, "role_system_permissions"):
+		return &permissionTestRows{columns: []string{"permission"}}, nil
+	case strings.Contains(query, "role_model_permissions"):
+		return &permissionTestRows{columns: []string{"model_id", "permission"}}, nil
+	case strings.Contains(query, "role_config_namespace_permissions"):
+		return &permissionTestRows{columns: []string{"namespace_id", "permission"}, values: [][]driver.Value{{"cns_site", ConfigView}, {"cns_site", ConfigUpdate}, {"cns_site", "config.unknown"}}}, nil
+	default:
+		return nil, errors.New("未预期的查询: " + query)
+	}
+}
+
+type permissionTestRows struct {
+	columns []string
+	values  [][]driver.Value
+	index   int
+}
+
+func (r *permissionTestRows) Columns() []string { return r.columns }
+func (r *permissionTestRows) Close() error      { return nil }
+func (r *permissionTestRows) Next(dest []driver.Value) error {
+	if r.index == len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.index])
+	r.index++
+	return nil
 }

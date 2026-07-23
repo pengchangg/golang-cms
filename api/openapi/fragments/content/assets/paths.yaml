@@ -8,7 +8,7 @@ x-integration-status: integrated
   get:
     x-integration-status: integrated
     operationId: downloadPublishedAsset
-    summary: 下载 API Key 授权发布内容引用的素材
+    summary: 下载 API Key 授权发布内容或配置引用的素材
     parameters:
       - name: Authorization
         in: header
@@ -36,7 +36,7 @@ x-integration-status: integrated
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "404":
-        description: 素材不存在或没有授权发布引用，error.code 为 published_asset_not_found。
+        description: 素材不存在，或没有 API Key 模型范围/配置命名空间范围内的当前发布引用；error.code 为 published_asset_not_found。
         content:
           application/json:
             schema:

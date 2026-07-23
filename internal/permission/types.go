@@ -14,25 +14,28 @@ const (
 )
 
 type Role struct {
-	ID                string                      `json:"id"`
-	Key               string                      `json:"key"`
-	Kind              RoleKind                    `json:"kind"`
-	DisplayName       string                      `json:"display_name"`
-	Description       string                      `json:"description"`
-	SystemPermissions []string                    `json:"system_permissions"`
-	ModelPermissions  []identity.ModelPermissions `json:"model_permissions"`
-	CreatedAt         time.Time                   `json:"created_at"`
-	UpdatedAt         time.Time                   `json:"updated_at"`
+	ID                         string                                `json:"id"`
+	Key                        string                                `json:"key"`
+	Kind                       RoleKind                              `json:"kind"`
+	DisplayName                string                                `json:"display_name"`
+	Description                string                                `json:"description"`
+	SystemPermissions          []string                              `json:"system_permissions"`
+	ModelPermissions           []identity.ModelPermissions           `json:"model_permissions"`
+	ConfigNamespacePermissions []identity.ConfigNamespacePermissions `json:"config_namespace_permissions"`
+	CreatedAt                  time.Time                             `json:"created_at"`
+	UpdatedAt                  time.Time                             `json:"updated_at"`
 }
 
 type CreateRoleRequest struct {
-	Key         string `json:"key"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description"`
+	Key                        string                                `json:"key"`
+	DisplayName                string                                `json:"display_name"`
+	Description                string                                `json:"description"`
+	ConfigNamespacePermissions []identity.ConfigNamespacePermissions `json:"config_namespace_permissions"`
 }
 type UpdateRoleRequest struct {
-	DisplayName *string `json:"display_name"`
-	Description *string `json:"description"`
+	DisplayName                *string                                `json:"display_name"`
+	Description                *string                                `json:"description"`
+	ConfigNamespacePermissions *[]identity.ConfigNamespacePermissions `json:"config_namespace_permissions"`
 }
 type ReplaceUserRolesRequest struct {
 	RoleIDs []string `json:"role_ids"`

@@ -169,6 +169,9 @@ button, a { touch-action: manipulation; }
 .api-key-filter { min-width: 180px; margin-bottom: 24px; }
 .secret-modal .ant-modal-content { border-top: 5px solid var(--green); }
 .secret-value { margin: 20px 0 12px !important; padding: 16px; border: 1px solid var(--line); background: #f3f3eb; overflow-wrap: anywhere; }
+.configuration-value-editor { display: grid; max-width: 760px; gap: 14px; padding: 24px; border-top: 1px solid var(--line); background: rgb(255 254 249 / 55%); }
+.configuration-value-editor .ant-input-number { width: min(100%, 360px); }
+.configuration-json-input { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .asset-picker { display: grid; gap: 10px; }
 .asset-selection { display: grid; max-width: 720px; gap: 8px; min-height: 24px; }
 .asset-selection-item { display: grid; align-items: center; gap: 8px; grid-template-columns: minmax(0, 1fr) auto; padding: 8px; border: 1px solid var(--line); background: rgb(255 254 249 / 55%); }

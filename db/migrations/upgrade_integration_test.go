@@ -131,9 +131,10 @@ func TestOIDCSessionCleanupUpgradeOnMySQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectedTables := []string{
-		"api_key_model_scopes", "api_keys", "asset_references", "assets", "audit_events", "auth_rate_limits", "background_jobs", "captcha_challenges",
+		"api_key_config_namespace_scopes", "api_key_model_scopes", "api_keys", "asset_references", "assets", "audit_events", "auth_rate_limits", "background_jobs", "captcha_challenges",
+		"config_asset_references", "config_content_relations", "config_draft_pointers", "config_items", "config_namespaces", "config_published_pointers", "config_revisions", "config_workflow_events",
 		"content_draft_pointers", "content_entries", "content_field_values", "content_fields", "content_models", "content_published_pointers", "content_relations", "content_revisions", "content_unique_values", "content_workflow_events",
-		"local_credentials", "oidc_identities", "oidc_login_states", "role_model_permissions", "role_system_permissions", "roles", "schema_migrations", "sessions", "sms_challenges", "sms_credentials",
+		"local_credentials", "oidc_identities", "oidc_login_states", "role_config_namespace_permissions", "role_model_permissions", "role_system_permissions", "roles", "schema_migrations", "sessions", "sms_challenges", "sms_credentials",
 		"transfer_job_errors", "transfer_job_rows", "transfer_jobs", "transfer_uploads", "user_roles", "users",
 	}
 	slices.Sort(tables)

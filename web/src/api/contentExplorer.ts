@@ -59,15 +59,26 @@ export interface ContentAPIResponse {
 }
 
 const CONTENT_API_BASE = '/api/content/v1'
-const allowedPath = /^\/models(?:\/[a-z][a-z0-9_]{0,63}(?:\/entries(?:\/[^/?#]+)?)?)?$/
+const allowedModelPath = /^\/models(?:\/[a-z][a-z0-9_]{0,63}(?:\/entries(?:\/[^/?#]+)?)?)?$/
+const allowedConfigurationPath = /^\/configurations\/[a-z][a-z0-9_]{0,63}(?:\/[a-z][a-z0-9_.-]{0,119})?$/
 
 export async function requestContentAPI(path: string, apiKey: string, options: { ifNoneMatch?: string; signal?: AbortSignal } = {}): Promise<ContentAPIResponse> {
   if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
     throw new TypeError('Content API 路径必须是同源绝对路径')
   }
+  let pathSegments: string[]
+  try {
+    pathSegments = path.split(/[?#]/, 1)[0].split('/').map((segment) => decodeURIComponent(segment))
+  } catch (error) {
+    throw new TypeError('Content API 路径编码无效', { cause: error })
+  }
+  if (pathSegments.some((segment) => segment === '.' || segment === '..')) {
+    throw new TypeError('Content API 路径不能包含点路径段')
+  }
   const url = new URL(`${CONTENT_API_BASE}${path}`, window.location.origin)
-  if (url.origin !== window.location.origin || !allowedPath.test(url.pathname.slice(CONTENT_API_BASE.length))) {
-    throw new TypeError('只允许请求四个 Content API 模型端点')
+  const pathName = url.pathname.slice(CONTENT_API_BASE.length)
+  if (url.origin !== window.location.origin || (!allowedModelPath.test(pathName) && !allowedConfigurationPath.test(pathName))) {
+    throw new TypeError('只允许请求 Content API 的模型、内容和配置读取端点')
   }
 
   const headers = new Headers({ Authorization: `Bearer ${apiKey}` })

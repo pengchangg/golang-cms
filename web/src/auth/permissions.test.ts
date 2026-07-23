@@ -13,6 +13,7 @@ const principal: Principal = {
   has_high_risk_role: false,
   system_permissions: ['models.view'],
   model_permissions: [],
+  config_namespace_permissions: [],
 }
 
 describe('权限导航', () => {
@@ -32,9 +33,9 @@ describe('权限导航', () => {
   })
 
   it('普通主体只能委派自己的权限子集', () => {
-    expect(canDelegateRole(principal, { system_permissions: ['models.view'], model_permissions: [] })).toBe(true)
-    expect(canDelegateRole(principal, { system_permissions: ['audit.view'], model_permissions: [] })).toBe(false)
-    expect(canDelegateRole({ ...principal, has_high_risk_role: true }, { system_permissions: ['audit.view'], model_permissions: [] })).toBe(true)
+    expect(canDelegateRole(principal, { system_permissions: ['models.view'], model_permissions: [], config_namespace_permissions: [] })).toBe(true)
+    expect(canDelegateRole(principal, { system_permissions: ['audit.view'], model_permissions: [], config_namespace_permissions: [] })).toBe(false)
+    expect(canDelegateRole({ ...principal, has_high_risk_role: true }, { system_permissions: ['audit.view'], model_permissions: [], config_namespace_permissions: [] })).toBe(true)
   })
 
   it('导航项支持任一相关系统权限', () => {

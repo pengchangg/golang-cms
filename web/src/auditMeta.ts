@@ -19,6 +19,17 @@ export const auditActionLabels: Record<string, string> = {
   role_deleted: '删除角色',
   role_system_permissions_replaced: '调整系统权限',
   role_model_permissions_replaced: '调整模型权限',
+  configuration_namespace_created: '创建配置命名空间',
+  configuration_namespace_updated: '更新配置命名空间',
+  configuration_namespace_archived: '归档配置命名空间',
+  configuration_item_created: '创建配置项',
+  configuration_item_updated: '更新配置项',
+  configuration_item_archived: '归档配置项',
+  configuration_revision_created: '保存配置版本',
+  configuration_revision_submitted: '提交配置审核',
+  configuration_revision_approved: '审核通过并发布配置',
+  configuration_revision_rejected: '驳回配置版本',
+  configuration_revision_unpublished: '下线配置版本',
   model_created: '创建内容模型',
   model_updated: '更新内容模型',
   model_archived: '归档内容模型',
@@ -44,7 +55,7 @@ export const auditActionLabels: Record<string, string> = {
 export const auditResourceLabels: Record<string, string> = {
   authentication: '认证活动', user: '用户', role: '角色', content_model: '内容模型',
   content_field: '模型字段', content_entry: '内容条目', content_revision: '内容版本',
-  api_key: 'API Key', asset: '素材',
+  api_key: 'API Key', asset: '素材', configuration_namespace: '配置命名空间', configuration_item: '配置项', configuration_revision: '配置版本',
 }
 
 function changeID(event: AuditEvent, key: string) {
@@ -64,6 +75,12 @@ export function auditResourcePath(event: AuditEvent, principal: Principal) {
   if (event.resource_type === 'role' && hasSystemPermission(principal, 'roles.view')) return '/roles'
   if (event.resource_type === 'api_key' && hasSystemPermission(principal, 'api_keys.view')) return '/api-keys'
   if (event.resource_type === 'asset' && ASSETS_ENABLED && hasSystemPermission(principal, 'assets.view')) return '/assets'
+  if (event.resource_type === 'configuration_namespace' && id && hasSystemPermission(principal, 'configurations.view')) return `/configurations/${encodeURIComponent(id)}`
+  if ((event.resource_type === 'configuration_item' || event.resource_type === 'configuration_revision') && hasSystemPermission(principal, 'configurations.view')) {
+    const namespaceID = changeID(event, 'namespace_id')
+    const itemID = event.resource_type === 'configuration_item' ? id : changeID(event, 'item_id')
+    if (namespaceID && itemID) return `/configurations/${encodeURIComponent(namespaceID)}/items/${encodeURIComponent(itemID)}`
+  }
   if (event.action === 'auth_local_password_reset' && hasSystemPermission(principal, 'users.view')) return '/users'
   return undefined
 }

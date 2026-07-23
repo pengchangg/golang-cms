@@ -10,7 +10,7 @@ const now = '2026-07-21T08:00:00Z'
 const principal: Principal = {
   user_id: 'usr_admin', display_name: '管理员', email: null, auth_method: 'local',
   is_emergency_admin: false, has_high_risk_role: false,
-  system_permissions: ['users.view', 'users.manage', 'roles.view', 'roles.manage'], model_permissions: [],
+  system_permissions: ['users.view', 'users.manage', 'roles.view', 'roles.manage'], model_permissions: [], config_namespace_permissions: [],
 }
 const summary: UserSummary = {
   id: 'usr_1', display_name: '林岚', email: null, phone_masked: '138****8000', auth_methods: ['sms'],

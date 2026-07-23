@@ -134,7 +134,8 @@ type ReferenceManager interface {
 }
 
 type PublishedDownloadScope struct {
-	AllowedModelIDs []string
+	AllowedModelIDs           []string
+	AllowedConfigNamespaceIDs []string
 }
 
 type PublishedDownload struct {

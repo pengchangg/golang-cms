@@ -88,8 +88,8 @@ func (r Repository) LockRoleTransition(ctx context.Context, q database.Querier, 
 		allIDs = append(allIDs, id)
 	}
 	sort.Strings(allIDs)
-	current := identity.LockedRoleSelection{Permissions: identity.PermissionSet{System: []string{}, Models: []identity.ModelPermissions{}}}
-	requested := identity.LockedRoleSelection{Permissions: identity.PermissionSet{System: []string{}, Models: []identity.ModelPermissions{}}}
+	current := identity.LockedRoleSelection{Permissions: identity.PermissionSet{System: []string{}, Models: []identity.ModelPermissions{}, ConfigNamespacePermissions: []identity.ConfigNamespacePermissions{}}}
+	requested := identity.LockedRoleSelection{Permissions: identity.PermissionSet{System: []string{}, Models: []identity.ModelPermissions{}, ConfigNamespacePermissions: []identity.ConfigNamespacePermissions{}}}
 	for _, id := range allIDs {
 		role, err := r.GetRole(ctx, q, id, true)
 		var appError *apperror.Error
@@ -114,6 +114,7 @@ func appendRoleSelection(selection *identity.LockedRoleSelection, role Role) {
 	selection.HighRisk = selection.HighRisk || role.Kind == RoleKindHighRisk
 	selection.Permissions.System = append(selection.Permissions.System, role.SystemPermissions...)
 	selection.Permissions.Models = append(selection.Permissions.Models, role.ModelPermissions...)
+	selection.Permissions.ConfigNamespacePermissions = append(selection.Permissions.ConfigNamespacePermissions, role.ConfigNamespacePermissions...)
 }
 
 func (Repository) IsRoleAssignedToUser(ctx context.Context, q database.Querier, roleID, userID string) (bool, error) {
@@ -153,6 +154,20 @@ func (Repository) ReplaceModelPermissions(ctx context.Context, q database.Querie
 	for _, value := range values {
 		for _, code := range value.Permissions {
 			if _, err := q.ExecContext(ctx, "INSERT INTO role_model_permissions (role_id, model_id, permission, created_at) VALUES (?, ?, ?, ?)", roleID, value.ModelID, code, now); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (Repository) ReplaceConfigNamespacePermissions(ctx context.Context, q database.Querier, roleID string, values []identity.ConfigNamespacePermissions, now time.Time) error {
+	if _, err := q.ExecContext(ctx, "DELETE FROM role_config_namespace_permissions WHERE role_id=?", roleID); err != nil {
+		return err
+	}
+	for _, value := range values {
+		for _, code := range value.Permissions {
+			if _, err := q.ExecContext(ctx, "INSERT INTO role_config_namespace_permissions (role_id, namespace_id, permission, created_at) VALUES (?, ?, ?, ?)", roleID, value.ConfigNamespaceID, code, now); err != nil {
 				return err
 			}
 		}
@@ -205,6 +220,28 @@ func (Repository) loadGrants(ctx context.Context, q database.Querier, role *Role
 			role.ModelPermissions = append(role.ModelPermissions, identity.ModelPermissions{ModelID: modelID, Permissions: []string{}})
 		}
 		role.ModelPermissions[len(role.ModelPermissions)-1].Permissions = append(role.ModelPermissions[len(role.ModelPermissions)-1].Permissions, code)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	role.ConfigNamespacePermissions = []identity.ConfigNamespacePermissions{}
+	rows, err = q.QueryContext(ctx, "SELECT namespace_id, permission FROM role_config_namespace_permissions WHERE role_id=? ORDER BY namespace_id, permission"+lockSuffix, role.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var namespace, code string
+		if err := rows.Scan(&namespace, &code); err != nil {
+			return err
+		}
+		if len(role.ConfigNamespacePermissions) == 0 || role.ConfigNamespacePermissions[len(role.ConfigNamespacePermissions)-1].ConfigNamespaceID != namespace {
+			role.ConfigNamespacePermissions = append(role.ConfigNamespacePermissions, identity.ConfigNamespacePermissions{ConfigNamespaceID: namespace, Permissions: []string{}})
+		}
+		role.ConfigNamespacePermissions[len(role.ConfigNamespacePermissions)-1].Permissions = append(role.ConfigNamespacePermissions[len(role.ConfigNamespacePermissions)-1].Permissions, code)
 	}
 	return rows.Err()
 }

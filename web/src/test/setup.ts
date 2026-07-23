@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { configure } from '@testing-library/dom'
+import { afterAll } from 'vitest'
 
 configure({ asyncUtilTimeout: 5000 })
 
@@ -13,6 +14,13 @@ class ResizeObserverMock {
 }
 
 globalThis.ResizeObserver = ResizeObserverMock
+
+afterAll(async () => {
+  // Ant Design 的 portal 关闭后会通过 React scheduler 提交最后一轮更新。
+  const immediate = (globalThis as typeof globalThis & { setImmediate: (callback: () => void) => unknown }).setImmediate
+  await new Promise<void>((resolve) => immediate(resolve))
+  await new Promise<void>((resolve) => immediate(resolve))
+})
 
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

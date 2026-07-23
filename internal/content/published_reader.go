@@ -27,6 +27,13 @@ func NewPublishedContentReader(db database.Querier, models schema.Repository, as
 	return &SQLPublishedContentReader{db: db, models: models, assets: assets}
 }
 
+// GetPublishedEntryWith 允许跨模块读取在调用方事务快照中完成。
+func (r *SQLPublishedContentReader) GetPublishedEntryWith(ctx context.Context, q database.Querier, modelKey, entryID string, allowedModelIDs, expand []string) (PublishedEntry, error) {
+	reader := *r
+	reader.db = q
+	return reader.GetPublishedEntry(ctx, modelKey, entryID, allowedModelIDs, expand)
+}
+
 var _ PublishedContentReader = (*SQLPublishedContentReader)(nil)
 
 func (r *SQLPublishedContentReader) ListPublishedModels(ctx context.Context, allowedModelIDs []string) ([]PublishedModel, error) {

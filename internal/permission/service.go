@@ -31,31 +31,39 @@ type ModelValidator interface {
 	ActiveModelIDs(context.Context) ([]string, error)
 	ValidateActiveModels(context.Context, database.Querier, []string) error
 }
+type ConfigNamespaceValidator interface {
+	ValidateActiveConfigNamespaces(context.Context, database.Querier, []string) error
+}
 
 var ErrInvalidModels = errors.New("模型不存在或已归档")
+var ErrInvalidConfigNamespaces = errors.New("配置命名空间不存在或已归档")
 
 type Service struct {
-	db         database.Querier
-	tx         TransactionRunner
-	repository Repository
-	authorizer RoleAuthorizer
-	audit      audit.Writer
-	users      UserAccessor
-	models     ModelValidator
-	now        func() time.Time
-	newID      func(string) (string, error)
+	db                       database.Querier
+	tx                       TransactionRunner
+	repository               Repository
+	authorizer               RoleAuthorizer
+	audit                    audit.Writer
+	users                    UserAccessor
+	models                   ModelValidator
+	configNamespaces         ConfigNamespaceValidator
+	activeConfigNamespaceIDs ActiveConfigNamespaceProvider
+	now                      func() time.Time
+	newID                    func(string) (string, error)
 }
 type Dependencies struct {
-	DB         database.Querier
-	Transactor TransactionRunner
-	Authorizer RoleAuthorizer
-	Audit      audit.Writer
-	Users      UserAccessor
-	Models     ModelValidator
+	DB                       database.Querier
+	Transactor               TransactionRunner
+	Authorizer               RoleAuthorizer
+	Audit                    audit.Writer
+	Users                    UserAccessor
+	Models                   ModelValidator
+	ConfigNamespaces         ConfigNamespaceValidator
+	ActiveConfigNamespaceIDs ActiveConfigNamespaceProvider
 }
 
 func NewService(d Dependencies) *Service {
-	return &Service{db: d.DB, tx: d.Transactor, repository: Repository{}, authorizer: d.Authorizer, audit: d.Audit, users: d.Users, models: d.Models, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, newID: randomID}
+	return &Service{db: d.DB, tx: d.Transactor, repository: Repository{}, authorizer: d.Authorizer, audit: d.Audit, users: d.Users, models: d.Models, configNamespaces: d.ConfigNamespaces, activeConfigNamespaceIDs: d.ActiveConfigNamespaceIDs, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, newID: randomID}
 }
 
 func (s *Service) ListRoles(ctx context.Context, principal identity.Principal) ([]Role, error) {
@@ -90,12 +98,16 @@ func (s *Service) CreateRole(ctx context.Context, principal identity.Principal, 
 	if details := validateRole(request.Key, request.DisplayName, request.Description); len(details) != 0 {
 		return Role{}, validation(details)
 	}
+	configPermissions, namespaceIDs, err := validateConfigNamespaceGrants(request.ConfigNamespacePermissions, "/config_namespace_permissions")
+	if err != nil {
+		return Role{}, err
+	}
 	id, err := s.newID("rol_")
 	if err != nil {
 		return Role{}, err
 	}
 	now := s.now()
-	role := Role{ID: id, Key: request.Key, Kind: RoleKindCustom, DisplayName: request.DisplayName, Description: request.Description, SystemPermissions: []string{}, ModelPermissions: []identity.ModelPermissions{}, CreatedAt: now, UpdatedAt: now}
+	role := Role{ID: id, Key: request.Key, Kind: RoleKindCustom, DisplayName: request.DisplayName, Description: request.Description, SystemPermissions: []string{}, ModelPermissions: []identity.ModelPermissions{}, ConfigNamespacePermissions: configPermissions, CreatedAt: now, UpdatedAt: now}
 	err = s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
 		refreshed, err := s.authorizer.CurrentPrincipal(ctx, q, principal)
 		if err != nil {
@@ -105,6 +117,12 @@ func (s *Service) CreateRole(ctx context.Context, principal identity.Principal, 
 		if err := s.authorizer.RequireSystemPermission(ctx, principal, RolesManage); err != nil {
 			return err
 		}
+		if !principal.CanDelegate(identity.PermissionSet{ConfigNamespacePermissions: configPermissions}) {
+			return permissionDenied()
+		}
+		if err := s.validateActiveConfigNamespaces(ctx, q, namespaceIDs, "/config_namespace_permissions"); err != nil {
+			return err
+		}
 		if err := s.repository.CreateRole(ctx, q, role); err != nil {
 			var mysqlError *mysql.MySQLError
 			if errors.As(err, &mysqlError) && mysqlError.Number == 1062 {
@@ -112,14 +130,26 @@ func (s *Service) CreateRole(ctx context.Context, principal identity.Principal, 
 			}
 			return err
 		}
-		return s.appendAudit(ctx, q, principal, meta, "role_created", "role", id, map[string]any{"key": request.Key})
+		if err := s.repository.ReplaceConfigNamespacePermissions(ctx, q, id, configPermissions, now); err != nil {
+			return err
+		}
+		return s.appendAudit(ctx, q, principal, meta, "role_created", "role", id, map[string]any{"key": request.Key, "config_namespace_permissions": configPermissions})
 	})
 	return role, err
 }
 
 func (s *Service) UpdateRole(ctx context.Context, principal identity.Principal, meta RequestMeta, id string, request UpdateRoleRequest) (Role, error) {
-	if request.DisplayName == nil && request.Description == nil {
+	if request.DisplayName == nil && request.Description == nil && request.ConfigNamespacePermissions == nil {
 		return Role{}, validation([]map[string]any{detail("", "required", "至少提交一个可修改属性")})
+	}
+	var configPermissions []identity.ConfigNamespacePermissions
+	var namespaceIDs []string
+	if request.ConfigNamespacePermissions != nil {
+		var err error
+		configPermissions, namespaceIDs, err = validateConfigNamespaceGrants(*request.ConfigNamespacePermissions, "/config_namespace_permissions")
+		if err != nil {
+			return Role{}, err
+		}
 	}
 	var result Role
 	err := s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
@@ -138,6 +168,7 @@ func (s *Service) UpdateRole(ctx context.Context, principal identity.Principal, 
 		if role.Kind == RoleKindHighRisk {
 			return builtinRoleImmutable()
 		}
+		now := s.now()
 		changes := map[string]any{}
 		if request.DisplayName != nil {
 			if len([]rune(*request.DisplayName)) < 1 || len([]rune(*request.DisplayName)) > 120 {
@@ -153,7 +184,21 @@ func (s *Service) UpdateRole(ctx context.Context, principal identity.Principal, 
 			changes["description"] = map[string]any{"from": role.Description, "to": *request.Description}
 			role.Description = *request.Description
 		}
-		role.UpdatedAt = s.now()
+		if request.ConfigNamespacePermissions != nil {
+			requested := identity.PermissionSet{System: role.SystemPermissions, Models: role.ModelPermissions, ConfigNamespacePermissions: configPermissions}
+			if err := s.authorizeRoleGrantReplacement(ctx, q, principal, role, requested); err != nil {
+				return err
+			}
+			if err := s.validateActiveConfigNamespaces(ctx, q, namespaceIDs, "/config_namespace_permissions"); err != nil {
+				return err
+			}
+			changes["config_namespace_permissions"] = map[string]any{"from": role.ConfigNamespacePermissions, "to": configPermissions}
+			if err := s.repository.ReplaceConfigNamespacePermissions(ctx, q, id, configPermissions, now); err != nil {
+				return err
+			}
+			role.ConfigNamespacePermissions = configPermissions
+		}
+		role.UpdatedAt = now
 		if err := s.repository.UpdateRole(ctx, q, role); err != nil {
 			return err
 		}
@@ -188,7 +233,7 @@ func (s *Service) DeleteRole(ctx context.Context, principal identity.Principal, 
 			if err != nil {
 				return err
 			}
-			current := identity.PermissionSet{System: role.SystemPermissions, Models: role.ModelPermissions}
+			current := identity.PermissionSet{System: role.SystemPermissions, Models: role.ModelPermissions, ConfigNamespacePermissions: role.ConfigNamespacePermissions}
 			if !canReplaceRoleGrants(principal, assigned, current, current) {
 				return permissionDenied()
 			}
@@ -266,7 +311,7 @@ func (s *Service) ReplaceSystemPermissions(ctx context.Context, principal identi
 		if role.Kind == RoleKindHighRisk {
 			return builtinRoleImmutable()
 		}
-		if err := s.authorizeRoleGrantReplacement(ctx, q, principal, role, identity.PermissionSet{System: values, Models: role.ModelPermissions}); err != nil {
+		if err := s.authorizeRoleGrantReplacement(ctx, q, principal, role, identity.PermissionSet{System: values, Models: role.ModelPermissions, ConfigNamespacePermissions: role.ConfigNamespacePermissions}); err != nil {
 			return err
 		}
 		now := s.now()
@@ -318,7 +363,7 @@ func (s *Service) ReplaceModelPermissions(ctx context.Context, principal identit
 		if role.Kind == RoleKindHighRisk {
 			return builtinRoleImmutable()
 		}
-		if err := s.authorizeRoleGrantReplacement(ctx, q, principal, role, identity.PermissionSet{System: role.SystemPermissions, Models: grants}); err != nil {
+		if err := s.authorizeRoleGrantReplacement(ctx, q, principal, role, identity.PermissionSet{System: role.SystemPermissions, Models: grants, ConfigNamespacePermissions: role.ConfigNamespacePermissions}); err != nil {
 			return err
 		}
 		if len(modelIDs) != 0 {
@@ -366,7 +411,14 @@ func (s *Service) populateHighRiskGrants(ctx context.Context, roles []Role) erro
 	if err != nil {
 		return err
 	}
-	highRisk.SystemPermissions, highRisk.ModelPermissions = emergencyPermissions(modelIDs)
+	var configNamespaceIDs []string
+	if s.activeConfigNamespaceIDs != nil {
+		configNamespaceIDs, err = s.activeConfigNamespaceIDs.ActiveConfigNamespaceIDs(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	highRisk.SystemPermissions, highRisk.ModelPermissions, highRisk.ConfigNamespacePermissions = emergencyPermissions(modelIDs, configNamespaceIDs)
 	return nil
 }
 
@@ -398,7 +450,7 @@ func (s *Service) authorizeRoleGrantReplacement(ctx context.Context, q database.
 	if err != nil {
 		return err
 	}
-	current := identity.PermissionSet{System: role.SystemPermissions, Models: role.ModelPermissions}
+	current := identity.PermissionSet{System: role.SystemPermissions, Models: role.ModelPermissions, ConfigNamespacePermissions: role.ConfigNamespacePermissions}
 	if !canReplaceRoleGrants(principal, assigned, current, permissions) {
 		return permissionDenied()
 	}
@@ -441,6 +493,46 @@ func invalidCodes(values []string, valid func(string) bool) (string, bool) {
 		seen[value] = true
 	}
 	return "", false
+}
+
+func validateConfigNamespaceGrants(grants []identity.ConfigNamespacePermissions, basePath string) ([]identity.ConfigNamespacePermissions, []string, error) {
+	namespaceSeen := map[string]bool{}
+	namespaceIDs := make([]string, 0, len(grants))
+	result := append([]identity.ConfigNamespacePermissions(nil), grants...)
+	for i, grant := range result {
+		path := basePath + "/" + itoa(i)
+		if grant.ConfigNamespaceID == "" || namespaceSeen[grant.ConfigNamespaceID] {
+			return nil, nil, validation([]map[string]any{detail(path+"/config_namespace_id", "invalid_value", "config_namespace_id 为空或重复")})
+		}
+		if len(grant.Permissions) == 0 {
+			return nil, nil, validation([]map[string]any{detail(path+"/permissions", "required", "配置命名空间权限不能为空")})
+		}
+		namespaceSeen[grant.ConfigNamespaceID] = true
+		namespaceIDs = append(namespaceIDs, grant.ConfigNamespaceID)
+		if invalidPath, invalid := invalidCodes(grant.Permissions, ValidConfigNamespacePermission); invalid {
+			return nil, nil, validation([]map[string]any{detail(path+invalidPath, "invalid_value", "包含未知或重复的配置命名空间权限")})
+		}
+		result[i].Permissions = sorted(grant.Permissions)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ConfigNamespaceID < result[j].ConfigNamespaceID })
+	sort.Strings(namespaceIDs)
+	return result, namespaceIDs, nil
+}
+
+func (s *Service) validateActiveConfigNamespaces(ctx context.Context, q database.Querier, namespaceIDs []string, path string) error {
+	if len(namespaceIDs) == 0 {
+		return nil
+	}
+	if s.configNamespaces == nil {
+		return &apperror.Error{Kind: apperror.KindInternal, Code: "internal_error", Message: "配置命名空间验证器未装配"}
+	}
+	if err := s.configNamespaces.ValidateActiveConfigNamespaces(ctx, q, namespaceIDs); err != nil {
+		if errors.Is(err, ErrInvalidConfigNamespaces) {
+			return validation([]map[string]any{detail(path, "unknown_config_namespace", "包含不存在或已归档的配置命名空间")})
+		}
+		return err
+	}
+	return nil
 }
 func duplicates(values []string) bool {
 	seen := map[string]bool{}

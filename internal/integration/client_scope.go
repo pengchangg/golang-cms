@@ -51,7 +51,7 @@ func (h ClientAssetHandler) download(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		download, err = h.Assets.ResolvePublishedDownload(r.Context(), q, asset.PublishedDownloadScope{AllowedModelIDs: key.ModelIDs}, r.PathValue("asset_id"))
+		download, err = h.Assets.ResolvePublishedDownload(r.Context(), q, asset.PublishedDownloadScope{AllowedModelIDs: key.ModelIDs, AllowedConfigNamespaceIDs: key.ConfigNamespaceIDs}, r.PathValue("asset_id"))
 		return err
 	})
 	if err != nil {

@@ -7,7 +7,7 @@ import { authStore } from './auth/store'
 import type { SessionResponse } from './api/types'
 
 const session: SessionResponse = {
-  principal: { user_id: 'usr_accessible', display_name: '林岚', email: 'linlan@example.com', auth_method: 'sms', is_emergency_admin: false, has_high_risk_role: false, system_permissions: [], model_permissions: [] },
+  principal: { user_id: 'usr_accessible', display_name: '林岚', email: 'linlan@example.com', auth_method: 'sms', is_emergency_admin: false, has_high_risk_role: false, system_permissions: [], model_permissions: [], config_namespace_permissions: [] },
   content_models: [],
   csrf_token: 'csrf-token-with-at-least-thirty-two-characters',
   idle_expires_at: '2026-07-18T10:00:00Z',

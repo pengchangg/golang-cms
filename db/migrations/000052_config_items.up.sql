@@ -1,0 +1,20 @@
+CREATE TABLE config_items (
+    id VARCHAR(36) NOT NULL,
+    namespace_id VARCHAR(36) NOT NULL,
+    item_key VARCHAR(120) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    display_name VARCHAR(120) NOT NULL,
+    description VARCHAR(1000) NOT NULL DEFAULT '',
+    value_type ENUM('string', 'integer', 'decimal', 'boolean', 'json', 'single_asset', 'multi_asset', 'single_relation', 'multi_relation') NOT NULL,
+    constraints JSON NOT NULL,
+    status ENUM('active', 'archived') NOT NULL DEFAULT 'active',
+    created_by VARCHAR(64) NOT NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_config_items_id_namespace (id, namespace_id),
+    UNIQUE KEY uq_config_items_namespace_key (namespace_id, item_key),
+    KEY idx_config_items_namespace_status_page (namespace_id, status, updated_at DESC, id DESC),
+    CONSTRAINT fk_config_items_namespace FOREIGN KEY (namespace_id) REFERENCES config_namespaces (id),
+    CONSTRAINT fk_config_items_creator FOREIGN KEY (created_by) REFERENCES users (id),
+    CONSTRAINT chk_config_items_key CHECK (item_key REGEXP _ascii'^[a-z][a-z0-9_.-]{0,119}$')
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs;

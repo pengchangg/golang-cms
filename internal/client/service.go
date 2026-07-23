@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -91,11 +92,11 @@ func (s *Service) Get(ctx context.Context, principal identity.Principal, id stri
 }
 
 func (s *Service) Create(ctx context.Context, principal identity.Principal, meta RequestMeta, request CreateAPIKeyRequest) (APIKeySecret, error) {
-	name, ids, expires, err := validateKeyInput(request.Name, request.ModelIDs, request.ExpiresAt, s.now())
+	name, ids, namespaceIDs, expires, err := validateKeyInput(request.Name, request.ModelIDs, request.ConfigNamespaceIDs, request.ExpiresAt, s.now())
 	if err != nil {
 		return APIKeySecret{}, err
 	}
-	generated, err := s.generate(name, ids, expires, principal.UserID, nil)
+	generated, err := s.generate(name, ids, namespaceIDs, expires, principal.UserID, nil)
 	if err != nil {
 		return APIKeySecret{}, err
 	}
@@ -111,6 +112,9 @@ func (s *Service) Create(ctx context.Context, principal identity.Principal, meta
 			return err
 		}
 		if err := s.repository.ValidateActiveModels(ctx, q, ids); err != nil {
+			return err
+		}
+		if err := s.requireReadableConfigNamespaces(ctx, q, current, namespaceIDs); err != nil {
 			return err
 		}
 		if err := s.repository.Create(ctx, q, generated.APIKey); err != nil {
@@ -167,17 +171,20 @@ func (s *Service) Rotate(ctx context.Context, principal identity.Principal, meta
 		if old.ExpiresAt != nil && !s.now().Before(*old.ExpiresAt) {
 			return appError(apperror.KindConflict, "api_key_expired", "API Key 已过期")
 		}
-		name, ids, expires := old.Name, old.ModelIDs, old.ExpiresAt
+		name, ids, namespaceIDs, expires := old.Name, old.ModelIDs, old.ConfigNamespaceIDs, old.ExpiresAt
 		if request.Name != nil {
 			name = *request.Name
 		}
 		if request.ModelIDs != nil {
 			ids = *request.ModelIDs
 		}
+		if request.ConfigNamespaceIDs != nil {
+			namespaceIDs = *request.ConfigNamespaceIDs
+		}
 		if request.ExpiresAt.Set {
 			expires = request.ExpiresAt.Value
 		}
-		name, ids, expires, err = validateKeyInput(name, ids, expires, s.now())
+		name, ids, namespaceIDs, expires, err = validateKeyInput(name, ids, namespaceIDs, expires, s.now())
 		if err != nil {
 			return err
 		}
@@ -187,7 +194,10 @@ func (s *Service) Rotate(ctx context.Context, principal identity.Principal, meta
 		if err = s.repository.ValidateActiveModels(ctx, q, ids); err != nil {
 			return err
 		}
-		result, err = s.generate(name, ids, expires, principal.UserID, &old.ID)
+		if err = s.requireReadableConfigNamespaces(ctx, q, current, namespaceIDs); err != nil {
+			return err
+		}
+		result, err = s.generate(name, ids, namespaceIDs, expires, principal.UserID, &old.ID)
 		if err != nil {
 			return err
 		}
@@ -211,6 +221,17 @@ func requireReadableModels(principal identity.Principal, modelIDs []string) erro
 		return appError(apperror.KindPermissionDenied, "permission_denied", "不能为无内容查看权限的模型签发 API Key")
 	}
 	return nil
+}
+
+func (s *Service) requireReadableConfigNamespaces(ctx context.Context, q database.Querier, principal identity.Principal, ids []string) error {
+	requested := identity.PermissionSet{ConfigNamespacePermissions: make([]identity.ConfigNamespacePermissions, 0, len(ids))}
+	for _, id := range ids {
+		requested.ConfigNamespacePermissions = append(requested.ConfigNamespacePermissions, identity.ConfigNamespacePermissions{ConfigNamespaceID: id, Permissions: []string{"config.view"}})
+	}
+	if !principal.CanDelegate(requested) {
+		return appError(apperror.KindPermissionDenied, "permission_denied", "不能为无配置查看权限的命名空间签发 API Key")
+	}
+	return s.repository.ValidateActiveConfigNamespaces(ctx, q, ids)
 }
 
 func (s *Service) Authenticate(ctx context.Context, raw string) (AuthenticatedKey, error) {
@@ -269,12 +290,12 @@ func (s *Service) authenticate(ctx context.Context, q database.Querier, raw stri
 
 func authenticatedKey(key APIKey, now time.Time) AuthenticatedKey {
 	return AuthenticatedKey{
-		ID: key.ID, Prefix: key.Prefix, ModelIDs: append([]string(nil), key.ModelIDs...),
+		ID: key.ID, Prefix: key.Prefix, ModelIDs: append([]string(nil), key.ModelIDs...), ConfigNamespaceIDs: append([]string(nil), key.ConfigNamespaceIDs...),
 		ShouldTouchLastUse: key.LastUsedAt == nil || !key.LastUsedAt.After(now.Add(-5*time.Minute)),
 	}
 }
 
-func (s *Service) generate(name string, ids []string, expires *time.Time, createdBy string, rotatedFrom *string) (APIKeySecret, error) {
+func (s *Service) generate(name string, ids, namespaceIDs []string, expires *time.Time, createdBy string, rotatedFrom *string) (APIKeySecret, error) {
 	prefixBytes := make([]byte, 8)
 	secret := make([]byte, 32)
 	salt := make([]byte, 16)
@@ -289,11 +310,13 @@ func (s *Service) generate(name string, ids []string, expires *time.Time, create
 	if err != nil {
 		return APIKeySecret{}, err
 	}
-	key := APIKey{ID: id, Name: name, Prefix: prefix, ModelIDs: ids, Status: APIKeyActive, ExpiresAt: expires, RotatedFromID: rotatedFrom, CreatedBy: createdBy, CreatedAt: s.now(), Salt: salt, Hash: digest[:]}
+	key := APIKey{ID: id, Name: name, Prefix: prefix, ModelIDs: ids, ConfigNamespaceIDs: namespaceIDs, Status: APIKeyActive, ExpiresAt: expires, RotatedFromID: rotatedFrom, CreatedBy: createdBy, CreatedAt: s.now(), Salt: salt, Hash: digest[:]}
 	return APIKeySecret{APIKey: key, Key: "cmsk_" + prefix + "_" + base64.RawURLEncoding.EncodeToString(secret)}, nil
 }
 
-func validateKeyInput(name string, ids []string, expires *time.Time, now time.Time) (string, []string, *time.Time, error) {
+var configNamespaceIDPattern = regexp.MustCompile(`^cns_[a-f0-9]{32}$`)
+
+func validateKeyInput(name string, ids, namespaceIDs []string, expires *time.Time, now time.Time) (string, []string, []string, *time.Time, error) {
 	name = strings.TrimSpace(name)
 	details := []map[string]any{}
 	if count := utf8.RuneCountInString(name); count < 1 || count > 120 {
@@ -315,6 +338,22 @@ func validateKeyInput(name string, ids []string, expires *time.Time, now time.Ti
 		details = append(details, map[string]any{"path": "/model_ids", "code": "required", "message": "至少需要一个模型范围"})
 	}
 	sort.Strings(normalized)
+	normalizedNamespaceIDs := []string{}
+	namespaceSeen := map[string]bool{}
+	if len(namespaceIDs) > 100 {
+		details = append(details, map[string]any{"path": "/config_namespace_ids", "code": "too_many_items", "message": "config_namespace_ids 最多包含 100 项"})
+	}
+	for _, id := range namespaceIDs {
+		if !configNamespaceIDPattern.MatchString(id) {
+			details = append(details, map[string]any{"path": "/config_namespace_ids", "code": "invalid_value", "message": "config_namespace_ids 包含格式无效的 ID"})
+			continue
+		}
+		if !namespaceSeen[id] {
+			namespaceSeen[id] = true
+			normalizedNamespaceIDs = append(normalizedNamespaceIDs, id)
+		}
+	}
+	sort.Strings(normalizedNamespaceIDs)
 	if expires != nil {
 		value := expires.UTC()
 		expires = &value
@@ -323,9 +362,9 @@ func validateKeyInput(name string, ids []string, expires *time.Time, now time.Ti
 		}
 	}
 	if len(details) > 0 {
-		return "", nil, nil, validation(details...)
+		return "", nil, nil, nil, validation(details...)
 	}
-	return name, normalized, expires, nil
+	return name, normalized, normalizedNamespaceIDs, expires, nil
 }
 
 func parseRawKey(raw string) (string, []byte, error) {
@@ -353,7 +392,7 @@ func (s *Service) appendAudit(ctx context.Context, q database.Querier, principal
 	actor := principal.UserID
 	actorName := principal.DisplayName
 	resource := key.ID
-	changes := map[string]any{"id": key.ID, "prefix": key.Prefix, "name": key.Name, "model_ids": key.ModelIDs, "expires_at": key.ExpiresAt}
+	changes := map[string]any{"id": key.ID, "prefix": key.Prefix, "name": key.Name, "model_ids": key.ModelIDs, "config_namespace_ids": key.ConfigNamespaceIDs, "expires_at": key.ExpiresAt}
 	if key.RotatedFromID != nil {
 		changes["rotated_from_id"] = *key.RotatedFromID
 	}

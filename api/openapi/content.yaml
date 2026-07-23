@@ -21,6 +21,10 @@ paths:
     $ref: ./fragments/content/paths.yaml#/~1models~1{model_key}~1entries~1{entry_id}
   /assets/{asset_id}:
     $ref: ./fragments/content/assets/paths.yaml#/~1assets~1{asset_id}
+  /configurations/{namespace_key}:
+    $ref: ./fragments/content/configurations/paths.yaml#/~1configurations~1{namespace_key}
+  /configurations/{namespace_key}/{item_key}:
+    $ref: ./fragments/content/configurations/paths.yaml#/~1configurations~1{namespace_key}~1{item_key}
 components:
   securitySchemes:
     APIKey:

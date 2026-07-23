@@ -9,6 +9,7 @@ import { TransferActions } from './TransferActions'
 const principal: Principal = {
   user_id: 'usr_1', display_name: '内容编辑', email: null, auth_method: 'local', is_emergency_admin: false, has_high_risk_role: false, system_permissions: [],
   model_permissions: [{ model_id: 'mdl_1', permissions: ['content.view', 'content.create'] }],
+  config_namespace_permissions: [],
 }
 
 afterEach(() => {

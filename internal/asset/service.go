@@ -472,14 +472,26 @@ func (s *Service) Archive(ctx context.Context, principal identity.Principal, met
 // ResolvePublishedDownload 使用调用方事务解析已授权素材，不执行对象存储操作。
 func (s *Service) ResolvePublishedDownload(ctx context.Context, q database.Querier, scope PublishedDownloadScope, id string) (PublishedDownload, error) {
 	modelIDs := uniqueSorted(scope.AllowedModelIDs)
-	if len(modelIDs) == 0 {
+	namespaceIDs := uniqueSorted(scope.AllowedConfigNamespaceIDs)
+	if len(modelIDs) == 0 && len(namespaceIDs) == 0 {
 		return PublishedDownload{}, publishedAssetNotFound()
 	}
-	query := `SELECT a.object_key,a.filename FROM assets a JOIN asset_references ar ON ar.asset_id=a.id JOIN content_published_pointers pp ON pp.revision_id=ar.revision_id AND pp.entry_id=ar.entry_id AND pp.model_id=ar.model_id WHERE a.id=? AND a.status IN ('available','archived') AND ar.model_id IN (` + placeholders(len(modelIDs)) + `) LIMIT 1`
+	checks := []string{}
+	query := `SELECT a.object_key,a.filename FROM assets a WHERE a.id=? AND a.status IN ('available','archived') AND (`
 	args := []any{id}
-	for _, modelID := range modelIDs {
-		args = append(args, modelID)
+	if len(modelIDs) > 0 {
+		checks = append(checks, `EXISTS (SELECT 1 FROM asset_references ar JOIN content_published_pointers pp ON pp.revision_id=ar.revision_id AND pp.entry_id=ar.entry_id AND pp.model_id=ar.model_id WHERE ar.asset_id=a.id AND ar.model_id IN (`+placeholders(len(modelIDs))+`))`)
+		for _, modelID := range modelIDs {
+			args = append(args, modelID)
+		}
 	}
+	if len(namespaceIDs) > 0 {
+		checks = append(checks, `EXISTS (SELECT 1 FROM config_asset_references car JOIN config_published_pointers cpp ON cpp.revision_id=car.revision_id AND cpp.item_id=car.item_id AND cpp.namespace_id=car.namespace_id JOIN config_items ci ON ci.id=car.item_id AND ci.namespace_id=car.namespace_id AND ci.status='active' JOIN config_namespaces cn ON cn.id=car.namespace_id AND cn.status='active' WHERE car.asset_id=a.id AND car.namespace_id IN (`+placeholders(len(namespaceIDs))+`))`)
+		for _, namespaceID := range namespaceIDs {
+			args = append(args, namespaceID)
+		}
+	}
+	query += strings.Join(checks, ` OR `) + `) LIMIT 1`
 	var objectKey, filename string
 	if err := q.QueryRowContext(ctx, query, args...).Scan(&objectKey, &filename); errors.Is(err, sql.ErrNoRows) {
 		return PublishedDownload{}, publishedAssetNotFound()
