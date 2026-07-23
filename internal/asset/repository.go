@@ -22,6 +22,7 @@ type Repository interface {
 	Get(context.Context, database.Querier, string) (Asset, error)
 	Lock(context.Context, database.Querier, string) (Asset, error)
 	Confirm(context.Context, database.Querier, string, string, time.Time) error
+	DeleteQuarantined(context.Context, database.Querier, string) error
 	Rename(context.Context, database.Querier, string, string) error
 	Archive(context.Context, database.Querier, string, time.Time) error
 	List(context.Context, database.Querier, ListQuery, int, *Cursor) ([]Asset, error)
@@ -75,6 +76,21 @@ func (SQLRepository) Confirm(ctx context.Context, q database.Querier, id, etag s
 	}
 	if rows != 1 {
 		return appError(apperror.KindConflict, "asset_upload_expired", "素材上传申请已过期")
+	}
+	return nil
+}
+
+func (SQLRepository) DeleteQuarantined(ctx context.Context, q database.Querier, id string) error {
+	result, err := q.ExecContext(ctx, `DELETE FROM assets WHERE id=? AND status='quarantined'`, id)
+	if err != nil {
+		return fmt.Errorf("废弃待确认素材: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return appError(apperror.KindConflict, "asset_not_quarantined", "仅待确认素材可以废弃")
 	}
 	return nil
 }

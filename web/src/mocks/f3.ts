@@ -25,12 +25,13 @@ export function enableF3Mock() {
       assets = [asset, ...assets]
       return Response.json({ asset, upload: { method: 'PUT', url: `https://mock-s3.local/${asset.id}`, headers: { 'Content-Type': asset.mime_type, 'If-None-Match': '*', 'x-amz-meta-sha256': asset.sha256 }, expires_at: '2026-07-19T09:00:00Z' } }, { status: 201 })
     }
-    const assetMatch = path.match(/^\/assets\/([^/]+)(\/confirm)?$/)
-    if (assetMatch?.[2] && method === 'POST') {
+    const assetMatch = path.match(/^\/assets\/([^/]+)(\/(?:confirm|quarantine))?$/)
+    if (assetMatch?.[2] === '/confirm' && method === 'POST') {
       const asset = assets.find((item) => item.id === assetMatch[1])!; const confirmed = { ...asset, status: 'available' as const, etag: 'mock-upload-etag', confirmed_at: now }
       assets = assets.map((item) => item.id === asset.id ? confirmed : item); return Response.json(confirmed)
     }
-    if (assetMatch && method === 'DELETE') { assets = assets.map((item) => item.id === assetMatch[1] ? { ...item, status: 'archived', archived_at: now } : item); return new Response(null, { status: 204 }) }
+    if (assetMatch?.[2] === '/quarantine' && method === 'DELETE') { assets = assets.filter((item) => item.id !== assetMatch[1]); return new Response(null, { status: 204 }) }
+    if (assetMatch && !assetMatch[2] && method === 'DELETE') { assets = assets.map((item) => item.id === assetMatch[1] ? { ...item, status: 'archived', archived_at: now } : item); return new Response(null, { status: 204 }) }
     if (/^\/models\/[^/]+\/imports$/.test(path) && method === 'POST') return Response.json({ imported: 2 })
     if (/^\/models\/[^/]+\/exports\.csv$/.test(path) && method === 'GET') return new Response('\uFEFFtitle\n示例', { headers: { 'Content-Type': 'text/csv' } })
     return nativeFetch(input, init)

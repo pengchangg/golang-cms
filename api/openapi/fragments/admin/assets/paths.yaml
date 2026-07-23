@@ -189,6 +189,25 @@ x-integration-status: integrated
             schema:
               $ref: ../../shared/error.yaml#/$defs/ErrorResponse
       "503": *storeUnavailable
+/assets/{asset_id}/quarantine:
+  parameters: *assetId
+  delete:
+    x-integration-status: integrated
+    operationId: discardAdminQuarantinedAsset
+    summary: 废弃待确认素材并删除上传对象
+    parameters: *writeHeaders
+    responses:
+      "204": { description: 待确认素材及其上传对象已删除。 }
+      "401": *unauthenticated
+      "403": *forbidden
+      "404": *notFound
+      "409":
+        description: 素材已确认可用、已归档或不再处于待确认状态。
+        content:
+          application/json:
+            schema:
+              $ref: ../../shared/error.yaml#/$defs/ErrorResponse
+      "503": *storeUnavailable
 /assets/{asset_id}/download:
   parameters: *assetId
   get:

@@ -30,4 +30,16 @@ describe('F3 页面', () => {
 
     await waitFor(() => expect(confirm).toHaveBeenCalledWith('ast_pending'))
   })
+
+  it('可以废弃待确认素材', async () => {
+    const asset = { id: 'ast_pending', filename: '待确认.png', mime_type: 'image/png', preview_kind: 'image' as const, size: 1024, sha256: 'b'.repeat(64), etag: null, status: 'quarantined' as const, created_by: 'usr_1', created_at: '2026-07-19T08:00:00Z', confirmed_at: null, archived_at: null }
+    vi.spyOn(client.api, 'listAssets').mockResolvedValue({ items: [asset], next_cursor: null })
+    const discard = vi.spyOn(client.api, 'discardQuarantinedAsset').mockResolvedValue(undefined)
+    render(<MemoryRouter><AssetsPage principal={principal} /></MemoryRouter>)
+
+    fireEvent.click(await screen.findByRole('button', { name: '废弃' }))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /废\s*弃/ }))
+
+    await waitFor(() => expect(discard).toHaveBeenCalledWith('ast_pending'))
+  })
 })

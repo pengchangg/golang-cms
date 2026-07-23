@@ -220,6 +220,7 @@ export const api = {
   getAsset: (id: string) => request<Asset>(`/assets/${encodeURIComponent(id)}`),
   createAssetUpload: (body: CreateAssetUploadRequest) => request<AssetUpload>('/assets/uploads', { ...json('POST', body), cache: 'no-store' }),
   confirmAssetUpload: (id: string) => request<Asset>(`/assets/${encodeURIComponent(id)}/confirm`, json('POST', {})),
+  discardQuarantinedAsset: (id: string) => request<void>(`/assets/${encodeURIComponent(id)}/quarantine`, { method: 'DELETE' }),
   updateAsset: (id: string, filename: string) => request<Asset>(`/assets/${encodeURIComponent(id)}`, json('PATCH', { filename })),
   archiveAsset: (id: string) => request<void>(`/assets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   importCSV: (modelId: string, file: File) => {

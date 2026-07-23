@@ -115,6 +115,8 @@ paths:
     $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}
   /assets/{asset_id}/confirm:
     $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}~1confirm
+  /assets/{asset_id}/quarantine:
+    $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}~1quarantine
   /assets/{asset_id}/download:
     $ref: ./fragments/admin/assets/paths.yaml#/~1assets~1{asset_id}~1download
   /assets/{asset_id}/preview:

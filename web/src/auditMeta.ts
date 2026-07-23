@@ -48,6 +48,7 @@ export const auditActionLabels: Record<string, string> = {
   api_key_rotated: '轮换 API Key',
   asset_upload_created: '申请素材上传',
   asset_upload_confirmed: '确认素材上传',
+  asset_upload_discarded: '废弃待确认素材',
   asset_downloaded: '下载素材',
   asset_archived: '归档素材',
 }

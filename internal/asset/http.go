@@ -36,6 +36,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/v1/assets/{asset_id}", h.rename)
 	mux.HandleFunc("DELETE /api/admin/v1/assets/{asset_id}", h.archive)
 	mux.HandleFunc("POST /api/admin/v1/assets/{asset_id}/confirm", h.confirm)
+	mux.HandleFunc("DELETE /api/admin/v1/assets/{asset_id}/quarantine", h.discardQuarantined)
 	mux.HandleFunc("GET /api/admin/v1/assets/{asset_id}/download", h.adminDownload)
 	mux.HandleFunc("GET /api/admin/v1/assets/{asset_id}/preview", h.adminPreview)
 	mux.HandleFunc("GET /api/admin/v1/models/{model_id}/entries/{entry_id}/assets/{asset_id}/preview", h.referencedPreview)
@@ -66,6 +67,18 @@ func (h *Handler) confirm(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.service.Confirm(r.Context(), principal, requestMeta(r), r.PathValue("asset_id"))
 	writeJSON(w, r, http.StatusOK, result, err)
+}
+
+func (h *Handler) discardQuarantined(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if err := h.service.DiscardQuarantined(r.Context(), principal, requestMeta(r), r.PathValue("asset_id")); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

@@ -161,6 +161,15 @@ describe('API Client', () => {
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ base_revision_id: 'rev_1', content: { title: '草稿' } }) }))
   })
 
+  it('废弃待确认素材使用独立删除路径', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.discardQuarantinedAsset('ast/a')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/admin/v1/assets/ast%2Fa/quarantine', expect.objectContaining({ method: 'DELETE' }))
+  })
+
   it('短信登录和手机号账户管理使用批准的路径与 DTO', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ challenge_id: 'cap_1' }))

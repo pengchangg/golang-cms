@@ -243,6 +243,28 @@ func (s *Service) Confirm(ctx context.Context, principal identity.Principal, met
 	return value, err
 }
 
+func (s *Service) DiscardQuarantined(ctx context.Context, principal identity.Principal, meta RequestMeta, id string) error {
+	if err := requirePermission(principal, permissionArchive); err != nil {
+		return err
+	}
+	return s.tx.WithinTx(ctx, nil, func(q database.Querier) error {
+		value, err := s.repository.Lock(ctx, q, id)
+		if err != nil {
+			return err
+		}
+		if value.Status != StatusQuarantined {
+			return appError(apperror.KindConflict, "asset_not_quarantined", "仅待确认素材可以废弃")
+		}
+		if err := s.store.Delete(ctx, value.ObjectKey); err != nil && !errors.Is(err, ErrObjectNotFound) {
+			return storeError(err)
+		}
+		if err := s.repository.DeleteQuarantined(ctx, q, id); err != nil {
+			return err
+		}
+		return s.appendAudit(ctx, q, principal, meta, "asset_upload_discarded", id, map[string]any{"filename": value.Filename, "mime_type": value.MimeType, "size": value.Size})
+	})
+}
+
 func (s *Service) Get(ctx context.Context, principal identity.Principal, id string) (Asset, error) {
 	if err := requirePermission(principal, permissionView); err != nil {
 		return Asset{}, err

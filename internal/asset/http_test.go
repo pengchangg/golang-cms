@@ -20,6 +20,7 @@ func TestHandlerRegistersOnlyAdminRoutes(t *testing.T) {
 		{http.MethodPost, "/api/admin/v1/assets/uploads"},
 		{http.MethodGet, "/api/admin/v1/assets/ast_1"},
 		{http.MethodPost, "/api/admin/v1/assets/ast_1/confirm"},
+		{http.MethodDelete, "/api/admin/v1/assets/ast_1/quarantine"},
 		{http.MethodGet, "/api/admin/v1/assets/ast_1/download"},
 		{http.MethodGet, "/api/admin/v1/assets/ast_1/preview"},
 		{http.MethodGet, "/api/admin/v1/models/mdl_1/entries/ent_1/assets/ast_1/preview"},

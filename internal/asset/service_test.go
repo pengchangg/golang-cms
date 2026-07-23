@@ -54,6 +54,14 @@ func (r *memoryAssetRepository) Confirm(_ context.Context, _ database.Querier, i
 	r.values[id] = value
 	return nil
 }
+func (r *memoryAssetRepository) DeleteQuarantined(_ context.Context, _ database.Querier, id string) error {
+	value, ok := r.values[id]
+	if !ok || value.Status != StatusQuarantined {
+		return appError(apperror.KindConflict, "asset_not_quarantined", "仅待确认素材可以废弃")
+	}
+	delete(r.values, id)
+	return nil
+}
 func (r *memoryAssetRepository) Rename(_ context.Context, _ database.Querier, id, filename string) error {
 	value := r.values[id]
 	value.Filename = filename
@@ -144,6 +152,60 @@ func TestServiceUploadConfirmDownloadArchive(t *testing.T) {
 		if _, exists := event.Changes["url"]; exists {
 			t.Fatal("审计泄露签名 URL")
 		}
+	}
+}
+
+func TestServiceDiscardQuarantinedDeletesObjectAndRecord(t *testing.T) {
+	key := "assets/ast_pending/object"
+	repository := &memoryAssetRepository{values: map[string]Asset{"ast_pending": {ID: "ast_pending", ObjectKey: key, Filename: "待确认.png", MimeType: "image/png", Size: 3, SHA256: sha256Text("png"), Status: StatusQuarantined}}}
+	store := NewMemoryStore(15*time.Minute, 5*time.Minute)
+	store.objects[key] = memoryObject{data: []byte("png")}
+	auditor := &memoryAudit{}
+	service, err := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: repository, Store: store, Audit: auditor, Config: Config{AllowedMimeTypes: []string{"image/png"}, MaxSize: 1024, UploadTTL: 15 * time.Minute, DownloadTTL: 5 * time.Minute}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := identity.Principal{UserID: "user", SystemPermissions: []string{permissionArchive}}
+	if err := service.DiscardQuarantined(context.Background(), principal, RequestMeta{}, "ast_pending"); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := repository.values["ast_pending"]; exists {
+		t.Fatal("待确认素材记录未删除")
+	}
+	if _, _, err := store.Get(context.Background(), key); !errors.Is(err, ErrObjectNotFound) {
+		t.Fatalf("待确认素材对象未删除: %v", err)
+	}
+	if len(auditor.events) != 1 || auditor.events[0].Action != "asset_upload_discarded" {
+		t.Fatalf("废弃审计错误: %+v", auditor.events)
+	}
+	if _, exists := auditor.events[0].Changes["object_key"]; exists {
+		t.Fatal("废弃审计泄露对象 Key")
+	}
+}
+
+func TestServiceDiscardQuarantinedIsIdempotentForMissingObject(t *testing.T) {
+	repository := &memoryAssetRepository{values: map[string]Asset{"ast_pending": {ID: "ast_pending", ObjectKey: "assets/ast_pending/missing", Status: StatusQuarantined}}}
+	service, _ := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: repository, Store: NewMemoryStore(15*time.Minute, 5*time.Minute), Audit: &memoryAudit{}, Config: Config{AllowedMimeTypes: []string{"image/png"}, MaxSize: 1024, UploadTTL: 15 * time.Minute, DownloadTTL: 5 * time.Minute}})
+	err := service.DiscardQuarantined(context.Background(), identity.Principal{SystemPermissions: []string{permissionArchive}}, RequestMeta{}, "ast_pending")
+	if err != nil {
+		t.Fatalf("对象不存在时废弃应成功: %v", err)
+	}
+}
+
+func TestServiceDiscardQuarantinedRejectsOtherStatusesAndStoreFailure(t *testing.T) {
+	repository := &memoryAssetRepository{values: map[string]Asset{
+		"ast_available": {ID: "ast_available", Status: StatusAvailable},
+		"ast_pending":   {ID: "ast_pending", ObjectKey: "assets/ast_pending/object", Status: StatusQuarantined},
+	}}
+	store := NewMemoryStore(15*time.Minute, 5*time.Minute)
+	service, _ := NewService(Dependencies{DB: testQuerier{}, Transactor: testTransactor{q: testQuerier{}}, Repository: repository, Store: store, Audit: &memoryAudit{}, Config: Config{AllowedMimeTypes: []string{"image/png"}, MaxSize: 1024, UploadTTL: 15 * time.Minute, DownloadTTL: 5 * time.Minute}})
+	principal := identity.Principal{SystemPermissions: []string{permissionArchive}}
+	assertCode(t, service.DiscardQuarantined(context.Background(), identity.Principal{}, RequestMeta{}, "ast_pending"), "permission_denied")
+	assertCode(t, service.DiscardQuarantined(context.Background(), principal, RequestMeta{}, "ast_available"), "asset_not_quarantined")
+	store.Failure = ErrStoreUnavailable
+	assertCode(t, service.DiscardQuarantined(context.Background(), principal, RequestMeta{}, "ast_pending"), "object_store_unavailable")
+	if _, exists := repository.values["ast_pending"]; !exists {
+		t.Fatal("对象存储失败时不应删除素材记录")
 	}
 }
 
