@@ -1,4 +1,4 @@
-import { Button, Descriptions, Select, Space, Table, Tag } from 'antd'
+import { Button, Descriptions, Modal, Select, Space, Table, Tag } from 'antd'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -32,7 +32,7 @@ export default function AuditPage({ principal }: { principal: Principal }) {
       <Select aria-label="筛选结果" placeholder="全部结果" allowClear value={result} onChange={(value) => { events.invalidate(); setResult(value); setCursors([undefined]) }} options={[{ value: 'success', label: '成功' }, { value: 'failure', label: '失败' }]} />
     </Space>
     <DataState loading={events.loading} error={events.error} empty={!events.data?.items.length} retry={events.reload}>
-      <Table<AuditEvent> rowKey="id" dataSource={events.data?.items} pagination={false} onRow={(row) => ({ onClick: () => setSelected(row) })} scroll={{ x: 980 }} columns={[
+      <Table<AuditEvent> className="audit-table" rowKey="id" dataSource={events.data?.items} pagination={false} onRow={(row) => ({ onClick: () => setSelected(row) })} scroll={{ x: 980 }} columns={[
         { title: '发生时间', dataIndex: 'occurred_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '动作', dataIndex: 'action', render: (value: string) => <div className="audit-primary"><strong>{auditActionLabels[value] ?? value}</strong><code>{value}</code></div> },
         { title: '操作者', render: (_, row) => actor(row) },
@@ -44,14 +44,16 @@ export default function AuditPage({ principal }: { principal: Principal }) {
       <Button disabled={cursors.length === 1} onClick={() => setCursors((values) => values.slice(0, -1))}>上一页</Button>
       <Button disabled={!events.data?.next_cursor} onClick={() => { const next = events.data?.next_cursor; if (next) setCursors((values) => values.at(-1) === next ? values : [...values, next]) }}>下一页</Button>
     </Space>
-    {selected ? <Descriptions className="audit-detail" bordered column={1} title="事件详情" items={[
-      { key: 'actor', label: '操作者', children: actor(selected) },
-      { key: 'action', label: '动作', children: <>{auditActionLabels[selected.action] ?? selected.action} <code>{selected.action}</code></> },
-      { key: 'resource', label: '资源', children: resource(selected) },
-      { key: 'request', label: '请求 ID', children: <code>{selected.request_id}</code> },
-      { key: 'ip', label: 'IP', children: selected.ip },
-      { key: 'failure', label: '失败码', children: selected.failure_code ? <code>{selected.failure_code}</code> : '无' },
-      { key: 'changes', label: '变更摘要', children: <pre>{JSON.stringify(selected.changes, null, 2)}</pre> },
-    ]} /> : null}
+    <Modal className="audit-detail-modal" title="事件详情" open={Boolean(selected)} width={720} footer={null} destroyOnHidden onCancel={() => setSelected(undefined)}>
+      {selected ? <Descriptions className="audit-detail" bordered column={1} items={[
+        { key: 'actor', label: '操作者', children: actor(selected) },
+        { key: 'action', label: '动作', children: <>{auditActionLabels[selected.action] ?? selected.action} <code>{selected.action}</code></> },
+        { key: 'resource', label: '资源', children: resource(selected) },
+        { key: 'request', label: '请求 ID', children: <code>{selected.request_id}</code> },
+        { key: 'ip', label: 'IP', children: selected.ip },
+        { key: 'failure', label: '失败码', children: selected.failure_code ? <code>{selected.failure_code}</code> : '无' },
+        { key: 'changes', label: '变更摘要', children: <pre>{JSON.stringify(selected.changes, null, 2)}</pre> },
+      ]} /> : null}
+    </Modal>
   </>
 }
